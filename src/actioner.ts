@@ -289,13 +289,13 @@ export async function processComments(
         saveState(state);
       } else if (evaluation.action === "reply") {
         if (dryRun) {
-          console.log(`  [dry-run] Would reply: ${evaluation.reply}`);
+          console.log(`  [dry-run] Would reply and resolve: ${evaluation.reply}`);
         } else {
           try {
-            await postReply(repoPath, prNumber, comment.id, evaluation.reply!);
-            console.log("  Replied on GitHub.");
+            await resolveThread(repoPath, comment.id, prNumber, evaluation.reply);
+            console.log("  Replied and resolved on GitHub.");
           } catch (err) {
-            console.error(`  Failed to post reply: ${(err as Error).message}`);
+            console.error(`  Failed to reply/resolve: ${(err as Error).message}`);
           }
         }
         markComment(state, comment.id, "replied", prNumber);
