@@ -1,7 +1,7 @@
 import { spawn, type ChildProcess } from "child_process";
-import { createInterface } from "readline";
 import { createWorktree, removeWorktree, getDiffInWorktree, commitAndPushWorktree } from "./worktree.js";
 import { markComment, saveState } from "./state.js";
+import { prompt } from "./terminal.js";
 import type { CrComment, CrWatchState, Evaluation, PrInfo, SpawnOptions } from "./types.js";
 
 // Track all active child processes so we can kill them on shutdown
@@ -67,16 +67,6 @@ function spawnTracked(cmd: string, args: string[], options: SpawnOptions = {}): 
       }
       child.stdin.end();
     }
-  });
-}
-
-function prompt(question: string): Promise<string> {
-  const rl = createInterface({ input: process.stdin, output: process.stdout });
-  return new Promise((resolve) => {
-    rl.question(question, (answer) => {
-      rl.close();
-      resolve(answer.trim().toLowerCase());
-    });
   });
 }
 

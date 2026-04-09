@@ -5,6 +5,15 @@ import { fetchNewComments, getRepoFromGit } from "./poller.js";
 import { notifyNewComments } from "./notifier.js";
 import { processComments, killAllChildren } from "./actioner.js";
 import { cleanupAllWorktrees } from "./worktree.js";
+import {
+  enableRawMode,
+  registerHotkeys,
+  setNextPollTime,
+  clearCountdown,
+  setStatus,
+  setProcessing,
+  cleanup as cleanupTerminal,
+} from "./terminal.js";
 
 const { values: flags } = parseArgs({
   options: {
@@ -16,25 +25,30 @@ const { values: flags } = parseArgs({
   },
 });
 
-if (flags.cleanup) {
-  cleanupAllWorktrees();
-  process.exit(0);
-}
-
-if (flags.status) {
+function printStatus(): void {
   const state = loadState();
   const seen = getCommentsByStatus(state, "seen");
   const replied = getCommentsByStatus(state, "replied");
   const fixed = getCommentsByStatus(state, "fixed");
   const skipped = getCommentsByStatus(state, "skipped");
 
-  console.log("cr-watch status:");
+  console.log("\ncr-watch status:");
   console.log(`  Last poll: ${state.lastPoll || "never"}`);
   console.log(`  Comments: ${Object.keys(state.comments).length} total`);
   console.log(`    Pending:  ${seen.length}`);
   console.log(`    Replied:  ${replied.length}`);
   console.log(`    Fixed:    ${fixed.length}`);
   console.log(`    Skipped:  ${skipped.length}`);
+  console.log("");
+}
+
+if (flags.cleanup) {
+  cleanupAllWorktrees();
+  process.exit(0);
+}
+
+if (flags.status) {
+  printStatus();
   process.exit(0);
 }
 
@@ -45,18 +59,33 @@ const dryRun = flags["dry-run"]!;
 console.log(`cr-watch started`);
 console.log(`  Repo: ${repoPath}`);
 console.log(`  Interval: ${flags.interval}m`);
-console.log(`  Dry run: ${dryRun}`);
-console.log(`  Press Ctrl+C to stop.\n`);
+console.log(`  Dry run: ${dryRun}\n`);
 
 let running = false;
 let shuttingDown = false;
+let pollTimer: ReturnType<typeof setTimeout> | null = null;
+
+function schedulePoll(): void {
+  if (pollTimer) clearTimeout(pollTimer);
+  setNextPollTime(intervalMs);
+  pollTimer = setTimeout(poll, intervalMs);
+}
 
 async function poll(): Promise<void> {
   if (running || shuttingDown) return;
   running = true;
+  setProcessing(true);
+
+  if (pollTimer) {
+    clearTimeout(pollTimer);
+    pollTimer = null;
+  }
+  clearCountdown();
 
   try {
     const state = loadState();
+    setStatus("Polling...");
+
     const { comments, pullsByNumber } = await fetchNewComments(repoPath, (id) =>
       isNewComment(state, id),
     );
@@ -66,25 +95,66 @@ async function poll(): Promise<void> {
 
     if (comments.length === 0) {
       const now = new Date().toLocaleTimeString();
-      process.stdout.write(`\r  [${now}] No new comments.`);
-      running = false;
-      return;
+      setStatus(`[${now}] No new comments.`);
+    } else {
+      notifyNewComments(comments, pullsByNumber);
+      await processComments(comments, pullsByNumber, state, repoPath, dryRun);
+      const now = new Date().toLocaleTimeString();
+      setStatus(`[${now}] Done processing ${comments.length} comment(s).`);
     }
-
-    notifyNewComments(comments, pullsByNumber);
-    await processComments(comments, pullsByNumber, state, repoPath, dryRun);
   } catch (err) {
     console.error(`\nPoll error: ${(err as Error).message}`);
+    setStatus(`Error: ${(err as Error).message}`);
   }
 
   running = false;
+  setProcessing(false);
+  schedulePoll();
+}
+
+async function listPRs(): Promise<void> {
+  if (running) return;
+  running = true;
+  setProcessing(true);
+
+  try {
+    const { comments, pullsByNumber } = await fetchNewComments(repoPath, (id) =>
+      isNewComment(loadState(), id),
+    );
+
+    const prNumbers = Object.keys(pullsByNumber);
+    if (prNumbers.length === 0) {
+      console.log("\n  No open PRs found.\n");
+    } else {
+      console.log(`\n  Open PRs (${prNumbers.length}):`);
+      for (const prNum of prNumbers) {
+        const pr = pullsByNumber[Number(prNum)];
+        const prComments = comments.filter((c) => c.prNumber === Number(prNum));
+        const commentStr = prComments.length > 0 ? ` — ${prComments.length} new comment(s)` : "";
+        console.log(`    PR #${prNum}: ${pr.title} (${pr.branch})${commentStr}`);
+      }
+      console.log("");
+    }
+  } catch (err) {
+    console.error(`\n  Error fetching PRs: ${(err as Error).message}\n`);
+  }
+
+  running = false;
+  setProcessing(false);
+}
+
+function clearState(): void {
+  saveState({ lastPoll: null, comments: {} });
+  console.log("\n  State cleared.\n");
+  setStatus("State cleared.");
 }
 
 function shutdown(): void {
   if (shuttingDown) return;
   shuttingDown = true;
+  cleanupTerminal();
   console.log("\n\nShutting down cr-watch...");
-  clearInterval(timer);
+  if (pollTimer) clearTimeout(pollTimer);
   killAllChildren();
   const check = setInterval(() => {
     if (!running) {
@@ -102,5 +172,15 @@ function shutdown(): void {
 process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);
 
+// Register hotkeys
+registerHotkeys([
+  { key: "r", label: "Refresh", handler: () => { poll(); } },
+  { key: "c", label: "Clear state", handler: clearState },
+  { key: "s", label: "Status", handler: () => { printStatus(); } },
+  { key: "p", label: "List PRs", handler: () => { listPRs(); } },
+  { key: "q", label: "Quit", handler: shutdown },
+]);
+
+// Initial poll, then enter interactive mode
 await poll();
-const timer = setInterval(poll, intervalMs);
+enableRawMode();
