@@ -113,11 +113,36 @@ Respond with ONLY valid JSON, no markdown fences:
 
   const parsed = JSON.parse(result) as { result?: string };
   const content = parsed.result || result;
+  return parseEvaluation(content);
+}
+
+function parseEvaluation(raw: string): Evaluation {
+  // Try direct parse first
   try {
-    return JSON.parse(content) as Evaluation;
+    return JSON.parse(raw) as Evaluation;
   } catch {
-    return { action: "reply", summary: "Could not parse evaluation", reply: content };
+    // ignore
   }
+
+  // Try extracting JSON from markdown fences or surrounding text
+  const jsonMatch = raw.match(/\{[\s\S]*?"action"\s*:\s*"(?:reply|fix|resolve)"[\s\S]*?\}/);
+  if (jsonMatch) {
+    try {
+      return JSON.parse(jsonMatch[0]) as Evaluation;
+    } catch {
+      // ignore
+    }
+  }
+
+  // Last resort: try to infer action from the text
+  const lower = raw.toLowerCase();
+  if (lower.includes('"fix"') || lower.includes("code change")) {
+    return { action: "fix", summary: "Parsed from non-JSON response" };
+  }
+  if (lower.includes('"resolve"') || lower.includes("already")) {
+    return { action: "resolve", summary: "Parsed from non-JSON response", reply: raw.slice(0, 200) };
+  }
+  return { action: "reply", summary: "Could not parse evaluation", reply: raw.slice(0, 200) };
 }
 
 async function postReply(repoPath: string, prNumber: number, commentId: number, body: string): Promise<void> {
