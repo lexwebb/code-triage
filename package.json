@@ -1,0 +1,21 @@
+{
+  "name": "cr-watch",
+  "version": "0.1.0",
+  "description": "Monitor CodeRabbit review comments and action them with Claude Code",
+  "type": "module",
+  "bin": {
+    "cr-watch": "./dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "start": "node dist/cli.js",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": ["coderabbit", "claude", "code-review", "github"],
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.8.0"
+  }
+}
