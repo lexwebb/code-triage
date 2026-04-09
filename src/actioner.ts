@@ -153,7 +153,7 @@ async function resolveThread(
             nodes {
               id
               isResolved
-              comments(first: 1) {
+              comments(first: 100) {
                 nodes { databaseId }
               }
             }
@@ -186,10 +186,11 @@ async function resolveThread(
   );
 
   if (!thread) {
-    console.log(`  Could not find thread for comment ${commentId}, falling back to reply.`);
+    console.log(`  Could not find thread for comment ${commentId}, posting reply.`);
     if (replyBody) {
       await postReply(repoPath, prNumber, commentId, replyBody);
     }
+    console.log(`  Warning: thread not found — could not resolve.`);
     return;
   }
 
