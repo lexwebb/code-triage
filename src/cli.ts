@@ -31,6 +31,7 @@ const { values: flags } = parseArgs({
     port: { type: "string" },
     config: { type: "boolean", default: false },
     open: { type: "boolean", default: false },
+    demo: { type: "boolean", default: false },
   },
 });
 
@@ -59,6 +60,19 @@ if (flags.cleanup) {
 if (flags.status) {
   printStatus();
   process.exit(0);
+}
+
+// Demo mode — skip all checks, serve dummy data
+if (flags.demo) {
+  const demoPort = flags.port ? parseInt(flags.port, 10) : 3100;
+  const { startDemoServer } = await import("./demo.js");
+  startDemoServer(demoPort);
+  console.log(`\nCode Triage demo running at http://localhost:${demoPort}\n`);
+  if (flags.open) {
+    try { execSync(`open "http://localhost:${demoPort}"`, { stdio: "pipe" }); } catch {}
+  }
+  // Keep process alive
+  await new Promise(() => {});
 }
 
 // Check required CLI tools
