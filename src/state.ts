@@ -3,6 +3,22 @@ import type { CrWatchState, CommentStatus, Evaluation, FixJobRecord } from "./ty
 import * as schema from "./db/schema.js";
 import { openStateDatabase, writeStateToDb, getRawSqlite } from "./db/client.js";
 
+/** Remove old replied/dismissed/fixed rows from SQLite (pending always kept). Returns rows deleted. */
+export function compactCommentHistory(retentionDays: number): number {
+  if (!Number.isFinite(retentionDays) || retentionDays <= 0) {
+    return 0;
+  }
+  openStateDatabase();
+  const sqlite = getRawSqlite();
+  const cutoff = new Date(Date.now() - retentionDays * 86_400_000).toISOString();
+  const result = sqlite
+    .prepare(
+      `DELETE FROM comments WHERE status IN ('replied', 'dismissed', 'fixed') AND timestamp < ?`,
+    )
+    .run(cutoff);
+  return Number(result.changes);
+}
+
 export function loadState(): CrWatchState {
   const db = openStateDatabase();
   const metaRow = db.select().from(schema.meta).where(eq(schema.meta.id, 1)).get();

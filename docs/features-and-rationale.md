@@ -25,7 +25,7 @@ The name *Code Triage* matches the workflow: **surface**, **prioritize**, **act*
 
 **Why:** Authors need to **respond to bot and human review comments** on their branches. Reviewers need a **queue of others’ PRs** to approve, request changes, or read diffs—without mixing the two mental models.
 
-**Critical detail:** The **background poller** that finds **new** comments and runs **Claude** only considers PRs where **you are the author** (`src/poller.ts`). Review-requested PRs are fetched for the dashboard and actions (approve, comment, etc.), but **new comments on someone else’s PR are not automatically analyzed** by the poll loop. That scope keeps token and Claude usage predictable and matches the original “fix my PR’s review comments” story.
+**Critical detail:** By default, the **background poller** that finds **new** comments and runs **Claude** only considers PRs where **you are the author** (`src/poller.ts`). Review-requested PRs are always fetched for the dashboard and actions (approve, comment, etc.). **Optional:** set `pollReviewRequested: true` in config (or pass `--poll-review-requested`) so the poller **also** scans open PRs where **you are a requested reviewer** and analyzes new inline comments there—same scope as the “review requested” list, at higher GitHub/Claude cost.
 
 ## Comment filtering (bots and resolved threads)
 
@@ -81,9 +81,15 @@ Using `--dangerously-skip-permissions` is a deliberate trade-off: fixes are mean
 
 ## Notifications
 
-**Feature:** macOS **osascript** notification when the poller sees new comments; browser notifications when the UI detects interesting poll/fix events.
+**Feature:** When the poller sees new comments, the CLI sends a desktop toast via **[node-notifier](https://github.com/mikaelbr/node-notifier)** (Notification Center on macOS, SnoreToast / balloons on Windows, `notify-send` or Growl fallbacks on Linux). If that fails, the terminal logs an error and points you to the **web UI**, which uses the browser **`Notification` API** (`useNotifications.ts`) for PR list changes, CI status, new comments, analysis results, and fix-job completion.
 
-**Why:** Different surfaces: the CLI user might not have the browser focused; the browser user might not watch the terminal.
+**Why:** `node-notifier` is the standard cross-platform Node integration; the web UI covers users who skip desktop toasts or run headless.
+
+## Live UI hints (SSE)
+
+**Feature:** `GET /api/events` pushes **Server-Sent Events** when a poll cycle completes and when fix-job status changes, so the web UI can refresh without waiting for the next `/api/poll-status` interval.
+
+**Why:** Snappier dashboard after the CLI finishes analyzing comments or when a fix job completes.
 
 ## Multi-account GitHub (optional config)
 

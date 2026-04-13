@@ -11,6 +11,13 @@ export interface Config {
   interval: number; // minutes
   /** Max concurrent `claude -p` evaluation processes during a poll (default 2, clamped 1–8). */
   evalConcurrency?: number;
+  /**
+   * When true, the poller also fetches inline review comments on **open PRs that request your review**
+   * (same scope as the web “review requested” list) and runs Claude on new ones. Default false to limit API/Claude usage.
+   */
+  pollReviewRequested?: boolean;
+  /** Drop replied/dismissed/fixed comment rows older than this many days after each successful poll (0 = disabled). */
+  commentRetentionDays?: number;
   ignoredBots?: string[]; // additional bot logins to ignore during polling
   accounts?: Array<{ name: string; token: string; orgs: string[] }>; // multi-account support
 }
@@ -20,6 +27,7 @@ const DEFAULTS: Config = {
   port: 3100,
   interval: 1,
   evalConcurrency: 2,
+  pollReviewRequested: false,
 };
 
 export function loadConfig(): Config {

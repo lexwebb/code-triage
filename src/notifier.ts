@@ -1,14 +1,24 @@
-import { execFile } from "child_process";
+import notifier from "node-notifier";
 import type { CrComment, PrInfo } from "./types.js";
 
+/**
+ * Desktop toast via [node-notifier](https://github.com/mikaelbr/node-notifier)
+ * (macOS Notification Center, Windows toast / SnoreToast, Linux notify-send / Growl).
+ * On failure, logs an error — use the **web UI** for browser `Notification` API (see `useNotifications.ts`).
+ */
 export function sendNotification(title: string, message: string): void {
-  const script = `display notification "${message.replace(/"/g, '\\"')}" with title "${title.replace(/"/g, '\\"')}" sound name "Glass"`;
-
-  execFile("osascript", ["-e", script], (err) => {
-    if (err) {
-      console.error("Notification failed:", err.message);
-    }
-  });
+  notifier.notify(
+    {
+      title,
+      message,
+    },
+    (err) => {
+      if (err) {
+        console.error("Desktop notification failed:", err.message);
+        console.error("  Open the web UI for browser notifications (allow permission when prompted).");
+      }
+    },
+  );
 }
 
 export function notifyNewComments(

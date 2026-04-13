@@ -15,6 +15,7 @@ flowchart LR
   GH[GitHub REST + GraphQL]
   Claude[claude CLI]
   Disk["~/.code-triage/*.sqlite + config.json"]
+  SSE["SSE /api/events"]
   Browser[Web UI]
 
   Poll --> GH
@@ -28,6 +29,8 @@ flowchart LR
   Srv --> Disk
   Browser --> Srv
   St --> Disk
+  Srv --> SSE
+  SSE -.-> Browser
 ```
 
 ## Runtime components
@@ -43,7 +46,7 @@ flowchart LR
 ### Polling pipeline (`src/poller.ts`)
 
 1. Lists **open pull requests** for the repo.
-2. Keeps only PRs where the **authenticated user is the author** (`pr.user.login === username`).
+2. Keeps PRs where the **authenticated user is the author**, and **optionally** (when `pollReviewRequested` is set) open PRs where the user is in **`requested_reviewers`** but is **not** the author—same idea as the review-requested dashboard list.
 3. For each such PR, loads **review comments** (line comments on the diff) and, in parallel, GraphQL data for **resolved threads**.
 4. Filters comments: not from ignored bots, not already in local state, not belonging to a resolved thread.
 5. Returns new comments plus a map of PR metadata for notifications and analysis.
@@ -64,7 +67,7 @@ flowchart LR
 - **Route table**: method + path patterns with `:params` and `*path` splats; POST bodies parsed once into `req.__body`.
 - **Static files**: in production, serves `web/dist` with SPA fallback to `index.html` for client-side routes.
 - **CORS**: permissive (`*`) for local development and simple tooling.
-- **Poll status**: in-memory `pollState` plus fix-job status map; merged into `GET /api/poll-status` with rate-limit hints from `exec.ts`. **`GET /api/health`** exposes a readiness snapshot (including `lastPollError` and `persistedLastPoll`) without consuming the one-shot test-notification flag.
+- **Poll status**: in-memory `pollState` plus fix-job status map; merged into `GET /api/poll-status` with rate-limit hints from `exec.ts`. **`GET /api/health`** exposes a readiness snapshot (including `lastPollError` and `persistedLastPoll`) without consuming the one-shot test-notification flag. **`GET /api/events`** streams SSE (`poll`, `fix-job`) to the web UI.
 
 ### GitHub access (`src/exec.ts`)
 

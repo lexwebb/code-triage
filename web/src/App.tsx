@@ -271,6 +271,28 @@ export default function App() {
     return () => { cancelled = true; clearTimeout(timer); };
   }, [fetchPulls]);
 
+  // Server-Sent Events — refresh when CLI finishes a poll or fix-job status changes
+  useEffect(() => {
+    const es = new EventSource("/api/events");
+    es.addEventListener("poll", (ev) => {
+      try {
+        const data = JSON.parse((ev as MessageEvent).data) as { ok?: boolean };
+        if (data.ok) {
+          void fetchPulls();
+        }
+      } catch { /* ignore */ }
+    });
+    es.addEventListener("fix-job", () => {
+      void api.getPollStatus().then((status) => {
+        setFixJobs(status.fixJobs);
+      }).catch(() => {});
+    });
+    es.onerror = () => {
+      /* browser auto-reconnects; keep quiet */
+    };
+    return () => es.close();
+  }, [fetchPulls]);
+
   // Load PR detail when selectedPR changes
   useEffect(() => {
     if (!selectedPR) return;

@@ -20,10 +20,10 @@ Ordered backlog for **solo maintainer**, **strictly local** Code Triage: highest
 
 | # | Enhancement | Why this priority | Primary touchpoints | Done criteria (brief) |
 |---|-------------|-------------------|---------------------|------------------------|
-| 2.1 | **Optional: analyze comments on review-requested PRs** | Same dashboard already lists those PRs; opt-in closes the loop without blowing up default Claude usage. | `src/config.ts`, `src/poller.ts`, `docs/config-and-state.md` | Config flag (e.g. `pollReviewRequested: false` default); when true, poller includes non-authored PRs where user is requested reviewer; docs explain cost. |
-| 2.2 | **Cross-platform notifications** | Today macOS-only (`osascript`); Windows/Linux users get weaker alerts. | `src/notifier.ts`, `web/src/useNotifications.ts` (optional parity) | Pluggable backend: macOS unchanged; Windows toast / Linux `notify-send` or “terminal + browser only” fallback; documented deps. |
-| 2.3 | **Real-time UI updates (SSE)** | Reduces reliance on `/api/poll-status` polling; nicer fix-job progress. | `src/server.ts`, `src/api.ts`, `web/src` poll hooks | `GET /api/events` (SSE) pushes poll-complete and fix-job events; UI subscribes when open; HTTP API still works without it. |
-| 2.4 | **State retention / compaction** | Comment map grows forever; SQLite makes pruning safe. | `src/db/client.ts`, `src/state.ts`, config | Optional `maxCommentAgeDays` or “keep last N per repo”; `replied`/`dismissed` older than threshold deleted; `fixed` policy documented; never deletes active `fix_jobs`. |
+| 2.1 | **Optional: analyze comments on review-requested PRs** | Same dashboard already lists those PRs; opt-in closes the loop without blowing up default Claude usage. | `src/config.ts`, `src/poller.ts`, `docs/config-and-state.md` | **Done:** `pollReviewRequested` + `--poll-review-requested`; `selectPollPulls` merges authored + review-requested PRs; docs/features updated. |
+| 2.2 | **Cross-platform notifications** | Today macOS-only (`osascript`); Windows/Linux users get weaker alerts. | `src/notifier.ts`, `web/src/useNotifications.ts` (optional parity) | **Done:** `node-notifier` in CLI; browser notifications remain the primary rich path in `useNotifications.ts`. |
+| 2.3 | **Real-time UI updates (SSE)** | Reduces reliance on `/api/poll-status` polling; nicer fix-job progress. | `src/server.ts`, `src/api.ts`, `web/src` poll hooks | **Done:** `GET /api/events`, `sseBroadcast` on poll + `setFixJobStatus`; `App.tsx` `EventSource`; demo route wired. |
+| 2.4 | **State retention / compaction** | Comment map grows forever; SQLite makes pruning safe. | `src/db/client.ts`, `src/state.ts`, config | **Done:** `commentRetentionDays` + `--comment-retention-days`; `compactCommentHistory` after successful poll; `pending` preserved. |
 
 ---
 

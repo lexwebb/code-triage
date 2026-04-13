@@ -10,10 +10,12 @@ Created or updated by first-run setup or `code-triage --config`.
 | `port` | number | `3100` | HTTP server port. |
 | `interval` | number | `1` | Poll interval in **minutes**. |
 | `evalConcurrency` | number | `2` | Max concurrent Claude evaluation processes (`claude -p`) per poll batch; clamped **1–8**. |
+| `pollReviewRequested` | boolean | `false` | When `true`, the poller also scans **open PRs where you are a requested reviewer** (not the author) and runs Claude on new inline comments there. Increases GitHub and Claude usage. Matches **user** reviewers in `requested_reviewers` only (not requested teams). |
+| `commentRetentionDays` | number | — | After each **successful** poll, delete SQLite comment rows with status `replied`, `dismissed`, or `fixed` whose `timestamp` is older than this many days. **`pending` is never removed.** Omitted or `0` disables compaction. |
 | `ignoredBots` | string[] | — | Extra GitHub logins treated like built-in ignored bots in `poller.ts`. |
 | `accounts` | array | — | Optional multi-account PATs: `{ name, token, orgs: string[] }`. Repo **owner** matched against `orgs` selects `token`; otherwise `gh auth token` is used. |
 
-CLI flags override config: `--root`, `--port`, `--interval`, `--repo`, `--dry-run`, `--eval-concurrency`.
+CLI flags override config: `--root`, `--port`, `--interval`, `--repo`, `--dry-run`, `--eval-concurrency`, `--poll-review-requested` (enables for this run; omit to use config), `--comment-retention-days`.
 
 ## State (`~/.code-triage/state.sqlite`)
 

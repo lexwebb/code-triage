@@ -1,4 +1,4 @@
-import { addRoute, json, getRepos, getBody, getPollState, getHealthPayload, setFixJobStatus, clearFixJobStatus, getActiveFixForBranch, getActiveFixForPR } from "./server.js";
+import { addRoute, json, getRepos, getBody, getPollState, getHealthPayload, setFixJobStatus, clearFixJobStatus, getActiveFixForBranch, getActiveFixForPR, subscribeSse } from "./server.js";
 import { loadState, markComment, markCommentWithEvaluation, saveState, addFixJob as addFixJobState, removeFixJob as removeFixJobState, getFixJobs } from "./state.js";
 import { postReply, resolveThread, applyFixWithClaude, evaluateComment } from "./actioner.js";
 import { createWorktree, getWorktreePath, getDiffInWorktree, removeWorktree, commitAndPushWorktree } from "./worktree.js";
@@ -116,6 +116,11 @@ async function hasHumanApproval(repoPath: string, prNumber: number): Promise<boo
 }
 
 export function registerRoutes(): void {
+
+  // GET /api/events — Server-Sent Events (poll + fix-job broadcasts)
+  addRoute("GET", "/api/events", (req, res) => {
+    subscribeSse(req, res);
+  });
 
   // GET /api/user
   addRoute("GET", "/api/user", async (_req, res) => {

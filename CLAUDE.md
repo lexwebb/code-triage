@@ -60,7 +60,7 @@ yarn dev                  # Runs tsc watch + CLI auto-restart + Vite HMR concurr
 
 - ESM modules — imports end with `.js` extension (even for `.ts` files)
 - TSX for ink components (`terminal.tsx`), TS for everything else
-- CLI runtime deps: `ink`, `react`, `drizzle-orm`, `better-sqlite3` (see `package.json`)
+- CLI runtime deps: `ink`, `react`, `drizzle-orm`, `better-sqlite3`, `node-notifier` (see `package.json`)
 - All GitHub API calls go through `src/exec.ts` helpers (never `execFileSync` for API calls)
 - Route handlers in `api.ts` are all `async` to avoid blocking the event loop
 - State comment keys are prefixed with repo: `owner/repo:commentId`
@@ -79,7 +79,7 @@ Unit tests set `CODE_TRIAGE_STATE_DIR` to a temp directory so `state.sqlite` is 
 
 ## Common Tasks
 
-- **Adding an API endpoint**: Add route in `src/api.ts` inside `registerRoutes()`. Use `ghAsync`/`ghPost` for GitHub calls. All handlers must be `async`. Readiness: `GET /api/health`.
+- **Adding an API endpoint**: Add route in `src/api.ts` inside `registerRoutes()`. Use `ghAsync`/`ghPost` for GitHub calls. All handlers must be `async`. Readiness: `GET /api/health`. Live hints: `GET /api/events` (`sseBroadcast` from CLI / `setFixJobStatus`).
 - **Adding a web component**: Create in `web/src/components/`. Import in `App.tsx`.
-- **Adding a CLI flag**: Add to `parseArgs` options in `src/cli.ts`. Override config values below. Evaluations: `--eval-concurrency` / `evalConcurrency` in config (see `analyzeComments`).
+- **Adding a CLI flag**: Add to `parseArgs` options in `src/cli.ts`. Override config values below. Evaluations: `--eval-concurrency` / `evalConcurrency`; review queue: `--poll-review-requested` / `pollReviewRequested` (see `fetchNewComments` / `selectPollPulls`).
 - **Modifying state shape**: Update `src/types.ts`, then `src/state.ts` helpers.

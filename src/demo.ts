@@ -1,4 +1,4 @@
-import { startServer, addRoute, clearRoutes, json } from "./server.js";
+import { startServer, addRoute, clearRoutes, json, subscribeSse } from "./server.js";
 import type { RepoInfo } from "./discovery.js";
 
 const DEMO_REPOS: RepoInfo[] = [
@@ -195,6 +195,10 @@ export function startDemoServer(port: number): void {
       fixJobsRunning: 0,
       persistedLastPoll: new Date().toISOString(),
     });
+  });
+
+  addRoute("GET", "/api/events", (req, res) => {
+    subscribeSse(req, res);
   });
 
   addRoute("GET", "/api/poll-status", (_req, res) => {

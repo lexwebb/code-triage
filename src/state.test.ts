@@ -3,7 +3,7 @@ import { tmpdir } from "os";
 import { join } from "path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { closeStateDatabase, getStateDir } from "./db/client.js";
-import { isNewComment, loadState, markComment, saveState } from "./state.js";
+import { compactCommentHistory, isNewComment, loadState, markComment, markCommentWithEvaluation, saveState } from "./state.js";
 
 let testRoot: string;
 
@@ -55,5 +55,28 @@ describe("state persistence", () => {
     saveState(s);
     s = loadState();
     expect(isNewComment(s, 10)).toBe(false);
+  });
+
+  it("compactCommentHistory removes only old terminal statuses", () => {
+    let s = loadState();
+    const old = "2020-01-01T00:00:00.000Z";
+    markCommentWithEvaluation(
+      s,
+      1,
+      "replied",
+      1,
+      { action: "reply", summary: "x", reply: "y" },
+      "o/r",
+    );
+    s.comments["o/r:1"]!.timestamp = old;
+    markComment(s, 2, "pending", 1, "o/r");
+    s.comments["o/r:2"]!.timestamp = old;
+    saveState(s);
+
+    const removed = compactCommentHistory(30);
+    expect(removed).toBe(1);
+    s = loadState();
+    expect(s.comments["o/r:1"]).toBeUndefined();
+    expect(s.comments["o/r:2"]?.status).toBe("pending");
   });
 });

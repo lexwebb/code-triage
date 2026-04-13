@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { parseArgs } from "util";
 import { execSync } from "child_process";
-import { loadState, saveState, isNewComment, getCommentsByStatus } from "./state.js";
+import { loadState, saveState, isNewComment, getCommentsByStatus, compactCommentHistory } from "./state.js";
 import { fetchNewComments } from "./poller.js";
 import { notifyNewComments } from "./notifier.js";
 import { analyzeComments, clampEvalConcurrency, killAllChildren } from "./actioner.js";
@@ -16,7 +16,7 @@ import {
   setProcessing,
   cleanup as cleanupTerminal,
 } from "./terminal.js";
-import { startServer, updateRepos, updatePollState, triggerTestNotification } from "./server.js";
+import { startServer, updateRepos, updatePollState, triggerTestNotification, sseBroadcast } from "./server.js";
 import { discoverRepos, type RepoInfo } from "./discovery.js";
 import { loadConfig, saveConfig, configExists, type Config } from "./config.js";
 
@@ -33,6 +33,8 @@ const { values: flags } = parseArgs({
     open: { type: "boolean", default: false },
     demo: { type: "boolean", default: false },
     "eval-concurrency": { type: "string" },
+    "poll-review-requested": { type: "boolean" },
+    "comment-retention-days": { type: "string" },
   },
 });
 
@@ -174,6 +176,12 @@ const dryRun = flags["dry-run"]!;
 const evalConcurrency = clampEvalConcurrency(
   flags["eval-concurrency"] ? parseInt(flags["eval-concurrency"]!, 10) : (config.evalConcurrency ?? 2),
 );
+const pollReviewRequested =
+  flags["poll-review-requested"] === true ? true : config.pollReviewRequested === true;
+const commentRetentionDays =
+  flags["comment-retention-days"] !== undefined
+    ? parseInt(flags["comment-retention-days"]!, 10)
+    : (config.commentRetentionDays ?? 0);
 
 // Resolve repos: single repo mode or multi-repo discovery
 let repos: RepoInfo[];
@@ -211,6 +219,10 @@ for (const r of repos) {
 console.log(`  Interval: ${intervalMs / 60000}m`);
 console.log(`  Dry run: ${dryRun}`);
 console.log(`  Eval concurrency: ${evalConcurrency}`);
+console.log(`  Poll review-requested PRs: ${pollReviewRequested}`);
+if (Number.isFinite(commentRetentionDays) && commentRetentionDays > 0) {
+  console.log(`  Comment retention: ${commentRetentionDays} days (replied/dismissed/fixed)`);
+}
 console.log(`  WebUI: http://localhost:${port}\n`);
 
 startServer(port, repos);
@@ -254,8 +266,10 @@ async function poll(): Promise<void> {
 
     for (const repoInfo of repos) {
       try {
-        const { comments, pullsByNumber } = await fetchNewComments(repoInfo.repo, (id) =>
-          isNewComment(state, id, repoInfo.repo),
+        const { comments, pullsByNumber } = await fetchNewComments(
+          repoInfo.repo,
+          (id) => isNewComment(state, id, repoInfo.repo),
+          pollReviewRequested,
         );
 
         if (comments.length > 0) {
@@ -273,11 +287,16 @@ async function poll(): Promise<void> {
     const now = new Date().toLocaleTimeString();
     setStatus(`[${now}] Analyzed ${repos.length} repo(s).`);
     updatePollState({ lastPoll: Date.now(), polling: false, lastPollError: null });
+    sseBroadcast("poll", { ok: true, at: Date.now() });
+    if (Number.isFinite(commentRetentionDays) && commentRetentionDays > 0) {
+      compactCommentHistory(commentRetentionDays);
+    }
   } catch (err) {
     const msg = (err as Error).message;
     console.error(`\nPoll error: ${msg}`);
     setStatus(`Error: ${msg}`);
     updatePollState({ polling: false, lastPollError: msg });
+    sseBroadcast("poll", { ok: false, at: Date.now(), error: msg });
   }
 
   running = false;
@@ -293,8 +312,10 @@ async function listPRs(): Promise<void> {
   try {
     for (const repoInfo of repos) {
       const state = loadState();
-      const { comments, pullsByNumber } = await fetchNewComments(repoInfo.repo, (id) =>
-        isNewComment(state, id, repoInfo.repo),
+      const { comments, pullsByNumber } = await fetchNewComments(
+        repoInfo.repo,
+        (id) => isNewComment(state, id, repoInfo.repo),
+        pollReviewRequested,
       );
 
       const prNumbers = Object.keys(pullsByNumber);

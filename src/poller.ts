@@ -9,6 +9,28 @@ interface GhPull {
   user: { login: string };
   head: { ref: string };
   html_url: string;
+  requested_reviewers: Array<{ login: string }>;
+}
+
+/** PRs to scan for new review comments: yours when `pollReviewRequested` is off; yours plus review-requested when on. */
+export function selectPollPulls(pulls: GhPull[], username: string, pollReviewRequested: boolean): GhPull[] {
+  const authored = pulls.filter((pr) => pr.user.login === username);
+  if (!pollReviewRequested) {
+    return authored;
+  }
+  const reviewRequested = pulls.filter(
+    (pr) =>
+      pr.user.login !== username &&
+      (pr.requested_reviewers ?? []).some((r) => r.login === username),
+  );
+  const byNum = new Map<number, GhPull>();
+  for (const pr of authored) {
+    byNum.set(pr.number, pr);
+  }
+  for (const pr of reviewRequested) {
+    byNum.set(pr.number, pr);
+  }
+  return Array.from(byNum.values());
 }
 
 interface GhComment {
@@ -108,21 +130,22 @@ export function filterCommentsForPoll<T extends { id: number; user: { login: str
 export async function fetchNewComments(
   repo: string | undefined,
   isNewComment: (id: number) => boolean,
+  pollReviewRequested = false,
 ): Promise<PollResult> {
   const repoPath = repo || getRepoFromGit();
   const username = await getCurrentUser();
 
   const pulls = await ghAsync<GhPull[]>(`/repos/${repoPath}/pulls?state=open`);
-  const myPulls = pulls.filter((pr) => pr.user.login === username);
+  const targetPulls = selectPollPulls(pulls, username, pollReviewRequested);
 
-  if (myPulls.length === 0) {
+  if (targetPulls.length === 0) {
     return { comments: [], pullsByNumber: {} };
   }
 
   const allNewComments: CrComment[] = [];
   const pullsByNumber: Record<number, PrInfo> = {};
 
-  for (const pr of myPulls) {
+  for (const pr of targetPulls) {
     pullsByNumber[pr.number] = {
       number: pr.number,
       title: pr.title,

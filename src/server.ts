@@ -126,8 +126,64 @@ export interface FixJobStatus {
 
 const fixJobStatuses = new Map<number, FixJobStatus>();
 
+interface SseClient {
+  res: ServerResponse;
+  keepAlive: ReturnType<typeof setInterval>;
+}
+
+const sseClients = new Set<SseClient>();
+
+export function sseBroadcast(event: string, data: unknown): void {
+  const payload = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+  for (const client of sseClients) {
+    try {
+      client.res.write(payload);
+    } catch {
+      clearInterval(client.keepAlive);
+      sseClients.delete(client);
+    }
+  }
+}
+
+/** Long-lived SSE stream for instant poll / fix-job hints (browser uses EventSource). */
+export function subscribeSse(req: IncomingMessage, res: ServerResponse): void {
+  res.writeHead(200, {
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache, no-transform",
+    Connection: "keep-alive",
+    "Access-Control-Allow-Origin": "*",
+  });
+  res.write("\n");
+
+  const client: SseClient = {
+    res,
+    keepAlive: setInterval(() => {
+      try {
+        res.write(": keepalive\n\n");
+      } catch {
+        clearInterval(client.keepAlive);
+        sseClients.delete(client);
+      }
+    }, 25_000),
+  };
+  sseClients.add(client);
+
+  req.on("close", () => {
+    clearInterval(client.keepAlive);
+    sseClients.delete(client);
+  });
+}
+
 export function setFixJobStatus(job: FixJobStatus): void {
   fixJobStatuses.set(job.commentId, job);
+  sseBroadcast("fix-job", {
+    commentId: job.commentId,
+    repo: job.repo,
+    prNumber: job.prNumber,
+    status: job.status,
+    path: job.path,
+    error: job.error,
+  });
 }
 
 export function getActiveFixForBranch(branch: string): FixJobStatus | undefined {

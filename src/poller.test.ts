@@ -1,5 +1,49 @@
 import { describe, expect, it } from "vitest";
-import { buildIgnoredBotSet, filterCommentsForPoll } from "./poller.js";
+import { buildIgnoredBotSet, filterCommentsForPoll, selectPollPulls } from "./poller.js";
+
+function pr(
+  n: number,
+  author: string,
+  reviewers: string[] = [],
+): {
+  number: number;
+  title: string;
+  user: { login: string };
+  head: { ref: string };
+  html_url: string;
+  requested_reviewers: Array<{ login: string }>;
+} {
+  return {
+    number: n,
+    title: `PR ${n}`,
+    user: { login: author },
+    head: { ref: "b" },
+    html_url: `https://example/${n}`,
+    requested_reviewers: reviewers.map((login) => ({ login })),
+  };
+}
+
+describe("selectPollPulls", () => {
+  const me = "alice";
+
+  it("returns only authored PRs when pollReviewRequested is false", () => {
+    const pulls = [pr(1, me), pr(2, "bob", [me]), pr(3, "carol", [])];
+    const out = selectPollPulls(pulls, me, false);
+    expect(out.map((p) => p.number)).toEqual([1]);
+  });
+
+  it("includes review-requested PRs when enabled", () => {
+    const pulls = [pr(1, me), pr(2, "bob", [me]), pr(3, "carol", ["other"])];
+    const out = selectPollPulls(pulls, me, true);
+    expect(out.map((p) => p.number).sort((a, b) => a - b)).toEqual([1, 2]);
+  });
+
+  it("dedupes by PR number if both rules match (defensive)", () => {
+    const p = pr(1, me, [me]);
+    const out = selectPollPulls([p], me, true);
+    expect(out).toHaveLength(1);
+  });
+});
 
 describe("buildIgnoredBotSet", () => {
   it("includes built-in bots and config extras", () => {
