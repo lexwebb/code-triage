@@ -15,9 +15,8 @@ function elapsed(startedAt: number): string {
   return `${secs}s`;
 }
 
-function JobRow({ job, onJobAction }: { job: FixJobStatus; onJobAction: () => void }) {
+function JobModal({ job, onClose, onJobAction }: { job: FixJobStatus; onClose: () => void; onJobAction: () => void }) {
   const [acting, setActing] = useState(false);
-  const [showDiff, setShowDiff] = useState(false);
   const repoShort = job.repo.split("/")[1] ?? job.repo;
 
   async function handleApply() {
@@ -26,6 +25,7 @@ function JobRow({ job, onJobAction }: { job: FixJobStatus; onJobAction: () => vo
     try {
       await api.fixApply(job.repo, job.commentId, job.prNumber, job.branch);
       onJobAction();
+      onClose();
     } catch (err) {
       console.error("Apply failed:", err);
     } finally {
@@ -39,6 +39,7 @@ function JobRow({ job, onJobAction }: { job: FixJobStatus; onJobAction: () => vo
     try {
       await api.fixDiscard(job.branch, job.commentId);
       onJobAction();
+      onClose();
     } catch (err) {
       console.error("Discard failed:", err);
     } finally {
@@ -52,6 +53,121 @@ function JobRow({ job, onJobAction }: { job: FixJobStatus; onJobAction: () => vo
     failed: "text-red-400",
   };
 
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={onClose}>
+      <div
+        className="bg-gray-900 border border-gray-700 rounded-lg shadow-2xl w-full max-w-3xl max-h-[80vh] flex flex-col"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div className="px-4 py-3 border-b border-gray-800 flex items-center justify-between">
+          <div>
+            <h3 className="text-sm font-semibold text-white">Fix Job Details</h3>
+            <span className="text-xs text-gray-500">{repoShort}#{job.prNumber} — {job.path}</span>
+          </div>
+          <button onClick={onClose} className="text-gray-500 hover:text-gray-300 text-lg px-2">✕</button>
+        </div>
+
+        {/* Info */}
+        <div className="px-4 py-3 border-b border-gray-800 grid grid-cols-2 gap-2 text-xs">
+          <div>
+            <span className="text-gray-500">Status: </span>
+            <span className={statusColors[job.status] ?? "text-gray-400"}>{job.status}</span>
+          </div>
+          <div>
+            <span className="text-gray-500">Duration: </span>
+            <span className="text-gray-300">{elapsed(job.startedAt)}</span>
+          </div>
+          <div>
+            <span className="text-gray-500">Repository: </span>
+            <span className="text-gray-300">{job.repo}</span>
+          </div>
+          <div>
+            <span className="text-gray-500">Branch: </span>
+            <span className="text-gray-300 font-mono">{job.branch ?? "—"}</span>
+          </div>
+          <div className="col-span-2">
+            <span className="text-gray-500">File: </span>
+            <span className="text-gray-300 font-mono">{job.path}</span>
+          </div>
+        </div>
+
+        {/* Error */}
+        {job.status === "failed" && job.error && (
+          <div className="px-4 py-3 border-b border-gray-800">
+            <div className="text-xs text-gray-500 mb-1">Error</div>
+            <div className="p-2 bg-red-500/10 border border-red-500/30 rounded text-xs text-red-400 whitespace-pre-wrap">
+              {job.error}
+            </div>
+          </div>
+        )}
+
+        {/* Diff */}
+        {job.status === "completed" && job.diff && (
+          <div className="flex-1 overflow-y-auto px-4 py-3">
+            <div className="text-xs text-gray-500 mb-1">Proposed Changes</div>
+            <pre className="p-2 text-xs overflow-x-auto bg-gray-800 rounded font-mono border border-gray-700">
+              {job.diff.split("\n").map((line, i) => {
+                let cls = "text-gray-400";
+                if (line.startsWith("+") && !line.startsWith("+++")) cls = "text-green-400";
+                else if (line.startsWith("-") && !line.startsWith("---")) cls = "text-red-400";
+                else if (line.startsWith("@@")) cls = "text-blue-400";
+                return <div key={i} className={cls}>{line}</div>;
+              })}
+            </pre>
+          </div>
+        )}
+
+        {/* Running spinner */}
+        {job.status === "running" && (
+          <div className="flex-1 flex items-center justify-center py-12 text-gray-500 text-sm">
+            Claude is working on the fix...
+          </div>
+        )}
+
+        {/* Actions */}
+        {job.status === "completed" && (
+          <div className="px-4 py-3 border-t border-gray-800 flex items-center justify-end gap-2">
+            <button
+              onClick={handleDiscard}
+              disabled={acting}
+              className="text-xs px-4 py-1.5 bg-gray-700 hover:bg-gray-600 disabled:bg-gray-800 text-gray-300 rounded transition-colors"
+            >
+              Discard
+            </button>
+            <button
+              onClick={handleApply}
+              disabled={acting}
+              className="text-xs px-4 py-1.5 bg-green-600 hover:bg-green-500 disabled:bg-green-800 disabled:text-gray-400 text-white rounded transition-colors"
+            >
+              {acting ? "Pushing..." : "Apply & Push"}
+            </button>
+          </div>
+        )}
+
+        {job.status === "failed" && (
+          <div className="px-4 py-3 border-t border-gray-800 flex items-center justify-end">
+            <button
+              onClick={onClose}
+              className="text-xs px-4 py-1.5 bg-gray-700 hover:bg-gray-600 text-gray-300 rounded transition-colors"
+            >
+              Close
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function JobRow({ job, onSelect }: { job: FixJobStatus; onSelect: () => void }) {
+  const repoShort = job.repo.split("/")[1] ?? job.repo;
+
+  const statusColors: Record<string, string> = {
+    running: "text-yellow-400",
+    completed: "text-green-400",
+    failed: "text-red-400",
+  };
   const statusIcons: Record<string, string> = {
     running: "⏳",
     completed: "✓",
@@ -59,47 +175,23 @@ function JobRow({ job, onJobAction }: { job: FixJobStatus; onJobAction: () => vo
   };
 
   return (
-    <div className="flex items-center gap-3 px-4 py-1.5 text-xs">
+    <button
+      onClick={onSelect}
+      className="w-full flex items-center gap-3 px-4 py-1.5 text-xs hover:bg-gray-800/50 transition-colors text-left"
+    >
       <span className={statusColors[job.status] ?? "text-gray-400"}>
         {statusIcons[job.status] ?? "?"} {job.status}
       </span>
       <span className="text-gray-400 font-mono">{repoShort}#{job.prNumber}</span>
       <span className="text-gray-500 truncate flex-1">{job.path}</span>
       <span className="text-gray-600">{elapsed(job.startedAt)}</span>
-
-      {job.status === "completed" && job.diff && (
-        <>
-          <button
-            onClick={() => setShowDiff(!showDiff)}
-            className="text-blue-400 hover:text-blue-300"
-          >
-            {showDiff ? "hide diff" : "view diff"}
-          </button>
-          <button
-            onClick={handleApply}
-            disabled={acting}
-            className="px-2 py-0.5 bg-green-600 hover:bg-green-500 disabled:bg-green-800 text-white rounded"
-          >
-            {acting ? "..." : "Apply"}
-          </button>
-          <button
-            onClick={handleDiscard}
-            disabled={acting}
-            className="px-2 py-0.5 bg-gray-700 hover:bg-gray-600 text-gray-300 rounded"
-          >
-            Discard
-          </button>
-        </>
-      )}
-
-      {job.status === "failed" && (
-        <span className="text-red-400 truncate max-w-48">{job.error}</span>
-      )}
-    </div>
+    </button>
   );
 }
 
 export default function FixJobsBanner({ fixJobs, onJobAction }: FixJobsBannerProps) {
+  const [selectedJob, setSelectedJob] = useState<FixJobStatus | null>(null);
+
   if (fixJobs.length === 0) return null;
 
   const running = fixJobs.filter((j) => j.status === "running").length;
@@ -107,18 +199,27 @@ export default function FixJobsBanner({ fixJobs, onJobAction }: FixJobsBannerPro
   const failed = fixJobs.filter((j) => j.status === "failed").length;
 
   return (
-    <div className="border-t border-gray-800 bg-gray-900/80 shrink-0">
-      <div className="px-4 py-1 text-xs text-gray-500 flex items-center gap-3 border-b border-gray-800/50">
-        <span className="uppercase tracking-wide">Fix Jobs</span>
-        {running > 0 && <span className="text-yellow-400">{running} running</span>}
-        {completed > 0 && <span className="text-green-400">{completed} ready</span>}
-        {failed > 0 && <span className="text-red-400">{failed} failed</span>}
+    <>
+      <div className="border-t border-gray-800 bg-gray-900/80 shrink-0">
+        <div className="px-4 py-1 text-xs text-gray-500 flex items-center gap-3 border-b border-gray-800/50">
+          <span className="uppercase tracking-wide">Fix Jobs</span>
+          {running > 0 && <span className="text-yellow-400">{running} running</span>}
+          {completed > 0 && <span className="text-green-400">{completed} ready</span>}
+          {failed > 0 && <span className="text-red-400">{failed} failed</span>}
+        </div>
+        <div className="max-h-40 overflow-y-auto">
+          {fixJobs.map((job) => (
+            <JobRow key={job.commentId} job={job} onSelect={() => setSelectedJob(job)} />
+          ))}
+        </div>
       </div>
-      <div className="max-h-40 overflow-y-auto">
-        {fixJobs.map((job) => (
-          <JobRow key={job.commentId} job={job} onJobAction={onJobAction} />
-        ))}
-      </div>
-    </div>
+      {selectedJob && (
+        <JobModal
+          job={selectedJob}
+          onClose={() => setSelectedJob(null)}
+          onJobAction={onJobAction}
+        />
+      )}
+    </>
   );
 }
