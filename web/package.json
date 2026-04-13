@@ -1,5 +1,5 @@
 {
-  "name": "cr-watch-web",
+  "name": "code-triage-web",
   "private": true,
   "type": "module",
   "scripts": {

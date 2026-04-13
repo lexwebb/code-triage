@@ -3,7 +3,7 @@ import { join } from "path";
 import { homedir } from "os";
 import type { CrWatchState, CommentStatus, Evaluation } from "./types.js";
 
-const STATE_DIR = join(homedir(), ".cr-watch");
+const STATE_DIR = join(homedir(), ".code-triage");
 const STATE_FILE = join(STATE_DIR, "state.json");
 const STATE_TMP = join(STATE_DIR, "state.json.tmp");
 

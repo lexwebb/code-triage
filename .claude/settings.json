@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//Users/lex/.claude/plugins/cache/claude-plugins-official/superpowers/5.0.7/skills/subagent-driven-development/**)",
+      "Bash(git add:*)",
+      "Bash(git commit -m ':*)",
+      "Bash(npm run:*)"
+    ]
+  }
+}

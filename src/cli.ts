@@ -36,7 +36,7 @@ function printStatus(): void {
   const fixed = getCommentsByStatus(state, "fixed");
   const dismissed = getCommentsByStatus(state, "dismissed");
 
-  console.log("\ncr-watch status:");
+  console.log("\ncode-triage status:");
   console.log(`  Last poll: ${state.lastPoll || "never"}`);
   console.log(`  Comments: ${Object.keys(state.comments).length} total`);
   console.log(`    Pending:   ${pending.length}`);
@@ -72,7 +72,7 @@ if (flags.repo) {
   }
 }
 
-console.log(`cr-watch started`);
+console.log(`code-triage started`);
 console.log(`  Repos: ${repos.length}`);
 for (const r of repos) {
   console.log(`    ${r.repo}`);
@@ -194,7 +194,7 @@ function shutdown(): void {
   if (shuttingDown) return;
   shuttingDown = true;
   cleanupTerminal();
-  console.log("\n\nShutting down cr-watch...");
+  console.log("\n\nShutting down code-triage...");
   if (pollTimer) clearTimeout(pollTimer);
   killAllChildren();
   const check = setInterval(() => {

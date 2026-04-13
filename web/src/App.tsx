@@ -16,9 +16,9 @@ interface SelectedPR {
 }
 
 const REFRESH_INTERVAL = 5 * 60_000; // 5 minutes
-const CACHE_KEY_PULLS = "cr-watch:pulls";
-const CACHE_KEY_REVIEW = "cr-watch:reviewPulls";
-const CACHE_KEY_TIME = "cr-watch:lastRefresh";
+const CACHE_KEY_PULLS = "code-triage:pulls";
+const CACHE_KEY_REVIEW = "code-triage:reviewPulls";
+const CACHE_KEY_TIME = "code-triage:lastRefresh";
 
 function loadCache<T>(key: string): T | null {
   try {
@@ -237,7 +237,7 @@ export default function App() {
       {/* Sidebar */}
       <div className="w-72 border-r border-gray-800 flex flex-col shrink-0">
         <div className="px-4 py-2 border-b border-gray-800 flex items-center justify-between">
-          <h1 className="text-sm font-semibold text-white">cr-watch</h1>
+          <h1 className="text-sm font-semibold text-white">Code Triage</h1>
           <div className="flex items-center gap-2">
             <span className="text-xs text-gray-600 font-mono">{timerText}</span>
             {"Notification" in window && Notification.permission === "default" && (
