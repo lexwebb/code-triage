@@ -1,21 +1,25 @@
-import { execFileSync } from "child_process";
 import { addRoute, json, getRepos, getBody, getPollState } from "./server.js";
 import { loadState, markComment, saveState } from "./state.js";
 import { postReply, resolveThread, applyFixWithClaude } from "./actioner.js";
 import { createWorktree, getDiffInWorktree, removeWorktree, commitAndPushWorktree } from "./worktree.js";
+import { execAsync, ghAsync, ghGraphQL } from "./exec.js";
 
-function gh<T>(endpoint: string): T {
-  const result = execFileSync("gh", ["api", endpoint, "--paginate"], {
-    encoding: "utf-8",
-    timeout: 30000,
-  });
-  return JSON.parse(result) as T;
-}
-
-function getResolvedCommentIds(repoPath: string, prNumber: number): Set<number> {
+async function getResolvedCommentIds(repoPath: string, prNumber: number): Promise<Set<number>> {
   const [owner, repo] = repoPath.split("/");
-  const query = JSON.stringify({
-    query: `query($owner: String!, $repo: String!, $prNumber: Int!) {
+
+  const data = await ghGraphQL<{
+    data: {
+      repository: {
+        pullRequest: {
+          reviewThreads: { nodes: Array<{
+            isResolved: boolean;
+            comments: { nodes: Array<{ databaseId: number }> };
+          }> };
+        };
+      };
+    };
+  }>(
+    `query($owner: String!, $repo: String!, $prNumber: Int!) {
       repository(owner: $owner, name: $repo) {
         pullRequest(number: $prNumber) {
           reviewThreads(first: 100) {
@@ -29,27 +33,8 @@ function getResolvedCommentIds(repoPath: string, prNumber: number): Set<number> 
         }
       }
     }`,
-    variables: { owner, repo, prNumber },
-  });
-
-  const result = execFileSync("gh", ["api", "graphql", "--input", "-"], {
-    encoding: "utf-8",
-    timeout: 30000,
-    input: query,
-  });
-
-  const data = JSON.parse(result) as {
-    data: {
-      repository: {
-        pullRequest: {
-          reviewThreads: { nodes: Array<{
-            isResolved: boolean;
-            comments: { nodes: Array<{ databaseId: number }> };
-          }> };
-        };
-      };
-    };
-  };
+    { owner, repo, prNumber },
+  );
 
   const threads = data.data.repository.pullRequest.reviewThreads.nodes;
   const resolvedIds = new Set<number>();
@@ -63,11 +48,9 @@ function getResolvedCommentIds(repoPath: string, prNumber: number): Set<number> 
   return resolvedIds;
 }
 
-function getUsername(): string {
-  return execFileSync("gh", ["api", "/user", "--jq", ".login"], {
-    encoding: "utf-8",
-    timeout: 10000,
-  }).trim();
+async function getUsername(): Promise<string> {
+  const result = await execAsync("gh", ["api", "/user", "--jq", ".login"], { timeout: 10000 });
+  return result.trim();
 }
 
 function requireRepo(query: URLSearchParams): string {
@@ -101,21 +84,20 @@ interface GhCombinedStatus {
   state: "success" | "failure" | "pending" | "error";
 }
 
-function getPrStatus(repoPath: string, sha: string): "success" | "failure" | "pending" {
+async function getPrStatus(repoPath: string, sha: string): Promise<"success" | "failure" | "pending"> {
   try {
-    const status = gh<GhCombinedStatus>(`/repos/${repoPath}/commits/${sha}/status`);
+    const status = await ghAsync<GhCombinedStatus>(`/repos/${repoPath}/commits/${sha}/status`);
     if (status.state === "success") return "success";
     if (status.state === "failure" || status.state === "error") return "failure";
   } catch { /* ignore */ }
   return "pending";
 }
 
-function getOpenCommentCount(repoPath: string, prNumber: number): number {
-  const resolvedIds = getResolvedCommentIds(repoPath, prNumber);
+async function getOpenCommentCount(repoPath: string, prNumber: number): Promise<number> {
+  const resolvedIds = await getResolvedCommentIds(repoPath, prNumber);
   try {
     interface GhComment { id: number; user: { login: string }; in_reply_to_id: number | null; }
-    const comments = gh<GhComment[]>(`/repos/${repoPath}/pulls/${prNumber}/comments`);
-    // Count root comments that are NOT resolved
+    const comments = await ghAsync<GhComment[]>(`/repos/${repoPath}/pulls/${prNumber}/comments`);
     return comments.filter((c) => c.in_reply_to_id === null && !resolvedIds.has(c.id)).length;
   } catch {
     return 0;
@@ -125,11 +107,8 @@ function getOpenCommentCount(repoPath: string, prNumber: number): number {
 export function registerRoutes(): void {
 
   // GET /api/user
-  addRoute("GET", "/api/user", (_req, res) => {
-    const result = execFileSync("gh", ["api", "/user"], {
-      encoding: "utf-8",
-      timeout: 10000,
-    });
+  addRoute("GET", "/api/user", async (_req, res) => {
+    const result = await execAsync("gh", ["api", "/user"], { timeout: 10000 });
     const user = JSON.parse(result) as { login: string; avatar_url: string; html_url: string };
     json(res, { login: user.login, avatarUrl: user.avatar_url, url: user.html_url });
   });
@@ -140,8 +119,8 @@ export function registerRoutes(): void {
   });
 
   // GET /api/pulls?repo=owner/repo (optional — if omitted, returns all)
-  addRoute("GET", "/api/pulls", (_req, res, _params, query) => {
-    const username = getUsername();
+  addRoute("GET", "/api/pulls", async (_req, res, _params, query) => {
+    const username = await getUsername();
     const repoFilter = query.get("repo");
     const targetRepos = repoFilter
       ? getRepos().filter((r) => r.repo === repoFilter)
@@ -151,12 +130,14 @@ export function registerRoutes(): void {
 
     for (const repoInfo of targetRepos) {
       try {
-        const pulls = gh<GhPull[]>(`/repos/${repoInfo.repo}/pulls?state=open`);
+        const pulls = await ghAsync<GhPull[]>(`/repos/${repoInfo.repo}/pulls?state=open`);
         const myPulls = pulls.filter((pr) => pr.user.login === username);
 
         for (const pr of myPulls) {
-          const checksStatus = getPrStatus(repoInfo.repo, pr.head.sha);
-          const openComments = getOpenCommentCount(repoInfo.repo, pr.number);
+          const [checksStatus, openComments] = await Promise.all([
+            getPrStatus(repoInfo.repo, pr.head.sha),
+            getOpenCommentCount(repoInfo.repo, pr.number),
+          ]);
           allPulls.push({
             number: pr.number,
             title: pr.title,
@@ -182,8 +163,8 @@ export function registerRoutes(): void {
   });
 
   // GET /api/pulls/review-requested?repo=owner/repo (optional)
-  addRoute("GET", "/api/pulls/review-requested", (_req, res, _params, query) => {
-    const username = getUsername();
+  addRoute("GET", "/api/pulls/review-requested", async (_req, res, _params, query) => {
+    const username = await getUsername();
     const repoFilter = query.get("repo");
     const targetRepos = repoFilter
       ? getRepos().filter((r) => r.repo === repoFilter)
@@ -193,15 +174,17 @@ export function registerRoutes(): void {
 
     for (const repoInfo of targetRepos) {
       try {
-        const pulls = gh<GhPull[]>(`/repos/${repoInfo.repo}/pulls?state=open`);
+        const pulls = await ghAsync<GhPull[]>(`/repos/${repoInfo.repo}/pulls?state=open`);
         const needsReview = pulls.filter((pr) =>
           pr.user.login !== username &&
           pr.requested_reviewers.some((r) => r.login === username),
         );
 
         for (const pr of needsReview) {
-          const checksStatus = getPrStatus(repoInfo.repo, pr.head.sha);
-          const openComments = getOpenCommentCount(repoInfo.repo, pr.number);
+          const [checksStatus, openComments] = await Promise.all([
+            getPrStatus(repoInfo.repo, pr.head.sha),
+            getOpenCommentCount(repoInfo.repo, pr.number),
+          ]);
           reviewPulls.push({
             number: pr.number,
             title: pr.title,
@@ -227,11 +210,11 @@ export function registerRoutes(): void {
   });
 
   // GET /api/pulls/:number?repo=owner/repo
-  addRoute("GET", "/api/pulls/:number", (_req, res, params, query) => {
+  addRoute("GET", "/api/pulls/:number", async (_req, res, params, query) => {
     const repo = requireRepo(query);
     const prNumber = parseInt(params.number, 10);
 
-    const pr = gh<{
+    const pr = await ghAsync<{
       number: number;
       title: string;
       body: string;
@@ -251,23 +234,19 @@ export function registerRoutes(): void {
     // Fetch reviews to get each reviewer's latest state
     interface GhReview {
       user: { login: string; avatar_url: string };
-      state: string; // APPROVED, CHANGES_REQUESTED, COMMENTED, DISMISSED, PENDING
+      state: string;
       submitted_at: string;
     }
-    const reviews = gh<GhReview[]>(`/repos/${repo}/pulls/${prNumber}/reviews`);
+    const reviews = await ghAsync<GhReview[]>(`/repos/${repo}/pulls/${prNumber}/reviews`);
 
-    // Build reviewer map: latest review state per user
     const reviewerMap = new Map<string, { login: string; avatar: string; state: string }>();
 
-    // Add requested reviewers as "PENDING"
     for (const r of pr.requested_reviewers) {
       reviewerMap.set(r.login, { login: r.login, avatar: r.avatar_url, state: "PENDING" });
     }
 
-    // Overlay actual reviews (latest wins)
     for (const r of reviews) {
       if (r.state === "COMMENTED" || r.state === "DISMISSED") {
-        // Don't overwrite a more meaningful state with COMMENTED
         if (!reviewerMap.has(r.user.login)) {
           reviewerMap.set(r.user.login, { login: r.user.login, avatar: r.user.avatar_url, state: r.state });
         }
@@ -275,8 +254,6 @@ export function registerRoutes(): void {
       }
       reviewerMap.set(r.user.login, { login: r.user.login, avatar: r.user.avatar_url, state: r.state });
     }
-
-    const reviewers = Array.from(reviewerMap.values());
 
     json(res, {
       number: pr.number,
@@ -294,12 +271,12 @@ export function registerRoutes(): void {
       deletions: pr.deletions,
       changedFiles: pr.changed_files,
       repo,
-      reviewers,
+      reviewers: Array.from(reviewerMap.values()),
     });
   });
 
   // GET /api/pulls/:number/files?repo=owner/repo
-  addRoute("GET", "/api/pulls/:number/files", (_req, res, params, query) => {
+  addRoute("GET", "/api/pulls/:number/files", async (_req, res, params, query) => {
     const repo = requireRepo(query);
 
     interface GhFile {
@@ -311,7 +288,7 @@ export function registerRoutes(): void {
       patch?: string;
     }
 
-    const files = gh<GhFile[]>(`/repos/${repo}/pulls/${params.number}/files`);
+    const files = await ghAsync<GhFile[]>(`/repos/${repo}/pulls/${params.number}/files`);
 
     json(res, files.map((f) => ({
       filename: f.filename,
@@ -323,7 +300,7 @@ export function registerRoutes(): void {
   });
 
   // GET /api/pulls/:number/comments?repo=owner/repo
-  addRoute("GET", "/api/pulls/:number/comments", (_req, res, params, query) => {
+  addRoute("GET", "/api/pulls/:number/comments", async (_req, res, params, query) => {
     const repo = requireRepo(query);
     const prNumber = parseInt(params.number, 10);
 
@@ -339,10 +316,10 @@ export function registerRoutes(): void {
       in_reply_to_id: number | null;
     }
 
-    const comments = gh<GhComment[]>(`/repos/${repo}/pulls/${prNumber}/comments`);
-
-    // Fetch resolved thread status via GraphQL
-    const resolvedIds = getResolvedCommentIds(repo, prNumber);
+    const [comments, resolvedIds] = await Promise.all([
+      ghAsync<GhComment[]>(`/repos/${repo}/pulls/${prNumber}/comments`),
+      getResolvedCommentIds(repo, prNumber),
+    ]);
 
     const state = loadState();
 
@@ -367,17 +344,17 @@ export function registerRoutes(): void {
   });
 
   // GET /api/pulls/:number/files/*path?repo=owner/repo (full file content)
-  addRoute("GET", "/api/pulls/:number/files/*path", (_req, res, params, query) => {
+  addRoute("GET", "/api/pulls/:number/files/*path", async (_req, res, params, query) => {
     const repo = requireRepo(query);
-    const pr = gh<{ head: { ref: string } }>(`/repos/${repo}/pulls/${params.number}`);
+    const pr = await ghAsync<{ head: { ref: string } }>(`/repos/${repo}/pulls/${params.number}`);
     const filePath = params.path;
 
     try {
-      const content = execFileSync(
+      const content = (await execAsync(
         "gh",
         ["api", `/repos/${repo}/contents/${filePath}?ref=${pr.head.ref}`, "--jq", ".content"],
-        { encoding: "utf-8", timeout: 15000 },
-      ).trim();
+        { timeout: 15000 },
+      )).trim();
 
       const decoded = Buffer.from(content, "base64").toString("utf-8");
       json(res, { content: decoded, path: filePath });
@@ -441,7 +418,6 @@ export function registerRoutes(): void {
   addRoute("POST", "/api/actions/fix", async (req, res) => {
     const body = getBody<{ repo: string; commentId: number; prNumber: number; branch: string; comment: { path: string; line: number; body: string; diffHunk: string } }>(req);
 
-    // Find local path for this repo
     const repoInfo = getRepos().find((r) => r.repo === body.repo);
     if (!repoInfo?.localPath) {
       json(res, { error: "Repo local path not found" }, 400);
@@ -483,7 +459,7 @@ export function registerRoutes(): void {
     }
 
     try {
-      const worktreePath = createWorktree(body.branch, repoInfo.localPath); // returns existing
+      const worktreePath = createWorktree(body.branch, repoInfo.localPath);
       const commitMsg = `fix: apply CodeRabbit suggestion for PR #${body.prNumber}`;
       commitAndPushWorktree(worktreePath, commitMsg);
       removeWorktree(body.branch);
@@ -516,10 +492,10 @@ export function registerRoutes(): void {
     });
 
     try {
-      execFileSync(
+      await execAsync(
         "gh",
         ["api", "-X", "POST", `/repos/${body.repo}/pulls/${body.prNumber}/reviews`, "--input", "-"],
-        { encoding: "utf-8", timeout: 15000, input: payload },
+        { timeout: 15000, input: payload },
       );
       json(res, { success: true });
     } catch (err) {

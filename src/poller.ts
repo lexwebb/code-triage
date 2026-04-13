@@ -1,5 +1,6 @@
 import { execFileSync } from "child_process";
 import type { CrComment, PrInfo, PollResult } from "./types.js";
+import { execAsync, ghAsync, ghGraphQL } from "./exec.js";
 
 interface GhPull {
   number: number;
@@ -20,22 +21,8 @@ interface GhComment {
   in_reply_to_id: number | null;
 }
 
-interface GhThreadNode {
-  isResolved: boolean;
-  comments: {
-    nodes: Array<{ databaseId: number }>;
-  };
-}
-
-function ghApi<T>(endpoint: string): T {
-  const result = execFileSync("gh", ["api", endpoint, "--paginate"], {
-    encoding: "utf-8",
-    timeout: 30000,
-  });
-  return JSON.parse(result) as T;
-}
-
 export function getRepoFromGit(): string {
+  // This one stays sync — only called once at startup
   const remote = execFileSync("git", ["remote", "get-url", "origin"], {
     encoding: "utf-8",
   }).trim();
@@ -44,17 +31,27 @@ export function getRepoFromGit(): string {
   return match[1];
 }
 
-function getCurrentUser(): string {
-  return execFileSync("gh", ["api", "/user", "--jq", ".login"], {
-    encoding: "utf-8",
-    timeout: 10000,
-  }).trim();
+async function getCurrentUser(): Promise<string> {
+  const result = await execAsync("gh", ["api", "/user", "--jq", ".login"], { timeout: 10000 });
+  return result.trim();
 }
 
-function getResolvedCommentIds(repoPath: string, prNumber: number): Set<number> {
+async function getResolvedCommentIds(repoPath: string, prNumber: number): Promise<Set<number>> {
   const [owner, repo] = repoPath.split("/");
-  const query = JSON.stringify({
-    query: `query($owner: String!, $repo: String!, $prNumber: Int!) {
+
+  const data = await ghGraphQL<{
+    data: {
+      repository: {
+        pullRequest: {
+          reviewThreads: { nodes: Array<{
+            isResolved: boolean;
+            comments: { nodes: Array<{ databaseId: number }> };
+          }> };
+        };
+      };
+    };
+  }>(
+    `query($owner: String!, $repo: String!, $prNumber: Int!) {
       repository(owner: $owner, name: $repo) {
         pullRequest(number: $prNumber) {
           reviewThreads(first: 100) {
@@ -68,24 +65,8 @@ function getResolvedCommentIds(repoPath: string, prNumber: number): Set<number> 
         }
       }
     }`,
-    variables: { owner, repo, prNumber },
-  });
-
-  const result = execFileSync("gh", ["api", "graphql", "--input", "-"], {
-    encoding: "utf-8",
-    timeout: 30000,
-    input: query,
-  });
-
-  const data = JSON.parse(result) as {
-    data: {
-      repository: {
-        pullRequest: {
-          reviewThreads: { nodes: GhThreadNode[] };
-        };
-      };
-    };
-  };
+    { owner, repo, prNumber },
+  );
 
   const threads = data.data.repository.pullRequest.reviewThreads.nodes;
   const resolvedIds = new Set<number>();
@@ -99,14 +80,21 @@ function getResolvedCommentIds(repoPath: string, prNumber: number): Set<number> 
   return resolvedIds;
 }
 
+const IGNORED_BOTS = new Set([
+  "vercel[bot]", "netlify[bot]", "codecov[bot]", "codecov-commenter",
+  "sonarcloud[bot]", "sonarqube[bot]", "dependabot[bot]", "renovate[bot]",
+  "github-actions[bot]", "sentry-io[bot]", "changeset-bot[bot]",
+  "gitpod-io[bot]", "stale[bot]", "linear[bot]",
+]);
+
 export async function fetchNewComments(
   repo: string | undefined,
   isNewComment: (id: number) => boolean,
 ): Promise<PollResult> {
   const repoPath = repo || getRepoFromGit();
-  const username = getCurrentUser();
+  const username = await getCurrentUser();
 
-  const pulls = ghApi<GhPull[]>(`/repos/${repoPath}/pulls?state=open`);
+  const pulls = await ghAsync<GhPull[]>(`/repos/${repoPath}/pulls?state=open`);
   const myPulls = pulls.filter((pr) => pr.user.login === username);
 
   if (myPulls.length === 0) {
@@ -124,15 +112,9 @@ export async function fetchNewComments(
       url: pr.html_url,
     };
 
-    const comments = ghApi<GhComment[]>(`/repos/${repoPath}/pulls/${pr.number}/comments`);
-    const resolvedIds = getResolvedCommentIds(repoPath, pr.number);
-
-    // Include all review comments except noise bots (deploy previews, coverage, etc.)
-    const IGNORED_BOTS = new Set([
-      "vercel[bot]", "netlify[bot]", "codecov[bot]", "codecov-commenter",
-      "sonarcloud[bot]", "sonarqube[bot]", "dependabot[bot]", "renovate[bot]",
-      "github-actions[bot]", "sentry-io[bot]", "changeset-bot[bot]",
-      "gitpod-io[bot]", "stale[bot]", "linear[bot]",
+    const [comments, resolvedIds] = await Promise.all([
+      ghAsync<GhComment[]>(`/repos/${repoPath}/pulls/${pr.number}/comments`),
+      getResolvedCommentIds(repoPath, pr.number),
     ]);
 
     const relevantComments = comments.filter(
