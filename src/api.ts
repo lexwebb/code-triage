@@ -1,5 +1,5 @@
 import { addRoute, json, getRepos, getBody, getPollState, getHealthPayload, setFixJobStatus, clearFixJobStatus, getActiveFixForBranch, getActiveFixForPR, subscribeSse } from "./server.js";
-import { loadState, markComment, markCommentWithEvaluation, saveState, addFixJob as addFixJobState, removeFixJob as removeFixJobState, getFixJobs } from "./state.js";
+import { loadState, markComment, markCommentWithEvaluation, patchCommentTriage, saveState, addFixJob as addFixJobState, removeFixJob as removeFixJobState, getFixJobs } from "./state.js";
 import { postReply, resolveThread, applyFixWithClaude, evaluateComment } from "./actioner.js";
 import { createWorktree, getWorktreePath, getDiffInWorktree, removeWorktree, commitAndPushWorktree } from "./worktree.js";
 import { ghAsync, ghGraphQL, ghPost } from "./exec.js";
@@ -359,6 +359,9 @@ export function registerRoutes(): void {
         isResolved: resolvedIds.has(c.id),
         evaluation: record?.evaluation ?? null,
         crStatus: record?.status ?? null,
+        snoozeUntil: record?.snoozeUntil ?? null,
+        priority: record?.priority ?? null,
+        triageNote: record?.triageNote ?? null,
       };
     }));
   });
@@ -522,7 +525,7 @@ export function registerRoutes(): void {
 
     let evaluation;
     try {
-      evaluation = await evaluateComment(comment);
+      evaluation = await evaluateComment(comment, body.repo);
     } catch (err) {
       json(res, { error: `Claude evaluation failed: ${(err as Error).message}` }, 500);
       return;
@@ -531,6 +534,26 @@ export function registerRoutes(): void {
     markCommentWithEvaluation(state, body.commentId, "pending", body.prNumber, evaluation, body.repo);
     saveState(state);
     json(res, { success: true, evaluation });
+  });
+
+  // POST /api/actions/comment-triage — local snooze / priority / note (SQLite only)
+  addRoute("POST", "/api/actions/comment-triage", async (req, res) => {
+    const body = getBody<{
+      repo: string;
+      commentId: number;
+      prNumber: number;
+      snoozeUntil?: string | null;
+      priority?: number | null;
+      triageNote?: string | null;
+    }>(req);
+    const state = loadState();
+    patchCommentTriage(state, body.commentId, body.repo, body.prNumber, {
+      ...(body.snoozeUntil !== undefined ? { snoozeUntil: body.snoozeUntil } : {}),
+      ...(body.priority !== undefined ? { priority: body.priority } : {}),
+      ...(body.triageNote !== undefined ? { triageNote: body.triageNote } : {}),
+    });
+    saveState(state);
+    json(res, { success: true });
   });
 
   // POST /api/actions/fix — create worktree, run Claude, return diff

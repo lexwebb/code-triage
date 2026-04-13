@@ -20,6 +20,12 @@ export interface Config {
   commentRetentionDays?: number;
   ignoredBots?: string[]; // additional bot logins to ignore during polling
   accounts?: Array<{ name: string; token: string; orgs: string[] }>; // multi-account support
+  /** Appended to the Claude PR-comment evaluation prompt (all repos). */
+  evalPromptAppend?: string;
+  /** Per-repo prompt append (`owner/repo`). Applied after `evalPromptAppend`. */
+  evalPromptAppendByRepo?: Record<string, string>;
+  /** Extra `claude` CLI args after `-p` and `--output-format json` (e.g. `["--model","opus"]`). */
+  evalClaudeExtraArgs?: string[];
 }
 
 const DEFAULTS: Config = {

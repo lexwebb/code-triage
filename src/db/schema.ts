@@ -15,6 +15,9 @@ export const comments = sqliteTable("comments", {
   status: text("status").notNull(),
   timestamp: text("timestamp").notNull(),
   evaluationJson: text("evaluation_json"),
+  snoozeUntil: text("snooze_until"),
+  priority: integer("priority"),
+  triageNote: text("triage_note"),
 });
 
 export const fixJobs = sqliteTable("fix_jobs", {

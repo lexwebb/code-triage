@@ -80,6 +80,8 @@ const DEMO_COMMENTS = [
     inReplyToId: null, isResolved: false,
     evaluation: { action: "fix" as const, summary: "Valid concern — add input validation for the auth code" },
     crStatus: "pending" as const,
+    triageNote: "Demo local note",
+    priority: 2,
   },
   {
     id: 1002, author: "coderabbitai[bot]",
@@ -215,6 +217,11 @@ export function startDemoServer(port: number): void {
   addRoute("POST", "/api/actions/reply", (_req, res) => { json(res, { success: true, status: "replied" }); });
   addRoute("POST", "/api/actions/resolve", (_req, res) => { json(res, { success: true, status: "replied" }); });
   addRoute("POST", "/api/actions/dismiss", (_req, res) => { json(res, { success: true, status: "dismissed" }); });
+  addRoute("POST", "/api/actions/comment-triage", (_req, res) => { json(res, { success: true }); });
+  addRoute("POST", "/api/actions/re-evaluate", (_req, res) => {
+    json(res, { success: true, evaluation: { action: "reply" as const, summary: "Demo re-evaluate", reply: "OK" } });
+  });
+  addRoute("POST", "/api/actions/batch", (_req, res) => { json(res, { results: [] }); });
   addRoute("POST", "/api/actions/fix", (_req, res) => { json(res, { success: true, status: "running", branch: "demo" }); });
   addRoute("POST", "/api/actions/fix-apply", (_req, res) => { json(res, { success: true, status: "fixed" }); });
   addRoute("POST", "/api/actions/fix-discard", (_req, res) => { json(res, { success: true }); });

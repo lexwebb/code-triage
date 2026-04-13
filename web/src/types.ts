@@ -69,6 +69,9 @@ export interface ReviewComment {
   isResolved: boolean;
   evaluation: CommentEvaluation | null;
   crStatus: "pending" | "replied" | "fixed" | "dismissed" | null;
+  snoozeUntil?: string | null;
+  priority?: number | null;
+  triageNote?: string | null;
 }
 
 export interface CrWatchState {

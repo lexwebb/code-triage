@@ -74,6 +74,12 @@ export const api = {
     postJSON<{ success: boolean }>("/api/actions/resolve", { repo, commentId, prNumber }),
   dismissComment: (repo: string, commentId: number, prNumber: number) =>
     postJSON<{ success: boolean }>("/api/actions/dismiss", { repo, commentId, prNumber }),
+  updateCommentTriage: (
+    repo: string,
+    commentId: number,
+    prNumber: number,
+    patch: { snoozeUntil?: string | null; priority?: number | null; triageNote?: string | null },
+  ) => postJSON<{ success: boolean }>("/api/actions/comment-triage", { repo, commentId, prNumber, ...patch }),
   reEvaluate: (repo: string, commentId: number, prNumber: number) =>
     postJSON<{ success: boolean; evaluation?: unknown }>("/api/actions/re-evaluate", { repo, commentId, prNumber }),
   batchAction: (action: "reply" | "resolve" | "dismiss", items: Array<{ repo: string; commentId: number; prNumber: number }>) =>

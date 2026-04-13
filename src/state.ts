@@ -1,5 +1,5 @@
 import { eq } from "drizzle-orm";
-import type { CrWatchState, CommentStatus, Evaluation, FixJobRecord } from "./types.js";
+import type { CommentTriagePatch, CrWatchState, CommentStatus, CommentRecord, Evaluation, FixJobRecord } from "./types.js";
 import * as schema from "./db/schema.js";
 import { openStateDatabase, writeStateToDb, getRawSqlite } from "./db/client.js";
 
@@ -41,6 +41,9 @@ export function loadState(): CrWatchState {
       ...(row.repo ? { repo: row.repo } : {}),
       timestamp: row.timestamp,
       ...(evaluation ? { evaluation } : {}),
+      ...(row.snoozeUntil != null && row.snoozeUntil !== "" ? { snoozeUntil: row.snoozeUntil } : {}),
+      ...(row.priority != null ? { priority: row.priority } : {}),
+      ...(row.triageNote != null && row.triageNote !== "" ? { triageNote: row.triageNote } : {}),
     };
   }
 
@@ -70,6 +73,23 @@ function commentKey(commentId: number, repo?: string): string {
   return repo ? `${repo}:${commentId}` : String(commentId);
 }
 
+function carryTriage(prev: CommentRecord | undefined): Partial<Pick<CommentRecord, "snoozeUntil" | "priority" | "triageNote">> {
+  if (!prev) {
+    return {};
+  }
+  const t: Partial<Pick<CommentRecord, "snoozeUntil" | "priority" | "triageNote">> = {};
+  if (prev.snoozeUntil != null) {
+    t.snoozeUntil = prev.snoozeUntil;
+  }
+  if (prev.priority !== undefined && prev.priority !== null) {
+    t.priority = prev.priority;
+  }
+  if (prev.triageNote != null && prev.triageNote !== "") {
+    t.triageNote = prev.triageNote;
+  }
+  return t;
+}
+
 export function markComment(
   state: CrWatchState,
   commentId: number,
@@ -78,11 +98,13 @@ export function markComment(
   repo?: string,
 ): CrWatchState {
   const key = commentKey(commentId, repo);
+  const prev = state.comments[key];
   state.comments[key] = {
     status,
     prNumber,
     timestamp: new Date().toISOString(),
     ...(repo ? { repo } : {}),
+    ...carryTriage(prev),
   };
   return state;
 }
@@ -96,14 +118,51 @@ export function markCommentWithEvaluation(
   repo?: string,
 ): CrWatchState {
   const key = commentKey(commentId, repo);
+  const prev = state.comments[key];
   state.comments[key] = {
     status,
     prNumber,
     timestamp: new Date().toISOString(),
     evaluation,
     ...(repo ? { repo } : {}),
+    ...carryTriage(prev),
   };
   return state;
+}
+
+export function patchCommentTriage(
+  state: CrWatchState,
+  commentId: number,
+  repo: string,
+  prNumber: number,
+  patch: CommentTriagePatch,
+): void {
+  const key = commentKey(commentId, repo);
+  let rec = state.comments[key];
+  if (!rec) {
+    rec = {
+      status: "pending",
+      prNumber,
+      timestamp: new Date().toISOString(),
+      repo,
+    };
+  } else {
+    rec = { ...rec };
+  }
+  if (patch.snoozeUntil !== undefined) {
+    rec.snoozeUntil = patch.snoozeUntil;
+  }
+  if (patch.priority !== undefined) {
+    if (patch.priority === null) {
+      delete rec.priority;
+    } else {
+      rec.priority = patch.priority;
+    }
+  }
+  if (patch.triageNote !== undefined) {
+    rec.triageNote = patch.triageNote === "" ? null : patch.triageNote;
+  }
+  state.comments[key] = rec;
 }
 
 export function isNewComment(state: CrWatchState, commentId: number, repo?: string): boolean {

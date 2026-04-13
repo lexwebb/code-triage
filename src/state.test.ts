@@ -3,7 +3,7 @@ import { tmpdir } from "os";
 import { join } from "path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { closeStateDatabase, getStateDir } from "./db/client.js";
-import { compactCommentHistory, isNewComment, loadState, markComment, markCommentWithEvaluation, saveState } from "./state.js";
+import { compactCommentHistory, isNewComment, loadState, markComment, markCommentWithEvaluation, patchCommentTriage, saveState } from "./state.js";
 
 let testRoot: string;
 
@@ -78,5 +78,22 @@ describe("state persistence", () => {
     s = loadState();
     expect(s.comments["o/r:1"]).toBeUndefined();
     expect(s.comments["o/r:2"]?.status).toBe("pending");
+  });
+
+  it("patchCommentTriage upserts pending row and markComment keeps triage fields", () => {
+    let s = loadState();
+    patchCommentTriage(s, 99, "o/r", 3, { triageNote: "later", priority: 2, snoozeUntil: "2099-01-01T00:00:00.000Z" });
+    saveState(s);
+    s = loadState();
+    expect(s.comments["o/r:99"]?.status).toBe("pending");
+    expect(s.comments["o/r:99"]?.triageNote).toBe("later");
+    expect(s.comments["o/r:99"]?.priority).toBe(2);
+
+    markComment(s, 99, "replied", 3, "o/r");
+    saveState(s);
+    s = loadState();
+    expect(s.comments["o/r:99"]?.status).toBe("replied");
+    expect(s.comments["o/r:99"]?.triageNote).toBe("later");
+    expect(s.comments["o/r:99"]?.priority).toBe(2);
   });
 });

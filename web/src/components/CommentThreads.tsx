@@ -1,8 +1,17 @@
-import { useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type MutableRefObject } from "react";
 import type { ReviewComment } from "../types";
 import { api } from "../api";
 import type { FixJobStatus } from "../api";
 import Comment from "./Comment";
+
+type ThreadKeyActions = {
+  toggleExpand: () => void;
+  reply: () => void;
+  resolve: () => void;
+  dismiss: () => void;
+  fix: () => void;
+  reEvaluate: () => void;
+};
 
 interface CommentThreadsProps {
   comments: ReviewComment[];
@@ -43,10 +52,19 @@ function buildThreads(comments: ReviewComment[]): Thread[] {
 
   threads.sort((a, b) => {
     if (a.isResolved !== b.isResolved) return a.isResolved ? 1 : -1;
+    const pa = a.root.priority ?? 0;
+    const pb = b.root.priority ?? 0;
+    if (pb !== pa) return pb - pa;
     return new Date(a.root.createdAt).getTime() - new Date(b.root.createdAt).getTime();
   });
 
   return threads;
+}
+
+function isSnoozed(c: ReviewComment): boolean {
+  if (!c.snoozeUntil) return false;
+  const t = new Date(c.snoozeUntil).getTime();
+  return Number.isFinite(t) && t > Date.now();
 }
 
 function EvalBadge({ action }: { action: string }) {
@@ -74,7 +92,7 @@ function StatusBadge({ status }: { status: string }) {
   return null;
 }
 
-function ThreadItem({ thread, onSelectFile, repo, prNumber, branch, fixBlocked, onCommentAction, onFixStarted }: {
+function ThreadItem({ thread, onSelectFile, repo, prNumber, branch, fixBlocked, onCommentAction, onFixStarted, isFocused, registerRowEl, threadActionsRef }: {
   thread: Thread;
   onSelectFile: (f: string) => void;
   repo: string;
@@ -83,6 +101,9 @@ function ThreadItem({ thread, onSelectFile, repo, prNumber, branch, fixBlocked, 
   fixBlocked: boolean;
   onCommentAction: () => void;
   onFixStarted: (job: FixJobStatus) => void;
+  isFocused: boolean;
+  registerRowEl: (id: number, el: HTMLDivElement | null) => void;
+  threadActionsRef: MutableRefObject<Map<number, ThreadKeyActions>>;
 }) {
   const eval_ = thread.root.evaluation;
   const status = thread.root.crStatus;
@@ -90,6 +111,19 @@ function ThreadItem({ thread, onSelectFile, repo, prNumber, branch, fixBlocked, 
   const [expanded, setExpanded] = useState(!thread.isResolved && !isActedOn);
   const [acting, setActing] = useState(false);
   const [showSuggestion, setShowSuggestion] = useState(false);
+  const [triageBusy, setTriageBusy] = useState(false);
+  const [noteDraft, setNoteDraft] = useState(thread.root.triageNote ?? "");
+  const [priorityDraft, setPriorityDraft] = useState(
+    thread.root.priority != null ? String(thread.root.priority) : "",
+  );
+
+  useEffect(() => {
+    setNoteDraft(thread.root.triageNote ?? "");
+  }, [thread.root.triageNote, thread.root.id]);
+
+  useEffect(() => {
+    setPriorityDraft(thread.root.priority != null ? String(thread.root.priority) : "");
+  }, [thread.root.priority, thread.root.id]);
 
   // Fix with Claude state
   const [fixing, setFixing] = useState(false);
@@ -124,6 +158,29 @@ function ThreadItem({ thread, onSelectFile, repo, prNumber, branch, fixBlocked, 
     } finally {
       setActing(false);
     }
+  }
+
+  async function pushTriage(patch: { snoozeUntil?: string | null; priority?: number | null; triageNote?: string | null }) {
+    setTriageBusy(true);
+    try {
+      await api.updateCommentTriage(repo, thread.root.id, prNumber, patch);
+      onCommentAction();
+    } catch (err) {
+      console.error("Triage update failed:", err);
+    } finally {
+      setTriageBusy(false);
+    }
+  }
+
+  function isoAfterMs(ms: number): string {
+    return new Date(Date.now() + ms).toISOString();
+  }
+
+  function isoTomorrowMorning(): string {
+    const d = new Date();
+    d.setDate(d.getDate() + 1);
+    d.setHours(9, 0, 0, 0);
+    return d.toISOString();
   }
 
   async function handleFixWithClaude() {
@@ -164,10 +221,32 @@ function ThreadItem({ thread, onSelectFile, repo, prNumber, branch, fixBlocked, 
     }
   }
 
+  useLayoutEffect(() => {
+    const id = thread.root.id;
+    const actions = threadActionsRef.current;
+    actions.set(id, {
+      toggleExpand: () => setExpanded((x) => !x),
+      reply: () => { void handleAction("reply"); },
+      resolve: () => { void handleAction("resolve"); },
+      dismiss: () => { void handleAction("dismiss"); },
+      fix: () => { void handleFixWithClaude(); },
+      reEvaluate: () => { void handleReEvaluate(); },
+    });
+    return () => {
+      actions.delete(id);
+    };
+  });
+
+  const snoozed = isSnoozed(thread.root);
+
   return (
-    <div className={`border rounded-lg overflow-hidden ${
-      thread.isResolved || isActedOn ? "border-gray-800/50 opacity-70" : "border-gray-800"
-    }`}>
+    <div
+      ref={(el) => registerRowEl(thread.root.id, el)}
+      className={`rounded-lg ${isFocused ? "ring-2 ring-blue-500/70 ring-offset-2 ring-offset-gray-950" : ""}`}
+    >
+      <div className={`border rounded-lg overflow-hidden ${
+        thread.isResolved || isActedOn ? "border-gray-800/50 opacity-70" : "border-gray-800"
+      }`}>
       <button
         onClick={() => setExpanded(!expanded)}
         className="w-full px-3 py-1.5 bg-gray-800/50 text-left text-xs font-mono flex items-center justify-between hover:bg-gray-800/80 transition-colors"
@@ -191,6 +270,84 @@ function ThreadItem({ thread, onSelectFile, repo, prNumber, branch, fixBlocked, 
           {thread.replies.map((reply) => (
             <Comment key={reply.id} comment={reply} compact />
           ))}
+
+          <div className="mx-1 mt-2 p-2 bg-gray-900/35 rounded border border-gray-800/80 space-y-2">
+            <div className="text-[10px] uppercase tracking-wide text-gray-500">Local triage</div>
+            {snoozed && (
+              <div className="text-xs text-amber-400/90">
+                Snoozed until {new Date(thread.root.snoozeUntil!).toLocaleString()}
+              </div>
+            )}
+            <textarea
+              value={noteDraft}
+              onChange={(e) => setNoteDraft(e.target.value)}
+              onBlur={() => {
+                const cur = thread.root.triageNote ?? "";
+                if (noteDraft !== cur) {
+                  void pushTriage({ triageNote: noteDraft });
+                }
+              }}
+              placeholder="Private note (not sent to GitHub)…"
+              disabled={triageBusy}
+              rows={2}
+              className="w-full text-xs bg-gray-950 border border-gray-700 rounded px-2 py-1 text-gray-300 placeholder-gray-600 focus:outline-none focus:border-gray-500 resize-y min-h-[2.5rem]"
+            />
+            <div className="flex flex-wrap items-center gap-2">
+              <label className="text-xs text-gray-500 shrink-0">Priority</label>
+              <input
+                type="number"
+                value={priorityDraft}
+                onChange={(e) => setPriorityDraft(e.target.value)}
+                onBlur={() => {
+                  const raw = priorityDraft.trim();
+                  if (raw === "") {
+                    if (thread.root.priority != null) void pushTriage({ priority: null });
+                    return;
+                  }
+                  const n = Number(raw);
+                  if (!Number.isFinite(n)) return;
+                  const rounded = Math.round(n);
+                  if (rounded !== thread.root.priority) void pushTriage({ priority: rounded });
+                }}
+                placeholder="0"
+                disabled={triageBusy}
+                className="w-14 text-xs bg-gray-950 border border-gray-700 rounded px-1 py-0.5 text-gray-300 focus:outline-none focus:border-gray-500"
+              />
+              <span className="text-xs text-gray-600">Snooze</span>
+              <button
+                type="button"
+                disabled={triageBusy}
+                onClick={() => void pushTriage({ snoozeUntil: isoAfterMs(3600000) })}
+                className="text-xs px-2 py-0.5 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded disabled:opacity-50"
+              >
+                1h
+              </button>
+              <button
+                type="button"
+                disabled={triageBusy}
+                onClick={() => void pushTriage({ snoozeUntil: isoAfterMs(4 * 3600000) })}
+                className="text-xs px-2 py-0.5 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded disabled:opacity-50"
+              >
+                4h
+              </button>
+              <button
+                type="button"
+                disabled={triageBusy}
+                onClick={() => void pushTriage({ snoozeUntil: isoTomorrowMorning() })}
+                className="text-xs px-2 py-0.5 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded disabled:opacity-50"
+              >
+                Tomorrow 9:00
+              </button>
+              <button
+                type="button"
+                disabled={triageBusy || !thread.root.snoozeUntil}
+                onClick={() => void pushTriage({ snoozeUntil: null })}
+                className="text-xs px-2 py-0.5 bg-gray-800 hover:bg-gray-700 text-gray-400 rounded disabled:opacity-40"
+              >
+                Clear snooze
+              </button>
+            </div>
+          </div>
 
           {eval_ && !isActedOn && (
             <div className="mx-1 mt-2">
@@ -266,6 +423,7 @@ function ThreadItem({ thread, onSelectFile, repo, prNumber, branch, fixBlocked, 
           )}
         </div>
       )}
+      </div>
     </div>
   );
 }
@@ -276,9 +434,17 @@ export default function CommentThreads({ comments, onSelectFile, repo, prNumber,
   const [batching, setBatching] = useState(false);
   const [filterText, setFilterText] = useState("");
   const [filterAction, setFilterAction] = useState<"all" | "fix" | "reply" | "resolve">("all");
+  const [showSnoozed, setShowSnoozed] = useState(false);
+  const [focusedIdx, setFocusedIdx] = useState<number | null>(null);
+  const threadActionsRef = useRef(new Map<number, ThreadKeyActions>());
+  const rowElsRef = useRef(new Map<number, HTMLDivElement>());
+  const threadsRef = useRef<Thread[]>([]);
+  const focusedIdxRef = useRef<number | null>(null);
+
   const allThreads = buildThreads(comments);
 
   const threads = allThreads.filter((t) => {
+    if (!showSnoozed && isSnoozed(t.root)) return false;
     if (filterText) {
       const q = filterText.toLowerCase();
       if (!t.root.path.toLowerCase().includes(q) && !t.root.body.toLowerCase().includes(q)) return false;
@@ -286,6 +452,102 @@ export default function CommentThreads({ comments, onSelectFile, repo, prNumber,
     if (filterAction !== "all" && t.root.evaluation?.action !== filterAction) return false;
     return true;
   });
+
+  threadsRef.current = threads;
+  focusedIdxRef.current = focusedIdx;
+
+  function registerRowEl(id: number, el: HTMLDivElement | null) {
+    if (el) {
+      rowElsRef.current.set(id, el);
+    } else {
+      rowElsRef.current.delete(id);
+    }
+  }
+
+  useEffect(() => {
+    setFocusedIdx((i) => {
+      if (i === null) return null;
+      if (threads.length === 0) return null;
+      return Math.min(i, threads.length - 1);
+    });
+  }, [threads.length]);
+
+  useEffect(() => {
+    const list = threadsRef.current;
+    if (focusedIdx === null || focusedIdx < 0 || focusedIdx >= list.length) return;
+    const id = list[focusedIdx]!.root.id;
+    rowElsRef.current.get(id)?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }, [focusedIdx]);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const tgt = e.target;
+      if (tgt instanceof HTMLInputElement || tgt instanceof HTMLTextAreaElement || tgt instanceof HTMLSelectElement) {
+        return;
+      }
+      if (tgt instanceof HTMLElement && tgt.isContentEditable) return;
+
+      const list = threadsRef.current;
+
+      if (e.key === "j" && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        e.preventDefault();
+        setFocusedIdx((i) => {
+          if (list.length === 0) return null;
+          if (i === null) return 0;
+          return Math.min(list.length - 1, i + 1);
+        });
+        return;
+      }
+      if (e.key === "k" && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        e.preventDefault();
+        setFocusedIdx((i) => {
+          if (list.length === 0) return null;
+          if (i === null) return 0;
+          return Math.max(0, i - 1);
+        });
+        return;
+      }
+
+      const idx = focusedIdxRef.current;
+      if (idx === null || idx < 0 || idx >= list.length) return;
+      const id = list[idx]!.root.id;
+      const h = threadActionsRef.current.get(id);
+      if (!h) return;
+
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        h.toggleExpand();
+        return;
+      }
+      if (e.key === "r") {
+        e.preventDefault();
+        h.reply();
+        return;
+      }
+      if (e.key === "x") {
+        e.preventDefault();
+        h.resolve();
+        return;
+      }
+      if (e.key === "d") {
+        e.preventDefault();
+        h.dismiss();
+        return;
+      }
+      if (e.key === "f") {
+        e.preventDefault();
+        h.fix();
+        return;
+      }
+      if (e.key === "e") {
+        e.preventDefault();
+        h.reEvaluate();
+        return;
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   if (threads.length === 0) return null;
 
@@ -376,6 +638,23 @@ export default function CommentThreads({ comments, onSelectFile, repo, prNumber,
                 {a === "all" ? "All" : a.charAt(0).toUpperCase() + a.slice(1)}
               </button>
             ))}
+            <label className="flex items-center gap-1.5 text-xs text-gray-500 shrink-0 ml-1 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={showSnoozed}
+                onChange={(e) => setShowSnoozed(e.target.checked)}
+                className="rounded border-gray-600 bg-gray-800 text-blue-500"
+              />
+              Snoozed
+            </label>
+            <details className="text-xs text-gray-600 shrink-0">
+              <summary className="cursor-pointer hover:text-gray-400 select-none">Keys</summary>
+              <div className="mt-1 pl-2 text-[10px] text-gray-500 space-y-0.5 font-sans normal-case tracking-normal">
+                <div>j / k — focus thread</div>
+                <div>Enter / Space — expand or collapse</div>
+                <div>r reply · x resolve · d dismiss · f fix · e re-evaluate</div>
+              </div>
+            </details>
           </div>
           {/* Bulk action toolbar */}
           {actionableThreads.length > 0 && (
@@ -406,7 +685,7 @@ export default function CommentThreads({ comments, onSelectFile, repo, prNumber,
             </div>
           )}
           <div className="px-6 pb-3 space-y-3 pt-3">
-            {threads.map((thread) => {
+            {threads.map((thread, idx) => {
               const isActionable = actionableThreads.some((t) => t.root.id === thread.root.id);
               return (
                 <div key={thread.root.id} className="flex items-start gap-2">
@@ -428,6 +707,9 @@ export default function CommentThreads({ comments, onSelectFile, repo, prNumber,
                       fixBlocked={hasRunningFix}
                       onCommentAction={onCommentAction}
                       onFixStarted={onFixStarted}
+                      isFocused={focusedIdx === idx}
+                      registerRowEl={registerRowEl}
+                      threadActionsRef={threadActionsRef}
                     />
                   </div>
                 </div>

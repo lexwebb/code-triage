@@ -3,6 +3,7 @@ import { markComment, markCommentWithEvaluation, saveState } from "./state.js";
 import { ghPost, ghGraphQL } from "./exec.js";
 import { log } from "./logger.js";
 import { runWithConcurrency } from "./run-with-concurrency.js";
+import { loadConfig } from "./config.js";
 import type { CrComment, CrWatchState, Evaluation, PrInfo, SpawnOptions } from "./types.js";
 
 const EVAL_CONCURRENCY_MIN = 1;
@@ -81,8 +82,8 @@ function spawnTracked(cmd: string, args: string[], options: SpawnOptions = {}): 
   });
 }
 
-export async function evaluateComment(comment: CrComment): Promise<Evaluation> {
-  const evalPrompt = `You are evaluating a CodeRabbit review comment on a pull request.
+function buildEvalPrompt(comment: CrComment, repoPath?: string): string {
+  const base = `You are evaluating a CodeRabbit review comment on a pull request.
 
 Comment on file "${comment.path}" at line ${comment.line}:
 ---
@@ -116,9 +117,33 @@ Examples of "resolve" (issue already addressed):
 Respond with ONLY valid JSON, no markdown fences:
 {"action": "reply" or "fix" or "resolve", "summary": "one-line explanation of your decision", "reply": "your reply text if action is reply or resolve, omit if fix"}`;
 
+  const cfg = loadConfig();
+  const extra: string[] = [];
+  const g = cfg.evalPromptAppend?.trim();
+  if (g) {
+    extra.push(g);
+  }
+  const r = repoPath && cfg.evalPromptAppendByRepo?.[repoPath]?.trim();
+  if (r) {
+    extra.push(r);
+  }
+  if (extra.length === 0) {
+    return base;
+  }
+  return `${base}\n\n---\n\nAdditional instructions:\n\n${extra.join("\n\n")}`;
+}
+
+export async function evaluateComment(comment: CrComment, repoPath?: string): Promise<Evaluation> {
+  const evalPrompt = buildEvalPrompt(comment, repoPath);
+  const cfg = loadConfig();
+  const rawExtra = cfg.evalClaudeExtraArgs;
+  const extraArgs = Array.isArray(rawExtra)
+    ? rawExtra.filter((a): a is string => typeof a === "string" && a.length > 0)
+    : [];
+
   const result = await spawnTracked(
     "claude",
-    ["-p", evalPrompt, "--output-format", "json"],
+    ["-p", evalPrompt, "--output-format", "json", ...extraArgs],
     { stdio: ["pipe", "pipe", "pipe"] },
   );
 
@@ -316,7 +341,7 @@ export async function analyzeComments(
     log.info(`Evaluating: ${comment.path}:${comment.line}`);
     let evaluation: Evaluation;
     try {
-      evaluation = await evaluateComment(comment);
+      evaluation = await evaluateComment(comment, repoPath);
     } catch (err) {
       log.error(`Error evaluating comment ${comment.id}: ${(err as Error).message}`);
       markComment(state, comment.id, "pending", prNumber, repoPath);

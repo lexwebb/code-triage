@@ -7,6 +7,18 @@ export interface CommentRecord {
   repo?: string;
   timestamp: string;
   evaluation?: Evaluation;
+  /** ISO — hide thread from active triage until this instant (local only). */
+  snoozeUntil?: string | null;
+  /** Higher sorts first within the same snooze bucket (local only). */
+  priority?: number;
+  /** Local note; never sent to GitHub. */
+  triageNote?: string | null;
+}
+
+export interface CommentTriagePatch {
+  snoozeUntil?: string | null;
+  priority?: number | null;
+  triageNote?: string | null;
 }
 
 export interface FixJobRecord {

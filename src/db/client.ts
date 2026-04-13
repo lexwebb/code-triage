@@ -56,6 +56,21 @@ function ensureSchema(raw: Database.Database): void {
     );
   `);
   raw.prepare("INSERT OR IGNORE INTO meta (id, last_poll) VALUES (1, NULL)").run();
+  migrateCommentsColumns(raw);
+}
+
+function migrateCommentsColumns(raw: Database.Database): void {
+  const cols = raw.prepare("PRAGMA table_info(comments)").all() as { name: string }[];
+  const names = new Set(cols.map((c) => c.name));
+  if (!names.has("snooze_until")) {
+    raw.exec("ALTER TABLE comments ADD COLUMN snooze_until TEXT");
+  }
+  if (!names.has("priority")) {
+    raw.exec("ALTER TABLE comments ADD COLUMN priority INTEGER");
+  }
+  if (!names.has("triage_note")) {
+    raw.exec("ALTER TABLE comments ADD COLUMN triage_note TEXT");
+  }
 }
 
 export function parseCommentIdFromKey(commentKey: string): number {
@@ -79,8 +94,8 @@ export function repoFromCommentKey(commentKey: string): string | undefined {
 
 export function writeStateToDb(raw: Database.Database, state: CrWatchState): void {
   const insertComment = raw.prepare(
-    `INSERT INTO comments (comment_key, comment_id, repo, pr_number, status, timestamp, evaluation_json)
-     VALUES (@comment_key, @comment_id, @repo, @pr_number, @status, @timestamp, @evaluation_json)`,
+    `INSERT INTO comments (comment_key, comment_id, repo, pr_number, status, timestamp, evaluation_json, snooze_until, priority, triage_note)
+     VALUES (@comment_key, @comment_id, @repo, @pr_number, @status, @timestamp, @evaluation_json, @snooze_until, @priority, @triage_note)`,
   );
   const insertJob = raw.prepare(
     `INSERT INTO fix_jobs (comment_id, repo, pr_number, branch, path, worktree_path, started_at)
@@ -100,6 +115,9 @@ export function writeStateToDb(raw: Database.Database, state: CrWatchState): voi
         status: v.status,
         timestamp: v.timestamp,
         evaluation_json: v.evaluation ? JSON.stringify(v.evaluation) : null,
+        snooze_until: v.snoozeUntil ?? null,
+        priority: v.priority ?? null,
+        triage_note: v.triageNote ?? null,
       });
     }
     for (const j of state.fixJobs ?? []) {
