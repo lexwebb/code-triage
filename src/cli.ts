@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { parseArgs } from "util";
 import { loadState, saveState, isNewComment, getCommentsByStatus } from "./state.js";
-import { fetchNewComments, getRepoFromGit } from "./poller.js";
+import { fetchNewComments } from "./poller.js";
 import { notifyNewComments } from "./notifier.js";
 import { processComments, killAllChildren } from "./actioner.js";
 import { cleanupAllWorktrees } from "./worktree.js";
@@ -14,12 +14,14 @@ import {
   setProcessing,
   cleanup as cleanupTerminal,
 } from "./terminal.js";
-import { startServer } from "./server.js";
+import { startServer, updateRepos } from "./server.js";
+import { discoverRepos, type RepoInfo } from "./discovery.js";
 
 const { values: flags } = parseArgs({
   options: {
     interval: { type: "string", default: "5" },
     repo: { type: "string" },
+    root: { type: "string", default: "~/src" },
     cleanup: { type: "boolean", default: false },
     "dry-run": { type: "boolean", default: false },
     status: { type: "boolean", default: false },
@@ -55,15 +57,30 @@ if (flags.status) {
 }
 
 const intervalMs = parseInt(flags.interval!, 10) * 60 * 1000;
-const repoPath = flags.repo || getRepoFromGit();
 const dryRun = flags["dry-run"]!;
 
+// Resolve repos: single repo mode or multi-repo discovery
+let repos: RepoInfo[];
+if (flags.repo) {
+  repos = [{ repo: flags.repo, localPath: "" }];
+} else {
+  console.log(`Discovering repos in ${flags.root}...`);
+  repos = discoverRepos(flags.root!);
+  if (repos.length === 0) {
+    console.error("No GitHub repos found. Use --root to specify a different directory, or --repo for a single repo.");
+    process.exit(1);
+  }
+}
+
 console.log(`cr-watch started`);
-console.log(`  Repo: ${repoPath}`);
+console.log(`  Repos: ${repos.length}`);
+for (const r of repos) {
+  console.log(`    ${r.repo}`);
+}
 console.log(`  Interval: ${flags.interval}m`);
 console.log(`  Dry run: ${dryRun}\n`);
 
-startServer(parseInt(flags.port!, 10), repoPath);
+startServer(parseInt(flags.port!, 10), repos);
 
 let running = false;
 let shuttingDown = false;
@@ -88,24 +105,28 @@ async function poll(): Promise<void> {
 
   try {
     const state = loadState();
-    setStatus("Polling...");
+    setStatus(`Polling ${repos.length} repo(s)...`);
 
-    const { comments, pullsByNumber } = await fetchNewComments(repoPath, (id) =>
-      isNewComment(state, id),
-    );
+    for (const repoInfo of repos) {
+      try {
+        const { comments, pullsByNumber } = await fetchNewComments(repoInfo.repo, (id) =>
+          isNewComment(state, id, repoInfo.repo),
+        );
+
+        if (comments.length > 0) {
+          notifyNewComments(comments, pullsByNumber);
+          await processComments(comments, pullsByNumber, state, repoInfo.repo, dryRun);
+        }
+      } catch (err) {
+        console.error(`\n  Error polling ${repoInfo.repo}: ${(err as Error).message}`);
+      }
+    }
 
     state.lastPoll = new Date().toISOString();
     saveState(state);
 
-    if (comments.length === 0) {
-      const now = new Date().toLocaleTimeString();
-      setStatus(`[${now}] No new comments.`);
-    } else {
-      notifyNewComments(comments, pullsByNumber);
-      await processComments(comments, pullsByNumber, state, repoPath, dryRun);
-      const now = new Date().toLocaleTimeString();
-      setStatus(`[${now}] Done processing ${comments.length} comment(s).`);
-    }
+    const now = new Date().toLocaleTimeString();
+    setStatus(`[${now}] Polled ${repos.length} repo(s).`);
   } catch (err) {
     console.error(`\nPoll error: ${(err as Error).message}`);
     setStatus(`Error: ${(err as Error).message}`);
@@ -122,29 +143,45 @@ async function listPRs(): Promise<void> {
   setProcessing(true);
 
   try {
-    const { comments, pullsByNumber } = await fetchNewComments(repoPath, (id) =>
-      isNewComment(loadState(), id),
-    );
+    for (const repoInfo of repos) {
+      const state = loadState();
+      const { comments, pullsByNumber } = await fetchNewComments(repoInfo.repo, (id) =>
+        isNewComment(state, id, repoInfo.repo),
+      );
 
-    const prNumbers = Object.keys(pullsByNumber);
-    if (prNumbers.length === 0) {
-      console.log("\n  No open PRs found.\n");
-    } else {
-      console.log(`\n  Open PRs (${prNumbers.length}):`);
+      const prNumbers = Object.keys(pullsByNumber);
+      if (prNumbers.length === 0) continue;
+
+      console.log(`\n  ${repoInfo.repo} (${prNumbers.length} PRs):`);
       for (const prNum of prNumbers) {
         const pr = pullsByNumber[Number(prNum)];
         const prComments = comments.filter((c) => c.prNumber === Number(prNum));
         const commentStr = prComments.length > 0 ? ` — ${prComments.length} new comment(s)` : "";
         console.log(`    PR #${prNum}: ${pr.title} (${pr.branch})${commentStr}`);
       }
-      console.log("");
     }
+    console.log("");
   } catch (err) {
     console.error(`\n  Error fetching PRs: ${(err as Error).message}\n`);
   }
 
   running = false;
   setProcessing(false);
+}
+
+function rediscover(): void {
+  if (flags.repo) {
+    console.log("\n  Single-repo mode, skipping discovery.\n");
+    return;
+  }
+  console.log("\n  Re-discovering repos...");
+  repos = discoverRepos(flags.root!);
+  console.log(`  Found ${repos.length} repo(s).`);
+  for (const r of repos) {
+    console.log(`    ${r.repo}`);
+  }
+  console.log("");
+  updateRepos(repos);
 }
 
 function clearState(): void {
@@ -179,6 +216,7 @@ process.on("SIGTERM", shutdown);
 // Register hotkeys
 registerHotkeys([
   { key: "r", label: "Refresh", handler: () => { poll(); } },
+  { key: "d", label: "Discover", handler: rediscover },
   { key: "c", label: "Clear state", handler: clearState },
   { key: "s", label: "Status", handler: () => { printStatus(); } },
   { key: "p", label: "List PRs", handler: () => { listPRs(); } },

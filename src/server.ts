@@ -55,8 +55,8 @@ function serveStatic(res: ServerResponse, filePath: string): boolean {
   return true;
 }
 
-export function startServer(port: number, repo: string): void {
-  registerRoutes(repo);
+export function startServer(port: number, repos: Array<{ repo: string }>): void {
+  registerRoutes(repos[0]?.repo ?? "");
   const webDist = join(__dirname, "..", "web", "dist");
 
   const server = createServer(async (req, res) => {
@@ -109,5 +109,7 @@ export function startServer(port: number, repo: string): void {
     console.log(`  WebUI: http://localhost:${port}\n`);
   });
 }
+
+export function updateRepos(_repos: unknown): void { /* updated in Task 4 */ }
 
 export { addRoute, json };
