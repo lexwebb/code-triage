@@ -8,17 +8,27 @@
   },
   "scripts": {
     "build": "tsc",
-    "build:web": "cd web && npm run build",
-    "build:all": "npm run build && npm run build:web",
+    "build:web": "cd web && yarn build",
+    "build:all": "yarn build && yarn build:web",
     "dev": "tsc --watch",
-    "dev:web": "cd web && npm run dev",
+    "dev:web": "cd web && yarn dev",
     "start": "node dist/cli.js",
     "typecheck": "tsc --noEmit"
   },
-  "keywords": ["coderabbit", "claude", "code-review", "github"],
+  "keywords": [
+    "coderabbit",
+    "claude",
+    "code-review",
+    "github"
+  ],
   "license": "MIT",
+  "dependencies": {
+    "ink": "^7.0.0",
+    "react": "^19.2.5"
+  },
   "devDependencies": {
     "@types/node": "^22.0.0",
+    "@types/react": "^19.2.14",
     "typescript": "^5.8.0"
   }
 }
