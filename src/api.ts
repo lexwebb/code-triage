@@ -1,5 +1,5 @@
 import { execFileSync } from "child_process";
-import { addRoute, json, getRepos, getBody } from "./server.js";
+import { addRoute, json, getRepos, getBody, getPollState } from "./server.js";
 import { loadState, markComment, saveState } from "./state.js";
 import { postReply, resolveThread, applyFixWithClaude } from "./actioner.js";
 import { createWorktree, getDiffInWorktree, removeWorktree, commitAndPushWorktree } from "./worktree.js";
@@ -389,6 +389,11 @@ export function registerRoutes(): void {
   // GET /api/state
   addRoute("GET", "/api/state", (_req, res) => {
     json(res, loadState());
+  });
+
+  // GET /api/poll-status
+  addRoute("GET", "/api/poll-status", (_req, res) => {
+    json(res, getPollState());
   });
 
   // POST /api/actions/reply

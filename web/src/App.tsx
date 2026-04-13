@@ -15,10 +15,10 @@ interface SelectedPR {
   repo: string;
 }
 
-const REFRESH_INTERVAL = 5 * 60_000; // 5 minutes
 const CACHE_KEY_PULLS = "code-triage:pulls";
 const CACHE_KEY_REVIEW = "code-triage:reviewPulls";
-const CACHE_KEY_TIME = "code-triage:lastRefresh";
+const CACHE_KEY_TIME = "code-triage:lastFetch";
+const BACKEND_POLL_INTERVAL = 5_000; // check backend poll status every 5s
 
 function loadCache<T>(key: string): T | null {
   try {
@@ -50,8 +50,13 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [filesExpanded, setFilesExpanded] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
-  const [countdown, setCountdown] = useState(REFRESH_INTERVAL);
-  const lastRefreshRef = useRef(Number(sessionStorage.getItem(CACHE_KEY_TIME) || "0"));
+  const [countdown, setCountdown] = useState(0);
+  const [notifPermission, setNotifPermission] = useState(() =>
+    "Notification" in window ? Notification.permission : "denied"
+  );
+  const lastFetchRef = useRef(Number(sessionStorage.getItem(CACHE_KEY_TIME) || "0"));
+
+  const showNotifBanner = notifPermission === "default";
 
   // Client-side filtered PR lists
   const filteredPulls = useMemo(() => {
@@ -80,10 +85,8 @@ export default function App() {
       saveCache(CACHE_KEY_REVIEW, reviewData);
       const now = Date.now();
       sessionStorage.setItem(CACHE_KEY_TIME, String(now));
-      lastRefreshRef.current = now;
-      setCountdown(REFRESH_INTERVAL);
+      lastFetchRef.current = now;
 
-      // Auto-select first PR only if nothing selected
       if (isInitial && pullData.length > 0 && !selectedPR) {
         setSelectedPR({ number: pullData[0].number, repo: pullData[0].repo });
       }
@@ -128,18 +131,12 @@ export default function App() {
     api.getRepos().then(setRepos).catch(() => {});
   }, []);
 
-  // Initial load: use cache if fresh enough, otherwise fetch
+  // Initial load: use cache or fetch
   useEffect(() => {
     const cached = loadCache<PullRequest[]>(CACHE_KEY_PULLS);
-    const elapsed = Date.now() - lastRefreshRef.current;
-
-    if (cached && cached.length > 0 && elapsed < REFRESH_INTERVAL) {
-      // Cache is fresh — just set countdown for remaining time
+    if (cached && cached.length > 0) {
       setLoading(false);
-      setCountdown(REFRESH_INTERVAL - elapsed);
-
-      // Still auto-select if needed
-      if (cached.length > 0 && !selectedPR) {
+      if (!selectedPR) {
         setSelectedPR({ number: cached[0].number, repo: cached[0].repo });
       }
     } else {
@@ -147,18 +144,22 @@ export default function App() {
     }
   }, []);
 
-  // Auto-refresh timer
+  // Poll backend status — refresh frontend data when backend has polled since our last fetch
   useEffect(() => {
-    const interval = setInterval(() => {
-      setCountdown((prev) => {
-        const next = prev - 1000;
-        if (next <= 0) {
-          fetchPulls();
-          return REFRESH_INTERVAL;
+    const interval = setInterval(async () => {
+      try {
+        const status = await api.getPollStatus();
+        // Update countdown from backend's next poll time
+        const remaining = Math.max(0, status.nextPoll - Date.now());
+        setCountdown(remaining);
+        setRefreshing(status.polling);
+
+        // If backend has polled since our last fetch, refresh data
+        if (status.lastPoll > lastFetchRef.current) {
+          await fetchPulls();
         }
-        return next;
-      });
-    }, 1000);
+      } catch { /* backend not reachable */ }
+    }, BACKEND_POLL_INTERVAL);
     return () => clearInterval(interval);
   }, [fetchPulls]);
 
@@ -232,11 +233,6 @@ export default function App() {
   const seconds = Math.floor((countdown % 60000) / 1000);
   const timerText = `${minutes}:${seconds.toString().padStart(2, "0")}`;
 
-  const [notifPermission, setNotifPermission] = useState(() =>
-    "Notification" in window ? Notification.permission : "denied"
-  );
-  const showNotifBanner = notifPermission === "default";
-
   return (
     <div className="h-screen flex flex-col bg-gray-950 text-gray-200">
       {/* Notification permission banner */}
@@ -257,124 +253,117 @@ export default function App() {
         </div>
       )}
       <div className="flex-1 flex overflow-hidden">
-      {/* Sidebar */}
-      <div className="w-72 border-r border-gray-800 flex flex-col shrink-0">
-        <div className="px-4 py-2 border-b border-gray-800 flex items-center justify-between">
-          <h1 className="text-sm font-semibold text-white">Code Triage</h1>
-          <div className="flex items-center gap-2">
-            <span className="text-xs text-gray-600 font-mono">{timerText}</span>
-            {"Notification" in window && Notification.permission === "default" && (
+        {/* Sidebar */}
+        <div className="w-72 border-r border-gray-800 flex flex-col shrink-0">
+          <div className="px-4 py-2 border-b border-gray-800 flex items-center justify-between">
+            <h1 className="text-sm font-semibold text-white">Code Triage</h1>
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-gray-600 font-mono" title="Time until next backend poll">
+                {timerText}
+              </span>
               <button
-                onClick={requestNotificationPermission}
-                className="text-xs text-gray-500 hover:text-gray-300 transition-colors"
-                title="Enable notifications"
+                onClick={() => fetchPulls()}
+                disabled={refreshing}
+                className="text-xs text-gray-500 hover:text-gray-300 disabled:text-gray-700 transition-colors"
+                title="Refresh now"
               >
-                🔔
-              </button>
-            )}
-            <button
-              onClick={() => fetchPulls()}
-              disabled={refreshing}
-              className="text-xs text-gray-500 hover:text-gray-300 disabled:text-gray-700 transition-colors"
-              title="Refresh now"
-            >
-              {refreshing ? "↻" : "⟳"}
-            </button>
-          </div>
-        </div>
-        <RepoFilter
-          filter={repoFilter}
-          onFilterChange={setRepoFilter}
-        />
-        <div className="overflow-y-auto flex-1">
-          <div className="px-4 py-1.5 text-xs text-gray-500 uppercase tracking-wide border-b border-gray-800">
-            My Pull Requests
-          </div>
-          <PRList
-            pulls={filteredPulls}
-            selectedPR={selectedPR}
-            onSelectPR={handleSelectPR}
-            showRepo
-          />
-          {filteredReviewPulls.length > 0 && (
-            <>
-              <div className="px-4 py-1.5 text-xs text-gray-500 uppercase tracking-wide border-y border-gray-800 bg-gray-900/30">
-                Needs My Review ({filteredReviewPulls.length})
-              </div>
-              <PRList
-                pulls={filteredReviewPulls}
-                selectedPR={selectedPR}
-                onSelectPR={handleSelectPR}
-                showRepo
-              />
-            </>
-          )}
-        </div>
-      </div>
-
-      {/* Main area */}
-      <div className="flex-1 flex flex-col overflow-hidden">
-        {loadingPR ? (
-          <div className="flex-1 flex items-center justify-center text-gray-500">
-            Loading...
-          </div>
-        ) : prDetail ? (
-          <>
-            <PRDetail pr={prDetail} onReviewSubmitted={async () => {
-              if (!selectedPR) return;
-              try {
-                const detail = await api.getPull(selectedPR.number, selectedPR.repo);
-                setPrDetail(detail);
-              } catch {}
-            }} />
-            <CommentThreads
-              comments={prComments}
-              onSelectFile={(f) => { setFilesExpanded(true); setSelectedFile(f); }}
-              repo={selectedPR!.repo}
-              prNumber={selectedPR!.number}
-              branch={prDetail.branch}
-              onCommentAction={reloadComments}
-            />
-            {/* Collapsible files section */}
-            <div className="border-t border-gray-800 shrink-0">
-              <button
-                onClick={() => setFilesExpanded(!filesExpanded)}
-                className="w-full px-6 py-2 flex items-center justify-between text-xs text-gray-500 uppercase tracking-wide hover:bg-gray-800/30"
-              >
-                <span>Files Changed ({prFiles.length})</span>
-                <span className="text-gray-600">{filesExpanded ? "▼" : "▶"}</span>
+                {refreshing ? "↻" : "⟳"}
               </button>
             </div>
-            {filesExpanded && (
+          </div>
+          <RepoFilter
+            filter={repoFilter}
+            onFilterChange={setRepoFilter}
+          />
+          <div className="overflow-y-auto flex-1">
+            <div className="px-4 py-1.5 text-xs text-gray-500 uppercase tracking-wide border-b border-gray-800">
+              My Pull Requests
+            </div>
+            <PRList
+              pulls={filteredPulls}
+              selectedPR={selectedPR}
+              onSelectPR={handleSelectPR}
+              showRepo
+            />
+            {filteredReviewPulls.length > 0 && (
               <>
-                <FileList
-                  files={prFiles}
-                  selectedFile={selectedFile}
-                  onSelectFile={setSelectedFile}
-                  comments={prComments}
-                />
-                <div className="flex-1 overflow-y-auto">
-                  {selectedFile ? (
-                    (() => {
-                      const file = prFiles.find((f) => f.filename === selectedFile);
-                      const fileComments = prComments.filter((c) => c.path === selectedFile);
-                      return file ? (
-                        <DiffView patch={file.patch} filename={file.filename} comments={fileComments} />
-                      ) : null;
-                    })()
-                  ) : (
-                    <div className="text-gray-500 text-center mt-12">Select a file to view its diff</div>
-                  )}
+                <div className="px-4 py-1.5 text-xs text-gray-500 uppercase tracking-wide border-y border-gray-800 bg-gray-900/30">
+                  Needs My Review ({filteredReviewPulls.length})
                 </div>
+                <PRList
+                  pulls={filteredReviewPulls}
+                  selectedPR={selectedPR}
+                  onSelectPR={handleSelectPR}
+                  showRepo
+                />
               </>
             )}
-          </>
-        ) : (
-          <div className="flex-1 flex items-center justify-center text-gray-500">
-            Select a pull request
           </div>
-        )}
-      </div>
+        </div>
+
+        {/* Main area */}
+        <div className="flex-1 flex flex-col overflow-hidden">
+          {loadingPR ? (
+            <div className="flex-1 flex items-center justify-center text-gray-500">
+              Loading...
+            </div>
+          ) : prDetail ? (
+            <>
+              <PRDetail pr={prDetail} onReviewSubmitted={async () => {
+                if (!selectedPR) return;
+                try {
+                  const detail = await api.getPull(selectedPR.number, selectedPR.repo);
+                  setPrDetail(detail);
+                } catch {}
+              }} />
+              <CommentThreads
+                comments={prComments}
+                onSelectFile={(f) => { setFilesExpanded(true); setSelectedFile(f); }}
+                repo={selectedPR!.repo}
+                prNumber={selectedPR!.number}
+                branch={prDetail.branch}
+                onCommentAction={reloadComments}
+              />
+              {/* Collapsible files section */}
+              <div className="border-t border-gray-800 shrink-0">
+                <button
+                  onClick={() => setFilesExpanded(!filesExpanded)}
+                  className="w-full px-6 py-2 flex items-center justify-between text-xs text-gray-500 uppercase tracking-wide hover:bg-gray-800/30"
+                >
+                  <span>Files Changed ({prFiles.length})</span>
+                  <span className="text-gray-600">{filesExpanded ? "▼" : "▶"}</span>
+                </button>
+              </div>
+              {filesExpanded && (
+                <>
+                  <FileList
+                    files={prFiles}
+                    selectedFile={selectedFile}
+                    onSelectFile={setSelectedFile}
+                    comments={prComments}
+                  />
+                  <div className="flex-1 overflow-y-auto">
+                    {selectedFile ? (
+                      (() => {
+                        const file = prFiles.find((f) => f.filename === selectedFile);
+                        const fileComments = prComments.filter((c) => c.path === selectedFile);
+                        return file ? (
+                          <DiffView patch={file.patch} filename={file.filename} comments={fileComments} />
+                        ) : null;
+                      })()
+                    ) : (
+                      <div className="text-gray-500 text-center mt-12">Select a file to view its diff</div>
+                    )}
+                  </div>
+                </>
+              )}
+            </>
+          ) : (
+            <div className="flex-1 flex items-center justify-center text-gray-500">
+              Select a pull request
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );

@@ -14,7 +14,7 @@ import {
   setProcessing,
   cleanup as cleanupTerminal,
 } from "./terminal.js";
-import { startServer, updateRepos } from "./server.js";
+import { startServer, updateRepos, updatePollState } from "./server.js";
 import { discoverRepos, type RepoInfo } from "./discovery.js";
 
 const { values: flags } = parseArgs({
@@ -89,6 +89,8 @@ let pollTimer: ReturnType<typeof setTimeout> | null = null;
 function schedulePoll(): void {
   if (pollTimer) clearTimeout(pollTimer);
   setNextPollTime(intervalMs);
+  const nextPoll = Date.now() + intervalMs;
+  updatePollState({ nextPoll, intervalMs });
   pollTimer = setTimeout(poll, intervalMs);
 }
 
@@ -96,6 +98,7 @@ async function poll(): Promise<void> {
   if (running || shuttingDown) return;
   running = true;
   setProcessing(true);
+  updatePollState({ polling: true });
 
   if (pollTimer) {
     clearTimeout(pollTimer);
@@ -127,9 +130,11 @@ async function poll(): Promise<void> {
 
     const now = new Date().toLocaleTimeString();
     setStatus(`[${now}] Analyzed ${repos.length} repo(s).`);
+    updatePollState({ lastPoll: Date.now(), polling: false });
   } catch (err) {
     console.error(`\nPoll error: ${(err as Error).message}`);
     setStatus(`Error: ${(err as Error).message}`);
+    updatePollState({ polling: false });
   }
 
   running = false;

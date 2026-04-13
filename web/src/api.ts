@@ -40,6 +40,7 @@ export const api = {
   getPullComments: (number: number, repo: string) => fetchJSON<ReviewComment[]>(`/api/pulls/${number}/comments${repoQueryRequired(repo)}`),
   getFileContent: (prNumber: number, path: string, repo: string) => fetchJSON<{ content: string; path: string }>(`/api/pulls/${prNumber}/files/${path}${repoQueryRequired(repo)}`),
   getState: () => fetchJSON<CrWatchState>("/api/state"),
+  getPollStatus: () => fetchJSON<{ lastPoll: number; nextPoll: number; intervalMs: number; polling: boolean }>("/api/poll-status"),
   replyToComment: (repo: string, commentId: number, prNumber: number) =>
     postJSON<{ success: boolean }>("/api/actions/reply", { repo, commentId, prNumber }),
   resolveComment: (repo: string, commentId: number, prNumber: number) =>

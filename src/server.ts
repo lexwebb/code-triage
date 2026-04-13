@@ -66,6 +66,16 @@ export function getRepos(): RepoInfo[] {
   return currentRepos;
 }
 
+let pollState = { lastPoll: 0, nextPoll: 0, intervalMs: 0, polling: false };
+
+export function updatePollState(state: { lastPoll?: number; nextPoll?: number; intervalMs?: number; polling?: boolean }): void {
+  Object.assign(pollState, state);
+}
+
+export function getPollState() {
+  return pollState;
+}
+
 function readBody(req: IncomingMessage): Promise<string> {
   return new Promise((resolve, reject) => {
     let data = "";
