@@ -19,6 +19,8 @@ export interface Config {
   /** Drop replied/dismissed/fixed comment rows older than this many days after each successful poll (0 = disabled). */
   commentRetentionDays?: number;
   ignoredBots?: string[]; // additional bot logins to ignore during polling
+  /** Optional default PAT if env and `gh auth token` are not used. */
+  githubToken?: string;
   accounts?: Array<{ name: string; token: string; orgs: string[] }>; // multi-account support
   /** Appended to the Claude PR-comment evaluation prompt (all repos). */
   evalPromptAppend?: string;

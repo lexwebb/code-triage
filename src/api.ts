@@ -1,6 +1,7 @@
-import { addRoute, json, getRepos, getBody, getPollState, getHealthPayload, setFixJobStatus, clearFixJobStatus, getActiveFixForBranch, getActiveFixForPR, subscribeSse } from "./server.js";
+import { addRoute, json, getRepos, getBody, getPollState, getHealthPayload, setFixJobStatus, clearFixJobStatus, getActiveFixForBranch, getActiveFixForPR, subscribeSse, getListenPort, notifyConfigSaved } from "./server.js";
+import { loadConfig, saveConfig, configExists, type Config } from "./config.js";
 import { loadState, markComment, markCommentWithEvaluation, patchCommentTriage, saveState, addFixJob as addFixJobState, removeFixJob as removeFixJobState, getFixJobs } from "./state.js";
-import { postReply, resolveThread, applyFixWithClaude, evaluateComment } from "./actioner.js";
+import { postReply, resolveThread, applyFixWithClaude, evaluateComment, clampEvalConcurrency } from "./actioner.js";
 import { createWorktree, getWorktreePath, getDiffInWorktree, removeWorktree, commitAndPushWorktree } from "./worktree.js";
 import { ghAsync, ghGraphQL, ghPost } from "./exec.js";
 
@@ -51,6 +52,162 @@ async function getResolvedCommentIds(repoPath: string, prNumber: number): Promis
 async function getUsername(): Promise<string> {
   const user = await ghAsync<{ login: string }>("/user");
   return user.login;
+}
+
+function toInt(v: unknown, fallback: number): number {
+  if (typeof v === "number" && Number.isFinite(v)) return Math.floor(v);
+  if (typeof v === "string" && v.trim() !== "") return parseInt(v, 10);
+  return fallback;
+}
+
+/** Safe JSON shape for the web settings form (no account tokens). */
+function serializeConfigForClient(c: Config): Record<string, unknown> {
+  return {
+    root: c.root,
+    port: c.port,
+    interval: c.interval,
+    evalConcurrency: c.evalConcurrency ?? 2,
+    pollReviewRequested: c.pollReviewRequested ?? false,
+    commentRetentionDays: c.commentRetentionDays ?? 0,
+    ignoredBots: c.ignoredBots ?? [],
+    accounts: (c.accounts ?? []).map((a) => ({
+      name: a.name,
+      orgs: a.orgs,
+      hasToken: Boolean(a.token?.length),
+    })),
+    hasGithubToken: Boolean(c.githubToken?.length),
+    evalPromptAppend: c.evalPromptAppend ?? "",
+    evalPromptAppendByRepo: c.evalPromptAppendByRepo ?? {},
+    evalClaudeExtraArgs: c.evalClaudeExtraArgs ?? [],
+  };
+}
+
+function mergeConfigFromBody(body: Record<string, unknown>, previous: Config): Config {
+  const root = typeof body.root === "string" ? body.root.trim() : previous.root;
+  if (!root) throw new Error("root is required");
+
+  const port = toInt(body.port, previous.port);
+  if (!Number.isFinite(port) || port < 1 || port > 65535) throw new Error("port must be 1–65535");
+
+  const interval = toInt(body.interval, previous.interval);
+  if (!Number.isFinite(interval) || interval < 1) throw new Error("interval must be at least 1 (minutes)");
+
+  const evalConcurrency = clampEvalConcurrency(
+    body.evalConcurrency !== undefined && body.evalConcurrency !== null && body.evalConcurrency !== ""
+      ? toInt(body.evalConcurrency, previous.evalConcurrency ?? 2)
+      : (previous.evalConcurrency ?? 2),
+  );
+
+  const pollReviewRequested =
+    typeof body.pollReviewRequested === "boolean"
+      ? body.pollReviewRequested
+      : (previous.pollReviewRequested ?? false);
+
+  let commentRetentionDays: number;
+  if (body.commentRetentionDays !== undefined && body.commentRetentionDays !== null && body.commentRetentionDays !== "") {
+    commentRetentionDays = Math.max(0, toInt(body.commentRetentionDays, 0));
+  } else {
+    commentRetentionDays = previous.commentRetentionDays ?? 0;
+  }
+
+  let ignoredBots: string[] | undefined;
+  if (body.ignoredBots === undefined) {
+    ignoredBots = previous.ignoredBots;
+  } else if (Array.isArray(body.ignoredBots)) {
+    ignoredBots = body.ignoredBots.filter((x): x is string => typeof x === "string").map((s) => s.trim()).filter(Boolean);
+  } else {
+    throw new Error("ignoredBots must be an array of strings");
+  }
+
+  let githubToken: string | undefined;
+  if (body.githubToken === undefined) {
+    githubToken = previous.githubToken;
+  } else if (typeof body.githubToken === "string") {
+    const t = body.githubToken.trim();
+    githubToken = t || undefined;
+  } else {
+    throw new Error("githubToken must be a string");
+  }
+
+  let accounts: Config["accounts"];
+  if (body.accounts === undefined) {
+    accounts = previous.accounts;
+  } else if (!Array.isArray(body.accounts)) {
+    throw new Error("accounts must be an array");
+  } else if (body.accounts.length === 0) {
+    accounts = undefined;
+  } else {
+    accounts = body.accounts.map((row, i) => {
+      if (!row || typeof row !== "object") throw new Error(`accounts[${i}] invalid`);
+      const r = row as Record<string, unknown>;
+      const name = typeof r.name === "string" ? r.name.trim() : "";
+      if (!name) throw new Error(`accounts[${i}]: name required`);
+      let orgs: string[];
+      if (Array.isArray(r.orgs)) {
+        orgs = r.orgs.filter((x): x is string => typeof x === "string").map((o) => o.trim()).filter(Boolean);
+      } else if (typeof r.orgs === "string") {
+        orgs = r.orgs.split(",").map((o) => o.trim()).filter(Boolean);
+      } else {
+        orgs = [];
+      }
+      const tokenIn = typeof r.token === "string" ? r.token.trim() : "";
+      const prevAcc = previous.accounts?.find((a) => a.name === name);
+      const token = tokenIn || prevAcc?.token || "";
+      if (!token) throw new Error(`Account "${name}": personal access token required`);
+      return { name, orgs, token };
+    });
+  }
+
+  let evalPromptAppend: string | undefined;
+  if (body.evalPromptAppend === undefined) {
+    evalPromptAppend = previous.evalPromptAppend;
+  } else if (body.evalPromptAppend === null || body.evalPromptAppend === "") {
+    evalPromptAppend = undefined;
+  } else if (typeof body.evalPromptAppend === "string") {
+    evalPromptAppend = body.evalPromptAppend;
+  } else {
+    throw new Error("evalPromptAppend must be a string");
+  }
+
+  let evalPromptAppendByRepo: Record<string, string> | undefined;
+  if (body.evalPromptAppendByRepo === undefined) {
+    evalPromptAppendByRepo = previous.evalPromptAppendByRepo;
+  } else if (body.evalPromptAppendByRepo === null) {
+    evalPromptAppendByRepo = undefined;
+  } else if (typeof body.evalPromptAppendByRepo === "object" && !Array.isArray(body.evalPromptAppendByRepo)) {
+    const o: Record<string, string> = {};
+    for (const [k, v] of Object.entries(body.evalPromptAppendByRepo)) {
+      if (typeof v === "string" && v.trim()) o[k] = v;
+    }
+    evalPromptAppendByRepo = Object.keys(o).length ? o : undefined;
+  } else {
+    throw new Error("evalPromptAppendByRepo must be an object");
+  }
+
+  let evalClaudeExtraArgs: string[] | undefined;
+  if (body.evalClaudeExtraArgs === undefined) {
+    evalClaudeExtraArgs = previous.evalClaudeExtraArgs;
+  } else if (Array.isArray(body.evalClaudeExtraArgs)) {
+    const xs = body.evalClaudeExtraArgs.filter((x): x is string => typeof x === "string");
+    evalClaudeExtraArgs = xs.length ? xs : undefined;
+  } else {
+    throw new Error("evalClaudeExtraArgs must be an array of strings");
+  }
+
+  return {
+    root,
+    port,
+    interval,
+    evalConcurrency,
+    pollReviewRequested,
+    commentRetentionDays: commentRetentionDays > 0 ? commentRetentionDays : undefined,
+    ignoredBots: ignoredBots?.length ? ignoredBots : undefined,
+    githubToken,
+    accounts,
+    evalPromptAppend,
+    evalPromptAppendByRepo,
+    evalClaudeExtraArgs,
+  };
 }
 
 function requireRepo(query: URLSearchParams): string {
@@ -116,6 +273,27 @@ async function hasHumanApproval(repoPath: string, prNumber: number): Promise<boo
 }
 
 export function registerRoutes(): void {
+
+  // GET /api/config — settings for web UI (tokens omitted)
+  addRoute("GET", "/api/config", (_req, res) => {
+    const c = loadConfig();
+    json(res, {
+      config: serializeConfigForClient(c),
+      needsSetup: !configExists(),
+      listenPort: getListenPort(),
+    });
+  });
+
+  // POST /api/config — save ~/.code-triage/config.json and reload in-process state
+  addRoute("POST", "/api/config", async (req, res) => {
+    const body = getBody<Record<string, unknown>>(req);
+    const previous = loadConfig();
+    const next = mergeConfigFromBody(body, previous);
+    saveConfig(next);
+    notifyConfigSaved();
+    const restartRequired = next.port !== getListenPort();
+    json(res, { ok: true, restartRequired });
+  });
 
   // GET /api/events — Server-Sent Events (poll + fix-job broadcasts)
   addRoute("GET", "/api/events", (req, res) => {

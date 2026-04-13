@@ -14,7 +14,12 @@ describe("ghAsync", () => {
   it("returns a single object for non-array JSON", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockResolvedValue(new Response(JSON.stringify({ login: "u" }), { status: 200 })),
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ login: "u" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      ),
     );
     const out = await ghAsync<{ login: string }>("/user");
     expect(out).toEqual({ login: "u" });
@@ -41,7 +46,12 @@ describe("ghAsync", () => {
         })
         .mockImplementationOnce((url: string) => {
           expect(url).toBe(nextUrl);
-          return Promise.resolve(new Response(JSON.stringify([{ id: 2 }]), { status: 200 }));
+          return Promise.resolve(
+            new Response(JSON.stringify([{ id: 2 }]), {
+              status: 200,
+              headers: { "Content-Type": "application/json" },
+            }),
+          );
         }),
     );
     const out = await ghAsync<Array<{ id: number }>>("/repos/o/r/issues");

@@ -1,5 +1,6 @@
 import { useEffect, useState, useMemo, useCallback, useRef } from "react";
 import { api } from "./api";
+import type { ConfigGetResponse } from "./api";
 import type { PullRequest, PullRequestDetail, PullFile, ReviewComment, RepoInfo } from "./types";
 import { parseRoute, pushRoute, type RouteState } from "./router";
 import RepoFilter from "./components/RepoSelector";
@@ -11,7 +12,8 @@ import CommentThreads from "./components/CommentThreads";
 import PROverview from "./components/PROverview";
 import { useNotifications, requestNotificationPermission, isPRMuted } from "./useNotifications";
 import FixJobsBanner from "./components/FixJobsBanner";
-import type { FixJobStatus } from "./api";
+import SettingsView from "./components/SettingsView";
+import type { FixJobStatus, PollStatus } from "./api";
 
 interface SelectedPR {
   number: number;
@@ -50,7 +52,6 @@ function MutedReviewSection({ pulls, selectedPR, onSelectPR }: {
 const CACHE_KEY_PULLS = "code-triage:pulls";
 const CACHE_KEY_REVIEW = "code-triage:reviewPulls";
 const CACHE_KEY_TIME = "code-triage:lastFetch";
-const BACKEND_POLL_INTERVAL = 5_000; // check backend poll status every 5s
 
 function loadCache<T>(key: string): T | null {
   try {
@@ -84,12 +85,33 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<"overview" | "threads" | "files">("threads");
   const [fixJobs, setFixJobs] = useState<FixJobStatus[]>([]);
   const [refreshing, setRefreshing] = useState(false);
+  const [nextPollDeadline, setNextPollDeadline] = useState(0);
   const [countdown, setCountdown] = useState(0);
+  const [pullFetchGeneration, setPullFetchGeneration] = useState(0);
   const [notifPermission, setNotifPermission] = useState(() =>
     "Notification" in window ? Notification.permission : "denied"
   );
   const [updateAvailable, setUpdateAvailable] = useState<{ behind: number; localSha: string; remoteSha: string } | null>(null);
   const lastFetchRef = useRef(Number(sessionStorage.getItem(CACHE_KEY_TIME) || "0"));
+
+  const [appGate, setAppGate] = useState<"loading" | "setup" | "ready">("loading");
+  const [setupConfig, setSetupConfig] = useState<ConfigGetResponse | null>(null);
+  const [showSettings, setShowSettings] = useState(false);
+  const [settingsModal, setSettingsModal] = useState<ConfigGetResponse | null>(null);
+
+  // First-run: use web settings instead of CLI prompts when ~/.code-triage/config.json is missing
+  useEffect(() => {
+    api
+      .getConfig()
+      .then((r) => {
+        setSetupConfig(r);
+        setAppGate(r.needsSetup ? "setup" : "ready");
+      })
+      .catch((err) => {
+        setError((err as Error).message);
+        setAppGate("ready");
+      });
+  }, []);
 
   // Check for updates on mount
   useEffect(() => {
@@ -152,6 +174,7 @@ export default function App() {
       const now = Date.now();
       sessionStorage.setItem(CACHE_KEY_TIME, String(now));
       lastFetchRef.current = now;
+      setPullFetchGeneration((g) => g + 1);
 
       if (isInitial && pullData.length > 0 && !selectedPR) {
         setSelectedPR({ number: pullData[0].number, repo: pullData[0].repo });
@@ -192,17 +215,20 @@ export default function App() {
     return () => window.removeEventListener("popstate", onPopState);
   }, []);
 
-  // Load repos and user on mount
+  // Load repos and user when the main app is active
   useEffect(() => {
+    if (appGate !== "ready") return;
     api.getRepos().then(setRepos).catch(() => {});
     api.getUser().then((u) => setCurrentUser(u.login)).catch(() => {});
-  }, []);
+  }, [appGate]);
 
-  // Initial load: use cache or fetch — runs once on mount only
+  // Initial load: use cache or fetch when the main app is active
   useEffect(() => {
+    if (appGate !== "ready") return;
     const cached = loadCache<PullRequest[]>(CACHE_KEY_PULLS);
     if (cached && cached.length > 0) {
       setLoading(false);
+      setPullFetchGeneration((g) => Math.max(g, 1));
       if (!selectedPR) {
         setSelectedPR({ number: cached[0].number, repo: cached[0].repo });
       }
@@ -210,88 +236,83 @@ export default function App() {
       fetchPulls(true);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [appGate]);
 
   // Track previous fix job states for notifications
   const prevFixJobsRef = useRef<Map<number, string>>(new Map());
 
-  // Poll backend status — wait for each request to finish before scheduling the next
-  useEffect(() => {
-    let cancelled = false;
-    let timer: ReturnType<typeof setTimeout>;
+  const applyPollStatus = useCallback((status: PollStatus) => {
+    setNextPollDeadline(status.nextPoll);
+    setRefreshing(status.polling);
+    setFixJobs(status.fixJobs);
 
-    async function check() {
-      try {
-        const status = await api.getPollStatus();
-        if (cancelled) return;
-        const remaining = Math.max(0, status.nextPoll - Date.now());
-        setCountdown(remaining);
-        setRefreshing(status.polling);
-        setFixJobs(status.fixJobs);
-
-        // Notify on fix job state changes
-        for (const job of status.fixJobs) {
-          const prev = prevFixJobsRef.current.get(job.commentId);
-          if (prev === "running" && job.status === "completed") {
-            const repoShort = job.repo.split("/")[1] ?? job.repo;
-            if ("Notification" in window && Notification.permission === "granted") {
-              new Notification(`Fix ready: ${repoShort}#${job.prNumber}`, {
-                body: `${job.path} — review and apply the changes`,
-              });
-            }
-          } else if (prev === "running" && job.status === "failed") {
-            const repoShort = job.repo.split("/")[1] ?? job.repo;
-            if ("Notification" in window && Notification.permission === "granted") {
-              new Notification(`Fix failed: ${repoShort}#${job.prNumber}`, {
-                body: `${job.path} — ${job.error ?? "unknown error"}`,
-              });
-            }
-          }
-        }
-        prevFixJobsRef.current = new Map(status.fixJobs.map((j) => [j.commentId, j.status]));
-
-        // Test notification from CLI hotkey
-        if (status.testNotification && "Notification" in window && Notification.permission === "granted") {
-          new Notification("Code Triage — Test Notification", {
-            body: "Notifications are working!",
-            icon: "/logo.png",
+    for (const job of status.fixJobs) {
+      const prev = prevFixJobsRef.current.get(job.commentId);
+      if (prev === "running" && job.status === "completed") {
+        const repoShort = job.repo.split("/")[1] ?? job.repo;
+        if ("Notification" in window && Notification.permission === "granted") {
+          new Notification(`Fix ready: ${repoShort}#${job.prNumber}`, {
+            body: `${job.path} — review and apply the changes`,
           });
         }
-
-        if (status.lastPoll > lastFetchRef.current) {
-          await fetchPulls();
+      } else if (prev === "running" && job.status === "failed") {
+        const repoShort = job.repo.split("/")[1] ?? job.repo;
+        if ("Notification" in window && Notification.permission === "granted") {
+          new Notification(`Fix failed: ${repoShort}#${job.prNumber}`, {
+            body: `${job.path} — ${job.error ?? "unknown error"}`,
+          });
         }
-      } catch { /* backend not reachable */ }
-      if (!cancelled) {
-        timer = setTimeout(check, BACKEND_POLL_INTERVAL);
       }
     }
+    prevFixJobsRef.current = new Map(status.fixJobs.map((j) => [j.commentId, j.status]));
 
-    timer = setTimeout(check, BACKEND_POLL_INTERVAL);
-    return () => { cancelled = true; clearTimeout(timer); };
+    if (status.testNotification) {
+      if ("Notification" in window && Notification.permission === "granted") {
+        new Notification("Code Triage — Test Notification", {
+          body: "Notifications are working!",
+          icon: "/logo.png",
+        });
+      }
+      void api.getPollStatus().catch(() => {});
+    }
+
+    if (status.lastPoll > lastFetchRef.current) {
+      void fetchPulls();
+    }
   }, [fetchPulls]);
 
-  // Server-Sent Events — refresh when CLI finishes a poll or fix-job status changes
+  // One-shot snapshot before SSE connects (avoids empty timer flash)
   useEffect(() => {
+    if (appGate !== "ready") return;
+    api.getPollStatus().then(applyPollStatus).catch(() => {});
+  }, [appGate, applyPollStatus]);
+
+  // Local countdown between server poll-status pushes
+  useEffect(() => {
+    if (nextPollDeadline <= 0) return;
+    const tick = () => {
+      setCountdown(Math.max(0, nextPollDeadline - Date.now()));
+    };
+    tick();
+    const id = window.setInterval(tick, 1000);
+    return () => window.clearInterval(id);
+  }, [nextPollDeadline]);
+
+  // Server-Sent Events — poll timer, fix jobs, and refresh pulls when backend lastPoll advances
+  useEffect(() => {
+    if (appGate !== "ready") return;
     const es = new EventSource("/api/events");
-    es.addEventListener("poll", (ev) => {
+    es.addEventListener("poll-status", (ev) => {
       try {
-        const data = JSON.parse((ev as MessageEvent).data) as { ok?: boolean };
-        if (data.ok) {
-          void fetchPulls();
-        }
+        const data = JSON.parse((ev as MessageEvent).data) as { status?: PollStatus };
+        if (data.status) applyPollStatus(data.status);
       } catch { /* ignore */ }
-    });
-    es.addEventListener("fix-job", () => {
-      void api.getPollStatus().then((status) => {
-        setFixJobs(status.fixJobs);
-      }).catch(() => {});
     });
     es.onerror = () => {
       /* browser auto-reconnects; keep quiet */
     };
     return () => es.close();
-  }, [fetchPulls]);
+  }, [applyPollStatus, appGate]);
 
   // Load PR detail when selectedPR changes
   useEffect(() => {
@@ -343,7 +364,42 @@ export default function App() {
     }
   }
 
-  useNotifications(pulls, reviewPulls, handleSelectPR, reloadComments);
+  useNotifications(pulls, reviewPulls, handleSelectPR, reloadComments, pullFetchGeneration);
+
+  async function openSettingsModal(): Promise<void> {
+    try {
+      const r = await api.getConfig();
+      setSettingsModal(r);
+      setShowSettings(true);
+    } catch {
+      /* ignore */
+    }
+  }
+
+  if (appGate === "loading") {
+    return (
+      <div className="h-screen flex items-center justify-center bg-gray-950 text-gray-400">
+        Starting…
+      </div>
+    );
+  }
+
+  if (appGate === "setup" && setupConfig) {
+    return (
+      <SettingsView
+        mode="setup"
+        initial={setupConfig.config}
+        listenPort={setupConfig.listenPort}
+        onSave={async (body) => {
+          const result = await api.saveConfig(body);
+          setAppGate("ready");
+          setLoading(true);
+          setError(null);
+          return result;
+        }}
+      />
+    );
+  }
 
   if (loading) {
     return (
@@ -419,6 +475,14 @@ export default function App() {
               <span className="text-xs text-gray-600 font-mono" title="Time until next backend poll">
                 {timerText}
               </span>
+              <button
+                type="button"
+                onClick={() => void openSettingsModal()}
+                className="text-xs text-gray-500 hover:text-gray-300 transition-colors"
+                title="Settings"
+              >
+                ⚙
+              </button>
               <button
                 onClick={() => {
                   if ("Notification" in window) {
@@ -582,6 +646,35 @@ export default function App() {
         </div>
       </div>
       <FixJobsBanner fixJobs={fixJobs} onJobAction={() => { reloadComments(); }} />
+
+      {showSettings && settingsModal && (
+        <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/70 p-4">
+          <div className="my-8 w-full max-w-3xl rounded-lg border border-gray-800 bg-gray-950 shadow-xl max-h-[calc(100vh-4rem)] overflow-hidden flex flex-col">
+            <SettingsView
+              mode="settings"
+              initial={settingsModal.config}
+              listenPort={settingsModal.listenPort}
+              onCancel={() => {
+                setShowSettings(false);
+                setSettingsModal(null);
+              }}
+              onSave={async (body) => {
+                const result = await api.saveConfig(body);
+                setShowSettings(false);
+                setSettingsModal(null);
+                await fetchPulls(false);
+                try {
+                  const repos = await api.getRepos();
+                  setRepos(repos);
+                } catch {
+                  /* ignore */
+                }
+                return result;
+              }}
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 }

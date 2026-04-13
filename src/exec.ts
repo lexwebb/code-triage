@@ -1,4 +1,5 @@
 import { execFile as execFileCb, execFileSync } from "child_process";
+import { Octokit } from "@octokit/rest";
 
 // --- Process exec (still needed for claude CLI, git, etc.) ---
 
@@ -30,7 +31,7 @@ export function execAsync(cmd: string, args: string[], options: ExecOptions = {}
   });
 }
 
-// --- GitHub API via direct fetch (no gh CLI overhead) ---
+// --- GitHub API via Octokit (REST + GraphQL); custom fetch keeps 429 retry + test stubs ---
 
 const GH_API_BASE = "https://api.github.com";
 const MAX_RETRIES = 3;
@@ -45,26 +46,41 @@ export function getRateLimitState(): { limited: boolean; resetAt: number | null 
 }
 
 // tokenResolver can be overridden by multi-account support (see config.ts accounts)
-let tokenResolver: (repo?: string) => string = () => {
-  if (cachedToken) return cachedToken;
-  cachedToken = execFileSync("gh", ["auth", "token"], {
+
+/** True when `GITHUB_TOKEN` or `GH_TOKEN` is set (non-whitespace). */
+export function hasEnvGitHubToken(): boolean {
+  return Boolean(process.env.GITHUB_TOKEN?.trim() || process.env.GH_TOKEN?.trim());
+}
+
+/**
+ * Default GitHub API token: `GITHUB_TOKEN` / `GH_TOKEN`, then optional config PAT, then `gh auth token`.
+ */
+export function resolveGitHubTokenFromSources(configToken?: string): string {
+  const env = process.env.GITHUB_TOKEN?.trim() || process.env.GH_TOKEN?.trim();
+  if (env) return env;
+  if (configToken?.trim()) return configToken.trim();
+  return execFileSync("gh", ["auth", "token"], {
     encoding: "utf-8",
     timeout: 5000,
   }).trim();
+}
+
+function defaultTokenResolver(_repo?: string): string {
+  if (cachedToken) return cachedToken;
+  cachedToken = resolveGitHubTokenFromSources();
   return cachedToken;
-};
+}
+
+let tokenResolver: (repo?: string) => string = defaultTokenResolver;
 
 export function setTokenResolver(fn: (repo?: string) => string): void {
   tokenResolver = fn;
 }
 
-function ghHeaders(repo?: string): Record<string, string> {
-  return {
-    Authorization: `Bearer ${tokenResolver(repo)}`,
-    Accept: "application/vnd.github+json",
-    "X-GitHub-Api-Version": "2022-11-28",
-    "User-Agent": "code-triage",
-  };
+/** Clears cached PAT and restores default resolution (env → config via `installTokenResolverFromConfig` → `gh auth token`). */
+export function resetTokenResolver(): void {
+  cachedToken = null;
+  tokenResolver = defaultTokenResolver;
 }
 
 async function waitForRateLimit(response: Response): Promise<void> {
@@ -76,43 +92,57 @@ async function waitForRateLimit(response: Response): Promise<void> {
   rateLimitState = { limited: false, resetAt: null };
 }
 
+/**
+ * Fetch passed into Octokit — retries 429 before Octokit sees a failure, so tests can stub `fetch`.
+ */
+async function githubFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  let response!: Response;
+  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+    response = await globalThis.fetch(input, init);
+    if (response.status === 429 && attempt < MAX_RETRIES - 1) {
+      await waitForRateLimit(response);
+      continue;
+    }
+    break;
+  }
+  return response;
+}
+
+function createOctokit(repo?: string): Octokit {
+  return new Octokit({
+    auth: tokenResolver(repo),
+    userAgent: "code-triage",
+    request: { fetch: githubFetch },
+  });
+}
+
+/** Octokit instance using the same auth and 429-aware fetch as `ghAsync` / `ghPost` / `ghGraphQL`. */
+export function createGitHubOctokit(repo?: string): Octokit {
+  return createOctokit(repo);
+}
+
 export async function ghAsync<T>(endpoint: string, repo?: string): Promise<T> {
-  // Handle pagination — GitHub returns Link header with rel="next"
-  const url = endpoint.startsWith("http") ? endpoint : `${GH_API_BASE}${endpoint}`;
+  const octokit = createOctokit(repo);
+  const url = endpoint.startsWith("http") ? endpoint : `${GH_API_BASE}${endpoint.startsWith("/") ? "" : "/"}${endpoint}`;
   let allResults: unknown[] | null = null;
   let nextUrl: string | null = url;
 
   while (nextUrl) {
-    let response!: Response;
-    for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
-      response = await fetch(nextUrl, { headers: ghHeaders(repo) });
-      if (response.status === 429) {
-        if (attempt < MAX_RETRIES - 1) {
-          await waitForRateLimit(response);
-          continue;
-        }
-      }
-      break;
-    }
+    const octoResponse = (await octokit.request({
+      method: "GET",
+      url: nextUrl,
+    })) as { data: unknown; headers: { link?: string } };
 
-    if (!response.ok) {
-      const errBody = await response.text();
-      throw new Error(`GitHub API ${response.status}: ${errBody.slice(0, 300)}`);
-    }
+    const data: unknown = octoResponse.data;
+    const linkHeader: string | undefined = octoResponse.headers.link;
 
-    const data: unknown = await response.json();
-
-    // If the response is an array, paginate
     if (Array.isArray(data)) {
       if (!allResults) allResults = [];
       allResults.push(...data);
     } else {
-      // Non-array response (single object) — return immediately
       return data as T;
     }
 
-    // Check for next page
-    const linkHeader: string | null = response.headers.get("link");
     nextUrl = null;
     if (linkHeader) {
       const nextMatch: RegExpMatchArray | null = linkHeader.match(/<([^>]+)>;\s*rel="next"/);
@@ -124,55 +154,18 @@ export async function ghAsync<T>(endpoint: string, repo?: string): Promise<T> {
 }
 
 export async function ghGraphQL<T>(query: string, variables: Record<string, unknown>, repo?: string): Promise<T> {
-  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
-    const res = await fetch(`${GH_API_BASE}/graphql`, {
-      method: "POST",
-      headers: {
-        ...ghHeaders(repo),
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ query, variables }),
-    });
-
-    if (res.status === 429 && attempt < MAX_RETRIES - 1) {
-      await waitForRateLimit(res);
-      continue;
-    }
-
-    if (!res.ok) {
-      const body = await res.text();
-      throw new Error(`GitHub GraphQL ${res.status}: ${body.slice(0, 300)}`);
-    }
-
-    return await res.json() as T;
-  }
-  throw new Error("GitHub GraphQL: exceeded retry limit");
+  const octokit = createOctokit(repo);
+  const result = await octokit.graphql(query, variables);
+  return result as T;
 }
 
 export async function ghPost<T>(endpoint: string, body: Record<string, unknown>, repo?: string): Promise<T> {
-  const url = endpoint.startsWith("http") ? endpoint : `${GH_API_BASE}${endpoint}`;
-
-  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
-    const res = await fetch(url, {
-      method: "POST",
-      headers: {
-        ...ghHeaders(repo),
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(body),
-    });
-
-    if (res.status === 429 && attempt < MAX_RETRIES - 1) {
-      await waitForRateLimit(res);
-      continue;
-    }
-
-    if (!res.ok) {
-      const text = await res.text();
-      throw new Error(`GitHub API POST ${res.status}: ${text.slice(0, 300)}`);
-    }
-
-    return await res.json() as T;
-  }
-  throw new Error("GitHub API POST: exceeded retry limit");
+  const octokit = createOctokit(repo);
+  const url = endpoint.startsWith("http") ? endpoint : `${GH_API_BASE}${endpoint.startsWith("/") ? "" : "/"}${endpoint}`;
+  const octoResponse = await octokit.request({
+    method: "POST",
+    url,
+    body: Object.keys(body).length ? body : undefined,
+  });
+  return octoResponse.data as T;
 }

@@ -69,6 +69,24 @@ function serveStatic(res: ServerResponse, filePath: string): boolean {
 
 let currentRepos: RepoInfo[] = [];
 
+/** Port the HTTP server is listening on (for config UI vs saved `config.port`). */
+let listenPort = 3100;
+
+export function getListenPort(): number {
+  return listenPort;
+}
+
+let onConfigSaved: (() => void) | null = null;
+
+/** CLI registers this so `POST /api/config` can rediscover repos and reschedule polling. */
+export function setConfigSavedHandler(handler: (() => void) | null): void {
+  onConfigSaved = handler;
+}
+
+export function notifyConfigSaved(): void {
+  onConfigSaved?.();
+}
+
 export function updateRepos(repos: RepoInfo[]): void {
   currentRepos = repos;
 }
@@ -91,6 +109,7 @@ let testNotificationPending = false;
 
 export function triggerTestNotification(): void {
   testNotificationPending = true;
+  broadcastPollStatus({ peekTestNotification: true });
 }
 
 export function consumeTestNotification(): boolean {
@@ -101,6 +120,16 @@ export function consumeTestNotification(): boolean {
   return false;
 }
 
+/** Push current poll/fix-job snapshot to all SSE clients (see `poll-status` event). */
+export function broadcastPollStatus(options?: { consumeTestNotification?: boolean; peekTestNotification?: boolean }): void {
+  sseBroadcast("poll-status", {
+    status: getPollState({
+      consumeTestNotification: options?.consumeTestNotification === true,
+      peekTestNotification: options?.peekTestNotification === true,
+    }),
+  });
+}
+
 export function updatePollState(state: {
   lastPoll?: number;
   nextPoll?: number;
@@ -109,6 +138,7 @@ export function updatePollState(state: {
   lastPollError?: string | null;
 }): void {
   Object.assign(pollState, state);
+  broadcastPollStatus();
 }
 
 export interface FixJobStatus {
@@ -155,6 +185,13 @@ export function subscribeSse(req: IncomingMessage, res: ServerResponse): void {
   });
   res.write("\n");
 
+  try {
+    const snapshot = getPollState({ consumeTestNotification: false });
+    res.write(`event: poll-status\ndata: ${JSON.stringify({ status: snapshot })}\n\n`);
+  } catch {
+    /* connection may have closed immediately */
+  }
+
   const client: SseClient = {
     res,
     keepAlive: setInterval(() => {
@@ -184,6 +221,7 @@ export function setFixJobStatus(job: FixJobStatus): void {
     path: job.path,
     error: job.error,
   });
+  broadcastPollStatus();
 }
 
 export function getActiveFixForBranch(branch: string): FixJobStatus | undefined {
@@ -202,6 +240,7 @@ export function getActiveFixForPR(repo: string, prNumber: number): FixJobStatus 
 
 export function clearFixJobStatus(commentId: number): void {
   fixJobStatuses.delete(commentId);
+  broadcastPollStatus();
 }
 
 export interface HealthPayload {
@@ -217,12 +256,17 @@ export interface HealthPayload {
   fixJobsRunning: number;
 }
 
-export function getPollState(options?: { consumeTestNotification?: boolean }) {
+export function getPollState(options?: { consumeTestNotification?: boolean; peekTestNotification?: boolean }) {
   const consume = options?.consumeTestNotification !== false;
+  const peek = options?.peekTestNotification === true;
   return {
     ...pollState,
     fixJobs: Array.from(fixJobStatuses.values()),
-    testNotification: consume ? consumeTestNotification() : false,
+    testNotification: consume
+      ? consumeTestNotification()
+      : peek
+        ? testNotificationPending
+        : false,
     rateLimited: getRateLimitState().limited,
     rateLimitResetAt: getRateLimitState().resetAt,
   };
@@ -255,6 +299,7 @@ function readBody(req: IncomingMessage): Promise<string> {
 }
 
 export function startServer(port: number, repos: RepoInfo[]): void {
+  listenPort = port;
   currentRepos = repos;
   registerRoutes();
   const webDist = join(__dirname, "..", "web", "dist");

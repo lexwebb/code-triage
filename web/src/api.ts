@@ -16,10 +16,11 @@ async function postJSON<T>(path: string, body: Record<string, unknown>): Promise
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
+  const data = (await res.json().catch(() => ({}))) as { error?: string };
   if (!res.ok) {
-    throw new Error(`API error: ${res.status} ${res.statusText}`);
+    throw new Error(typeof data.error === "string" ? data.error : `API error: ${res.status}`);
   }
-  return res.json() as Promise<T>;
+  return data as T;
 }
 
 function repoQuery(repo?: string): string {
@@ -42,6 +43,29 @@ export interface FixJobStatus {
   branch?: string;
   claudeOutput?: string;
   originalComment?: { path: string; line: number; body: string; diffHunk: string };
+}
+
+/** Mirrors `GET /api/config` — safe for the browser (account tokens omitted). */
+export interface AppConfigPayload {
+  root: string;
+  port: number;
+  interval: number;
+  evalConcurrency: number;
+  pollReviewRequested: boolean;
+  commentRetentionDays: number;
+  ignoredBots: string[];
+  accounts: Array<{ name: string; orgs: string[]; hasToken: boolean }>;
+  /** True when a default PAT is stored in config (value not exposed). */
+  hasGithubToken: boolean;
+  evalPromptAppend: string;
+  evalPromptAppendByRepo: Record<string, string>;
+  evalClaudeExtraArgs: string[];
+}
+
+export interface ConfigGetResponse {
+  config: AppConfigPayload;
+  needsSetup: boolean;
+  listenPort: number;
 }
 
 export interface PollStatus {
@@ -95,4 +119,7 @@ export const api = {
   createComment: (repo: string, prNumber: number, commitId: string, path: string, line: number, side: "LEFT" | "RIGHT", body: string) =>
     postJSON<{ success: boolean }>("/api/actions/comment", { repo, prNumber, commitId, path, line, side, body }),
   getVersion: () => fetchJSON<{ localSha: string; remoteSha: string; behind: number }>("/api/version"),
+  getConfig: () => fetchJSON<ConfigGetResponse>("/api/config"),
+  saveConfig: (body: Record<string, unknown>) =>
+    postJSON<{ ok: boolean; restartRequired: boolean }>("/api/config", body),
 };

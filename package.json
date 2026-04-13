@@ -51,6 +51,7 @@
     "url": "https://github.com/lexwebb/code-triage.git"
   },
   "dependencies": {
+    "@octokit/rest": "^22.0.1",
     "better-sqlite3": "^11.8.1",
     "drizzle-orm": "^0.39.3",
     "ink": "^7.0.0",

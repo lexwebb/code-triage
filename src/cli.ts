@@ -6,7 +6,7 @@ import { fetchNewComments } from "./poller.js";
 import { notifyNewComments } from "./notifier.js";
 import { analyzeComments, clampEvalConcurrency, killAllChildren } from "./actioner.js";
 import { cleanupAllWorktrees, pruneOrphanedWorktrees } from "./worktree.js";
-import { setTokenResolver } from "./exec.js";
+import { setTokenResolver, resolveGitHubTokenFromSources, hasEnvGitHubToken } from "./exec.js";
 import {
   enableRawMode,
   registerHotkeys,
@@ -16,7 +16,7 @@ import {
   setProcessing,
   cleanup as cleanupTerminal,
 } from "./terminal.js";
-import { startServer, updateRepos, updatePollState, triggerTestNotification, sseBroadcast } from "./server.js";
+import { startServer, updateRepos, updatePollState, triggerTestNotification, sseBroadcast, setConfigSavedHandler } from "./server.js";
 import { discoverRepos, type RepoInfo } from "./discovery.js";
 import { loadConfig, saveConfig, configExists, type Config } from "./config.js";
 
@@ -89,16 +89,24 @@ function checkDependency(cmd: string, helpUrl: string): void {
   }
 }
 
-checkDependency("gh", "https://cli.github.com");
 checkDependency("claude", "https://docs.anthropic.com/en/docs/claude-code");
 
-// Verify gh is authenticated
-try {
-  execSync("gh auth status", { stdio: "pipe" });
-} catch {
-  console.error("\n  Error: GitHub CLI is not authenticated.");
-  console.error("  Run: gh auth login\n");
-  process.exit(1);
+let config = loadConfig();
+
+function hasConfigGitHubCredential(c: Config): boolean {
+  return Boolean(c.githubToken?.trim());
+}
+
+// Prefer env or config PAT; otherwise require `gh auth login`.
+if (!hasEnvGitHubToken() && !hasConfigGitHubCredential(config)) {
+  checkDependency("gh", "https://cli.github.com");
+  try {
+    execSync("gh auth status", { stdio: "pipe" });
+  } catch {
+    console.error("\n  Error: No GitHub token configured.");
+    console.error("  Set GITHUB_TOKEN or GH_TOKEN, add a token in Settings, or run: gh auth login\n");
+    process.exit(1);
+  }
 }
 
 // First-run setup or --config flag
@@ -144,41 +152,49 @@ async function runSetup(existing: Config): Promise<Config> {
   return config;
 }
 
-let config = loadConfig();
-
-// Run setup if --config flag or first run
-if (flags.config || !configExists()) {
+// Interactive setup only when --config (first launch uses web settings instead)
+if (flags.config) {
   config = await runSetup(config);
 }
 
-// Install multi-account token resolver if accounts are configured
-if (config.accounts?.length) {
-  const { execFileSync: execSync2 } = await import("child_process");
+function installTokenResolverFromConfig(c: Config): void {
   let defaultToken: string | null = null;
-  setTokenResolver((repo?: string) => {
-    if (repo && config.accounts?.length) {
-      const owner = repo.split("/")[0];
-      const match = config.accounts.find((a) => a.orgs.includes(owner ?? ""));
-      if (match) return match.token;
-    }
+  const getDefault = (): string => {
     if (!defaultToken) {
-      defaultToken = execSync2("gh", ["auth", "token"], { encoding: "utf-8", timeout: 5000 }).trim();
+      defaultToken = resolveGitHubTokenFromSources(c.githubToken);
     }
     return defaultToken;
-  });
+  };
+  if (c.accounts?.length) {
+    setTokenResolver((repo?: string) => {
+      if (repo && c.accounts?.length) {
+        const owner = repo.split("/")[0];
+        const match = c.accounts.find((a) => a.orgs.includes(owner ?? ""));
+        if (match) return match.token;
+      }
+      return getDefault();
+    });
+  } else {
+    setTokenResolver(() => getDefault());
+  }
+}
+
+installTokenResolverFromConfig(config);
+
+function getRoot(): string {
+  return flags.root || loadConfig().root;
 }
 
 // CLI flags override config
-const root = flags.root || config.root;
 const port = flags.port ? parseInt(flags.port, 10) : config.port;
-const intervalMs = (flags.interval ? parseInt(flags.interval, 10) : config.interval) * 60 * 1000;
+let intervalMs = (flags.interval ? parseInt(flags.interval, 10) : config.interval) * 60 * 1000;
 const dryRun = flags["dry-run"]!;
-const evalConcurrency = clampEvalConcurrency(
+let evalConcurrency = clampEvalConcurrency(
   flags["eval-concurrency"] ? parseInt(flags["eval-concurrency"]!, 10) : (config.evalConcurrency ?? 2),
 );
-const pollReviewRequested =
+let pollReviewRequested =
   flags["poll-review-requested"] === true ? true : config.pollReviewRequested === true;
-const commentRetentionDays =
+let commentRetentionDays =
   flags["comment-retention-days"] !== undefined
     ? parseInt(flags["comment-retention-days"]!, 10)
     : (config.commentRetentionDays ?? 0);
@@ -187,7 +203,12 @@ const commentRetentionDays =
 let repos: RepoInfo[];
 if (flags.repo) {
   repos = [{ repo: flags.repo, localPath: "" }];
+} else if (!configExists()) {
+  console.log("No config file — open the web UI to finish setup.");
+  console.log(`  (Serving on http://localhost:${port}; repos will be discovered after you save settings.)\n`);
+  repos = [];
 } else {
+  const root = getRoot();
   console.log(`Discovering repos in ${root}...`);
   repos = discoverRepos(root);
   if (repos.length === 0) {
@@ -247,6 +268,33 @@ function schedulePoll(): void {
   updatePollState({ nextPoll, intervalMs });
   pollTimer = setTimeout(poll, intervalMs);
 }
+
+function applyConfigReload(): void {
+  config = loadConfig();
+  intervalMs = config.interval * 60 * 1000;
+  evalConcurrency = clampEvalConcurrency(config.evalConcurrency ?? 2);
+  pollReviewRequested = config.pollReviewRequested === true;
+  commentRetentionDays = config.commentRetentionDays ?? 0;
+  installTokenResolverFromConfig(config);
+  if (!flags.repo) {
+    const rootPath = getRoot();
+    console.log(`\n  Re-discovering repos under ${rootPath}...`);
+    repos = discoverRepos(rootPath);
+    console.log(`  Found ${repos.length} repo(s).`);
+    for (const r of repos) {
+      console.log(`    ${r.repo}`);
+    }
+    updateRepos(repos);
+    const state = loadState();
+    const activeJobs = state.fixJobs ?? [];
+    for (const repoInfo of repos) {
+      if (repoInfo.localPath) pruneOrphanedWorktrees(repoInfo.localPath, activeJobs);
+    }
+  }
+  schedulePoll();
+}
+
+setConfigSavedHandler(applyConfigReload);
 
 async function poll(): Promise<void> {
   if (running || shuttingDown) return;
@@ -343,8 +391,10 @@ function rediscover(): void {
     console.log("\n  Single-repo mode, skipping discovery.\n");
     return;
   }
+  config = loadConfig();
+  const rootPath = getRoot();
   console.log("\n  Re-discovering repos...");
-  repos = discoverRepos(root);
+  repos = discoverRepos(rootPath);
   console.log(`  Found ${repos.length} repo(s).`);
   for (const r of repos) {
     console.log(`    ${r.repo}`);

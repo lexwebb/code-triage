@@ -1,8 +1,7 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "./api";
 import type { PullRequest, ReviewComment } from "./types";
 
-const POLL_INTERVAL = 60_000; // 1 minute
 const REVIEW_REMINDER_INTERVAL = 30 * 60_000; // 30 minutes
 const MUTED_KEY = "code-triage:muted-prs";
 
@@ -71,6 +70,8 @@ export function useNotifications(
   reviewPulls: PullRequest[],
   onSelectPR: (number: number, repo: string) => void,
   onDataChanged: () => void,
+  /** Bumped after each successful pull-list fetch (initial, manual refresh, or SSE-driven). */
+  pullFetchGeneration: number,
 ) {
   const prevState = useRef<NotificationState>({
     reviewPRKeys: new Set(),
@@ -82,6 +83,9 @@ export function useNotifications(
     // eslint-disable-next-line react-hooks/purity -- useRef initial value only runs at mount
     lastReviewReminder: Date.now(),
   });
+
+  /** Set true after the first comment baseline is loaded (refs do not trigger re-renders). */
+  const [commentBaselineReady, setCommentBaselineReady] = useState(false);
 
   // Keep callback refs fresh so effects always call the latest version without re-subscribing
   const onSelectPRRef = useRef(onSelectPR);
@@ -234,33 +238,33 @@ export function useNotifications(
       prevState.current.allCommentKeys = allKeys;
       prevState.current.pendingCommentKeys = pendingKeys;
       prevState.current.initialized = true;
+      setCommentBaselineReady(true);
     })();
   }, [pulls]);
 
-  // ── Poll for new/analyzed comments ──
+  // ── Diff comments after each pull-list refresh (replaces periodic HTTP polling) ──
   useEffect(() => {
-    if (pulls.length === 0) return;
+    if (pulls.length === 0 || !commentBaselineReady || pullFetchGeneration === 0) return;
 
-    const interval = setInterval(async () => {
-      if (!prevState.current.initialized) return;
+    let cancelled = false;
 
+    (async () => {
       let hasNew = false;
       const newAllKeys = new Set<string>();
       const newPendingKeys = new Set<string>();
       const muted = getMutedPRs();
 
-      // Collect analyzed comment notifications to batch (digest mode)
       const newlyAnalyzed: Array<{ pr: typeof pulls[0]; c: Awaited<ReturnType<typeof api.getPullComments>>[0] }> = [];
 
       for (const pr of pulls) {
         const prk = prKey(pr);
         try {
           const comments = await api.getPullComments(pr.number, pr.repo);
+          if (cancelled) return;
           for (const c of comments) {
             const key = commentKey(c, pr.repo, pr.number);
             newAllKeys.add(key);
 
-            // New human comment — notify immediately (high signal, not bursty)
             if (!prevState.current.allCommentKeys.has(key) && !muted.has(prk)) {
               if (!c.author.includes("[bot]")) {
                 hasNew = true;
@@ -273,7 +277,6 @@ export function useNotifications(
               }
             }
 
-            // Analysis completed — collect for digest
             if (c.crStatus === "pending" && c.evaluation) {
               newPendingKeys.add(key);
               if (!prevState.current.pendingCommentKeys.has(key) && !muted.has(prk)) {
@@ -285,7 +288,8 @@ export function useNotifications(
         } catch { /* ignore */ }
       }
 
-      // Fire analysis notifications as digest
+      if (cancelled) return;
+
       if (newlyAnalyzed.length === 1) {
         const { pr, c } = newlyAnalyzed[0]!;
         const repoShort = pr.repo.split("/")[1] ?? pr.repo;
@@ -312,8 +316,8 @@ export function useNotifications(
       prevState.current.allCommentKeys = newAllKeys;
       prevState.current.pendingCommentKeys = newPendingKeys;
       if (hasNew) onDataChangedRef.current();
-    }, POLL_INTERVAL);
+    })();
 
-    return () => clearInterval(interval);
-  }, [pulls]);
+    return () => { cancelled = true; };
+  }, [pulls, pullFetchGeneration, commentBaselineReady]);
 }
