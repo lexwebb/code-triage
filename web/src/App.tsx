@@ -8,13 +8,42 @@ import PRDetail from "./components/PRDetail";
 import FileList from "./components/FileList";
 import DiffView from "./components/DiffView";
 import CommentThreads from "./components/CommentThreads";
-import { useNotifications, requestNotificationPermission } from "./useNotifications";
+import { useNotifications, requestNotificationPermission, isPRMuted } from "./useNotifications";
 import FixJobsBanner from "./components/FixJobsBanner";
 import type { FixJobStatus } from "./api";
 
 interface SelectedPR {
   number: number;
   repo: string;
+}
+
+function MutedReviewSection({ pulls, selectedPR, onSelectPR }: {
+  pulls: PullRequest[];
+  selectedPR: SelectedPR | null;
+  onSelectPR: (number: number, repo: string) => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  return (
+    <>
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="w-full px-4 py-1.5 text-xs text-gray-600 uppercase tracking-wide border-y border-gray-800 bg-gray-900/20 flex items-center justify-between hover:bg-gray-800/30"
+      >
+        <span>Muted ({pulls.length})</span>
+        <span className="text-gray-700">{expanded ? "▼" : "▶"}</span>
+      </button>
+      {expanded && (
+        <div className="opacity-60">
+          <PRList
+            pulls={pulls}
+            selectedPR={selectedPR}
+            onSelectPR={onSelectPR}
+            showRepo
+          />
+        </div>
+      )}
+    </>
+  );
 }
 
 const CACHE_KEY_PULLS = "code-triage:pulls";
@@ -88,9 +117,23 @@ export default function App() {
   }, [pulls, repoFilter]);
 
   const filteredReviewPulls = useMemo(() => {
-    if (!repoFilter) return reviewPulls;
-    const lower = repoFilter.toLowerCase();
-    return reviewPulls.filter((pr) => pr.repo.toLowerCase().includes(lower) || pr.title.toLowerCase().includes(lower));
+    const base = repoFilter
+      ? reviewPulls.filter((pr) => {
+          const lower = repoFilter.toLowerCase();
+          return pr.repo.toLowerCase().includes(lower) || pr.title.toLowerCase().includes(lower);
+        })
+      : reviewPulls;
+    return base.filter((pr) => !isPRMuted(pr.repo, pr.number));
+  }, [reviewPulls, repoFilter]);
+
+  const mutedReviewPulls = useMemo(() => {
+    const base = repoFilter
+      ? reviewPulls.filter((pr) => {
+          const lower = repoFilter.toLowerCase();
+          return pr.repo.toLowerCase().includes(lower) || pr.title.toLowerCase().includes(lower);
+        })
+      : reviewPulls;
+    return base.filter((pr) => isPRMuted(pr.repo, pr.number));
   }, [reviewPulls, repoFilter]);
 
   // Fetch pulls from API and cache
@@ -408,6 +451,13 @@ export default function App() {
                   showRepo
                 />
               </>
+            )}
+            {mutedReviewPulls.length > 0 && (
+              <MutedReviewSection
+                pulls={mutedReviewPulls}
+                selectedPR={selectedPR}
+                onSelectPR={handleSelectPR}
+              />
             )}
           </div>
         </div>
