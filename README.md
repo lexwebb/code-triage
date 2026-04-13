@@ -2,6 +2,8 @@
 
 A PR review dashboard that monitors your GitHub pull requests, analyzes review comments with Claude, and lets you act on them from a web UI.
 
+![Code Triage Screenshot](docs/screenshot.png)
+
 ## Quick Start
 
 ```bash
