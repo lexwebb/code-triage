@@ -77,4 +77,5 @@ export const api = {
     postJSON<{ success: boolean }>("/api/actions/fix-discard", { branch, commentId }),
   submitReview: (repo: string, prNumber: number, event: "APPROVE" | "REQUEST_CHANGES", body?: string) =>
     postJSON<{ success: boolean }>("/api/actions/review", { repo, prNumber, event, body }),
+  getVersion: () => fetchJSON<{ localSha: string; remoteSha: string; behind: number }>("/api/version"),
 };

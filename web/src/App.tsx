@@ -58,7 +58,15 @@ export default function App() {
   const [notifPermission, setNotifPermission] = useState(() =>
     "Notification" in window ? Notification.permission : "denied"
   );
+  const [updateAvailable, setUpdateAvailable] = useState<{ behind: number; localSha: string; remoteSha: string } | null>(null);
   const lastFetchRef = useRef(Number(sessionStorage.getItem(CACHE_KEY_TIME) || "0"));
+
+  // Check for updates on mount
+  useEffect(() => {
+    api.getVersion().then((v) => {
+      if (v.behind > 0) setUpdateAvailable(v);
+    }).catch(() => {});
+  }, []);
 
   // Re-check notification permission periodically (user may change it in browser settings)
   useEffect(() => {
@@ -314,6 +322,20 @@ export default function App() {
           <span className="text-sm text-white">
             Notifications are blocked. Click the lock/shield icon in your address bar, find Notifications, and set it to Allow. Then refresh the page.
           </span>
+        </div>
+      )}
+      {updateAvailable && (
+        <div className="bg-yellow-600/80 px-4 py-2 flex items-center justify-between shrink-0">
+          <span className="text-sm text-white">
+            A new version of Code Triage is available ({updateAvailable.behind} commit{updateAvailable.behind > 1 ? "s" : ""} behind, {updateAvailable.localSha} → {updateAvailable.remoteSha}).
+            Run <code className="bg-black/20 px-1 rounded">git pull && yarn build:all</code> to update.
+          </span>
+          <button
+            onClick={() => setUpdateAvailable(null)}
+            className="text-white/70 hover:text-white ml-4 text-lg"
+          >
+            ✕
+          </button>
         </div>
       )}
       <div className="flex-1 flex overflow-hidden">

@@ -382,6 +382,33 @@ export function registerRoutes(): void {
     json(res, getPollState());
   });
 
+  // GET /api/version — check if running version is behind origin/main
+  let versionCache: { localSha: string; remoteSha: string; behind: number; checkedAt: number } | null = null;
+  addRoute("GET", "/api/version", async (_req, res) => {
+    // Cache for 10 minutes
+    if (versionCache && Date.now() - versionCache.checkedAt < 600_000) {
+      json(res, versionCache);
+      return;
+    }
+    try {
+      const { execFileSync } = await import("child_process");
+      const cwd = new URL(".", import.meta.url).pathname;
+      // Fetch latest from remote (silent)
+      try { execFileSync("git", ["fetch", "origin", "main", "--quiet"], { cwd, stdio: "pipe", timeout: 10000 }); } catch { /* offline */ }
+      const localSha = execFileSync("git", ["rev-parse", "HEAD"], { cwd, encoding: "utf-8", timeout: 5000 }).trim();
+      const remoteSha = execFileSync("git", ["rev-parse", "origin/main"], { cwd, encoding: "utf-8", timeout: 5000 }).trim();
+      let behind = 0;
+      if (localSha !== remoteSha) {
+        const count = execFileSync("git", ["rev-list", "--count", `HEAD..origin/main`], { cwd, encoding: "utf-8", timeout: 5000 }).trim();
+        behind = parseInt(count, 10) || 0;
+      }
+      versionCache = { localSha: localSha.slice(0, 7), remoteSha: remoteSha.slice(0, 7), behind, checkedAt: Date.now() };
+      json(res, versionCache);
+    } catch (err) {
+      json(res, { localSha: "unknown", remoteSha: "unknown", behind: 0, checkedAt: Date.now(), error: (err as Error).message });
+    }
+  });
+
   // POST /api/actions/reply
   addRoute("POST", "/api/actions/reply", async (req, res) => {
     const body = getBody<{ repo: string; commentId: number; prNumber: number }>(req);
