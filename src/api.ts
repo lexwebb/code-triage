@@ -92,6 +92,7 @@ interface GhPull {
   additions: number;
   deletions: number;
   changed_files: number;
+  requested_reviewers: Array<{ login: string; avatar_url: string }>;
 }
 
 export function registerRoutes(): void {
@@ -147,6 +148,47 @@ export function registerRoutes(): void {
     }
 
     json(res, allPulls);
+  });
+
+  // GET /api/pulls/review-requested?repo=owner/repo (optional)
+  addRoute("GET", "/api/pulls/review-requested", (_req, res, _params, query) => {
+    const username = getUsername();
+    const repoFilter = query.get("repo");
+    const targetRepos = repoFilter
+      ? getRepos().filter((r) => r.repo === repoFilter)
+      : getRepos();
+
+    const reviewPulls: Array<Record<string, unknown>> = [];
+
+    for (const repoInfo of targetRepos) {
+      try {
+        const pulls = gh<GhPull[]>(`/repos/${repoInfo.repo}/pulls?state=open`);
+        const needsReview = pulls.filter((pr) =>
+          pr.user.login !== username &&
+          pr.requested_reviewers.some((r) => r.login === username),
+        );
+
+        for (const pr of needsReview) {
+          reviewPulls.push({
+            number: pr.number,
+            title: pr.title,
+            author: pr.user.login,
+            authorAvatar: pr.user.avatar_url,
+            branch: pr.head.ref,
+            baseBranch: pr.base.ref,
+            url: pr.html_url,
+            createdAt: pr.created_at,
+            updatedAt: pr.updated_at,
+            draft: pr.draft,
+            repo: repoInfo.repo,
+          });
+        }
+      } catch {
+        // Skip repos that fail
+      }
+    }
+
+    json(res, reviewPulls);
   });
 
   // GET /api/pulls/:number?repo=owner/repo

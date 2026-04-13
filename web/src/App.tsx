@@ -21,6 +21,7 @@ export default function App() {
   const [repos, setRepos] = useState<RepoInfo[]>([]);
   const [selectedRepo, setSelectedRepo] = useState<string | null>(initial.repo);
   const [pulls, setPulls] = useState<PullRequest[]>([]);
+  const [reviewPulls, setReviewPulls] = useState<PullRequest[]>([]);
   const [selectedPR, setSelectedPR] = useState<SelectedPR | null>(
     initial.repo && initial.prNumber ? { repo: initial.repo, number: initial.prNumber } : null,
   );
@@ -75,9 +76,13 @@ export default function App() {
 
     async function load() {
       try {
-        const pullData = await api.getPulls(selectedRepo ?? undefined);
+        const [pullData, reviewData] = await Promise.all([
+          api.getPulls(selectedRepo ?? undefined),
+          api.getReviewRequested(selectedRepo ?? undefined),
+        ]);
         if (cancelled) return;
         setPulls(pullData);
+        setReviewPulls(reviewData);
 
         // Fetch comment counts
         const counts: Record<string, number> = {};
@@ -193,6 +198,9 @@ export default function App() {
           onSelectRepo={handleSelectRepo}
         />
         <div className="overflow-y-auto flex-1">
+          <div className="px-4 py-1.5 text-xs text-gray-500 uppercase tracking-wide border-b border-gray-800">
+            My Pull Requests
+          </div>
           <PRList
             pulls={pulls}
             selectedPR={selectedPR}
@@ -200,6 +208,20 @@ export default function App() {
             commentCounts={commentCounts}
             showRepo={!selectedRepo}
           />
+          {reviewPulls.length > 0 && (
+            <>
+              <div className="px-4 py-1.5 text-xs text-gray-500 uppercase tracking-wide border-y border-gray-800 bg-gray-900/30">
+                Needs My Review ({reviewPulls.length})
+              </div>
+              <PRList
+                pulls={reviewPulls}
+                selectedPR={selectedPR}
+                onSelectPR={handleSelectPR}
+                commentCounts={{}}
+                showRepo={!selectedRepo}
+              />
+            </>
+          )}
         </div>
       </div>
 
