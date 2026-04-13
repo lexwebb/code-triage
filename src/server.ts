@@ -76,15 +76,17 @@ export function getListenPort(): number {
   return listenPort;
 }
 
-let onConfigSaved: (() => void) | null = null;
+let onConfigSaved: (() => void | Promise<void>) | null = null;
 
 /** CLI registers this so `POST /api/config` can rediscover repos and reschedule polling. */
-export function setConfigSavedHandler(handler: (() => void) | null): void {
+export function setConfigSavedHandler(handler: (() => void | Promise<void>) | null): void {
   onConfigSaved = handler;
 }
 
 export function notifyConfigSaved(): void {
-  onConfigSaved?.();
+  void Promise.resolve(onConfigSaved?.()).catch((e) => {
+    console.error("Config reload failed:", (e as Error).message);
+  });
 }
 
 export function updateRepos(repos: RepoInfo[]): void {
@@ -101,6 +103,10 @@ const pollState = {
   lastPoll: 0,
   nextPoll: 0,
   intervalMs: 0,
+  /** Config floor (minutes → ms); `intervalMs` may be larger when rate-limit aware. */
+  baseIntervalMs: 0,
+  estimatedPollRequests: 0,
+  pollBudgetNote: null as string | null,
   polling: false,
   /** Last top-level poll failure (outer catch in `cli.ts`); cleared on success. */
   lastPollError: null as string | null,
@@ -134,6 +140,9 @@ export function updatePollState(state: {
   lastPoll?: number;
   nextPoll?: number;
   intervalMs?: number;
+  baseIntervalMs?: number;
+  estimatedPollRequests?: number;
+  pollBudgetNote?: string | null;
   polling?: boolean;
   lastPollError?: string | null;
 }): void {
@@ -251,24 +260,45 @@ export interface HealthPayload {
   lastPollWallClockMs: number;
   nextPoll: number;
   intervalMs: number;
+  baseIntervalMs: number;
+  estimatedPollRequests: number;
+  estimatedGithubRequestsPerHour: number;
+  pollBudgetNote: string | null;
   lastPollError: string | null;
-  rateLimit: { limited: boolean; resetAt: number | null };
+  rateLimit: {
+    limited: boolean;
+    resetAt: number | null;
+    remaining: number | null;
+    limit: number | null;
+    resource: string | null;
+    updatedAt: number;
+  };
   fixJobsRunning: number;
 }
 
 export function getPollState(options?: { consumeTestNotification?: boolean; peekTestNotification?: boolean }) {
   const consume = options?.consumeTestNotification !== false;
   const peek = options?.peekTestNotification === true;
+  const rl = getRateLimitState();
+  const eff = pollState.intervalMs;
+  const perPoll = pollState.estimatedPollRequests ?? 0;
+  const estimatedGithubRequestsPerHour =
+    eff > 0 && perPoll > 0 ? Math.round((3600000 / eff) * perPoll) : 0;
   return {
     ...pollState,
+    estimatedGithubRequestsPerHour,
     fixJobs: Array.from(fixJobStatuses.values()),
     testNotification: consume
       ? consumeTestNotification()
       : peek
         ? testNotificationPending
         : false,
-    rateLimited: getRateLimitState().limited,
-    rateLimitResetAt: getRateLimitState().resetAt,
+    rateLimited: rl.limited,
+    rateLimitResetAt: rl.resetAt,
+    rateLimitRemaining: rl.remaining,
+    rateLimitLimit: rl.limit,
+    rateLimitResource: rl.resource,
+    rateLimitUpdatedAt: rl.updatedAt,
   };
 }
 
@@ -283,8 +313,19 @@ export function getHealthPayload(): HealthPayload {
     lastPollWallClockMs: ps.lastPoll,
     nextPoll: ps.nextPoll,
     intervalMs: ps.intervalMs,
+    baseIntervalMs: ps.baseIntervalMs,
+    estimatedPollRequests: ps.estimatedPollRequests,
+    estimatedGithubRequestsPerHour: ps.estimatedGithubRequestsPerHour,
+    pollBudgetNote: ps.pollBudgetNote,
     lastPollError: pollState.lastPollError,
-    rateLimit: { limited: ps.rateLimited, resetAt: ps.rateLimitResetAt },
+    rateLimit: {
+      limited: ps.rateLimited,
+      resetAt: ps.rateLimitResetAt,
+      remaining: ps.rateLimitRemaining ?? null,
+      limit: ps.rateLimitLimit ?? null,
+      resource: ps.rateLimitResource ?? null,
+      updatedAt: ps.rateLimitUpdatedAt ?? 0,
+    },
     fixJobsRunning: ps.fixJobs.filter((j) => j.status === "running").length,
   };
 }

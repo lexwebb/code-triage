@@ -29,3 +29,10 @@ export const fixJobs = sqliteTable("fix_jobs", {
   worktreePath: text("worktree_path").notNull(),
   startedAt: text("started_at").notNull(),
 });
+
+/** Per-repo adaptive polling: last “interesting” activity vs last poll time. */
+export const repoPoll = sqliteTable("repo_poll", {
+  repo: text("repo").primaryKey(),
+  lastActivityMs: integer("last_activity_ms").notNull(),
+  lastPollMs: integer("last_poll_ms").notNull(),
+});

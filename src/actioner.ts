@@ -225,13 +225,11 @@ export async function resolveThread(
   const [owner, repo] = repoPath.split("/");
 
   const data = await ghGraphQL<{
-    data: {
-      repository: {
-        pullRequest: {
-          reviewThreads: { nodes: GhReviewThread[] };
-        };
-      };
-    };
+    repository: {
+      pullRequest: {
+        reviewThreads: { nodes: GhReviewThread[] };
+      } | null;
+    } | null;
   }>(
     `query($owner: String!, $repo: String!, $prNumber: Int!) {
       repository(owner: $owner, name: $repo) {
@@ -251,7 +249,15 @@ export async function resolveThread(
     { owner, repo, prNumber },
   );
 
-  const threads = data.data.repository.pullRequest.reviewThreads.nodes;
+  const pr = data.repository?.pullRequest;
+  if (!pr) {
+    log.warn(`Could not load review threads for ${repoPath}#${prNumber} (missing repository or PR).`);
+    if (replyBody) {
+      await postReply(repoPath, prNumber, commentId, replyBody);
+    }
+    return;
+  }
+  const threads = pr.reviewThreads.nodes;
   const thread = threads.find(
     (t) => t.comments.nodes.some((c) => c.databaseId === commentId),
   );

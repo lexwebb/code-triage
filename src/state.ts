@@ -3,6 +3,25 @@ import type { CommentTriagePatch, CrWatchState, CommentStatus, CommentRecord, Ev
 import * as schema from "./db/schema.js";
 import { openStateDatabase, writeStateToDb, getRawSqlite } from "./db/client.js";
 
+/** Pending local triage rows per PR (not replied/dismissed/fixed), excluding active snoozes. Keys: `owner/repo:prNumber`. */
+export function getPendingTriageCountsByPr(): Map<string, number> {
+  const sqlite = getRawSqlite();
+  const now = new Date().toISOString();
+  const rows = sqlite.prepare(`
+    SELECT repo, pr_number, COUNT(*) AS cnt
+    FROM comments
+    WHERE status = 'pending'
+      AND repo IS NOT NULL AND repo != ''
+      AND (snooze_until IS NULL OR snooze_until = '' OR snooze_until <= ?)
+    GROUP BY repo, pr_number
+  `).all(now) as Array<{ repo: string; pr_number: number; cnt: number }>;
+  const m = new Map<string, number>();
+  for (const r of rows) {
+    m.set(`${r.repo}:${r.pr_number}`, r.cnt);
+  }
+  return m;
+}
+
 /** Remove old replied/dismissed/fixed rows from SQLite (pending always kept). Returns rows deleted. */
 export function compactCommentHistory(retentionDays: number): number {
   if (!Number.isFinite(retentionDays) || retentionDays <= 0) {

@@ -13,7 +13,27 @@ import PROverview from "./components/PROverview";
 import { useNotifications, requestNotificationPermission, isPRMuted } from "./useNotifications";
 import FixJobsBanner from "./components/FixJobsBanner";
 import SettingsView from "./components/SettingsView";
+import KeyboardShortcutsModal from "./components/KeyboardShortcutsModal";
 import type { FixJobStatus, PollStatus } from "./api";
+import { useMediaQuery } from "./useMediaQuery";
+
+function formatRateLimitReset(ms: number | null): string {
+  if (ms == null || ms <= 0) return "";
+  return new Date(ms).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+}
+
+/** Human-readable duration for rate-limit countdown (ticks down each second in the UI). */
+function formatDurationUntil(targetMs: number, nowMs: number): string {
+  const ms = Math.max(0, targetMs - nowMs);
+  if (ms <= 0) return "0s";
+  const totalSec = Math.floor(ms / 1000);
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  const s = totalSec % 60;
+  if (h > 0) return `${h}h ${m}m ${s}s`;
+  if (m > 0) return `${m}m ${s}s`;
+  return `${s}s`;
+}
 
 interface SelectedPR {
   number: number;
@@ -29,8 +49,9 @@ function MutedReviewSection({ pulls, selectedPR, onSelectPR }: {
   return (
     <>
       <button
+        type="button"
         onClick={() => setExpanded(!expanded)}
-        className="w-full px-4 py-1.5 text-xs text-gray-600 uppercase tracking-wide border-y border-gray-800 bg-gray-900/20 flex items-center justify-between hover:bg-gray-800/30"
+        className="w-full px-4 py-1.5 text-xs text-gray-600 uppercase tracking-wide border-y border-gray-800 bg-gray-900/20 flex items-center justify-between hover:bg-gray-800/30 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/60 focus-visible:ring-inset"
       >
         <span>Muted ({pulls.length})</span>
         <span className="text-gray-700">{expanded ? "▼" : "▶"}</span>
@@ -92,12 +113,38 @@ export default function App() {
     "Notification" in window ? Notification.permission : "denied"
   );
   const [updateAvailable, setUpdateAvailable] = useState<{ behind: number; localSha: string; remoteSha: string } | null>(null);
+  /** Sidebar empty because GitHub /user failed with no stale cache (e.g. core API throttled). */
+  const [githubUserUnavailable, setGithubUserUnavailable] = useState(false);
   const lastFetchRef = useRef(Number(sessionStorage.getItem(CACHE_KEY_TIME) || "0"));
+  /** Coalesces overlapping fetchPulls (e.g. duplicate poll-status SSE: lastPoll update + schedulePoll nextPoll). */
+  const fetchPullsInFlightRef = useRef<Promise<void> | null>(null);
 
   const [appGate, setAppGate] = useState<"loading" | "setup" | "ready">("loading");
   const [setupConfig, setSetupConfig] = useState<ConfigGetResponse | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [settingsModal, setSettingsModal] = useState<ConfigGetResponse | null>(null);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  const [pollMeta, setPollMeta] = useState({
+    polling: false,
+    intervalMs: 0,
+    baseIntervalMs: null as number | null,
+    estimatedGithubRequestsPerHour: null as number | null,
+    estimatedPollRequests: null as number | null,
+    pollBudgetNote: null as string | null,
+    rateLimited: false,
+    rateLimitResetAt: null as number | null,
+    rateLimitRemaining: null as number | null,
+    rateLimitLimit: null as number | null,
+    rateLimitResource: null as string | null,
+    lastPollError: null as string | null,
+  });
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(
+    () => typeof sessionStorage !== "undefined" && sessionStorage.getItem("code-triage:sidebar-collapsed") === "1",
+  );
+  const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
+  const isWide = useMediaQuery("(min-width: 768px)");
+  /** Drives live countdown for GitHub rate-limit reset (updated every 1s while limited). */
+  const [rateLimitNow, setRateLimitNow] = useState(() => Date.now());
 
   // First-run: use web settings instead of CLI prompts when ~/.code-triage/config.json is missing
   useEffect(() => {
@@ -159,31 +206,61 @@ export default function App() {
     return base.filter((pr) => isPRMuted(pr.repo, pr.number));
   }, [reviewPulls, repoFilter]);
 
-  // Fetch pulls from API and cache
-  const fetchPulls = useCallback(async (isInitial = false) => {
-    if (!isInitial) setRefreshing(true);
-    try {
-      const [pullData, reviewData] = await Promise.all([
-        api.getPulls(),
-        api.getReviewRequested(),
-      ]);
-      setPulls(pullData);
-      setReviewPulls(reviewData);
-      saveCache(CACHE_KEY_PULLS, pullData);
-      saveCache(CACHE_KEY_REVIEW, reviewData);
-      const now = Date.now();
-      sessionStorage.setItem(CACHE_KEY_TIME, String(now));
-      lastFetchRef.current = now;
-      setPullFetchGeneration((g) => g + 1);
+  const flatPulls = useMemo(
+    () => [...filteredPulls, ...filteredReviewPulls],
+    [filteredPulls, filteredReviewPulls],
+  );
+  const flatPullsRef = useRef(flatPulls);
+  flatPullsRef.current = flatPulls;
+  const selectedPRRef = useRef(selectedPR);
+  selectedPRRef.current = selectedPR;
 
-      if (isInitial && pullData.length > 0 && !selectedPR) {
-        setSelectedPR({ number: pullData[0].number, repo: pullData[0].repo });
+  useEffect(() => {
+    sessionStorage.setItem("code-triage:sidebar-collapsed", sidebarCollapsed ? "1" : "0");
+  }, [sidebarCollapsed]);
+
+  useEffect(() => {
+    if (isWide) setMobileDrawerOpen(false);
+  }, [isWide]);
+
+  // Fetch pulls from API and cache. `resetRepoPollOnRefresh`: manual refresh clears adaptive `repo_poll` so the CLI recalculates hot/cold.
+  const fetchPulls = useCallback(async (isInitial = false, resetRepoPollOnRefresh = false) => {
+    if (fetchPullsInFlightRef.current) {
+      return fetchPullsInFlightRef.current;
+    }
+    const run = (async () => {
+      if (!isInitial) setRefreshing(true);
+      try {
+        if (resetRepoPollOnRefresh) {
+          await api.clearRepoPollSchedule();
+        }
+        const { authored: pullData, reviewRequested: reviewData, githubUserUnavailable: userMissing } =
+          await api.getPullsBundle();
+        setPulls(pullData);
+        setReviewPulls(reviewData);
+        setGithubUserUnavailable(userMissing === true);
+        saveCache(CACHE_KEY_PULLS, pullData);
+        saveCache(CACHE_KEY_REVIEW, reviewData);
+        const now = Date.now();
+        sessionStorage.setItem(CACHE_KEY_TIME, String(now));
+        lastFetchRef.current = now;
+        setPullFetchGeneration((g) => g + 1);
+
+        if (isInitial && pullData.length > 0 && !selectedPR) {
+          setSelectedPR({ number: pullData[0].number, repo: pullData[0].repo });
+        }
+      } catch (err) {
+        if (isInitial) setError((err as Error).message);
+      } finally {
+        if (isInitial) setLoading(false);
+        setRefreshing(false);
       }
-    } catch (err) {
-      if (isInitial) setError((err as Error).message);
+    })();
+    fetchPullsInFlightRef.current = run;
+    try {
+      await run;
     } finally {
-      if (isInitial) setLoading(false);
-      setRefreshing(false);
+      fetchPullsInFlightRef.current = null;
     }
   }, [selectedPR]);
 
@@ -215,11 +292,55 @@ export default function App() {
     return () => window.removeEventListener("popstate", onPopState);
   }, []);
 
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setShortcutsOpen(false);
+        return;
+      }
+      const t = e.target;
+      if (t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement || t instanceof HTMLSelectElement) return;
+      if (t instanceof HTMLElement && t.isContentEditable) return;
+
+      if (e.key === "?" && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        e.preventDefault();
+        setShortcutsOpen((o) => !o);
+        return;
+      }
+      if (shortcutsOpen) return;
+
+      if ((e.key === "]" || e.key === "[") && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        const list = flatPullsRef.current;
+        const cur = selectedPRRef.current;
+        if (list.length === 0) return;
+        e.preventDefault();
+        let idx: number;
+        if (cur) {
+          const i = list.findIndex((p) => p.number === cur.number && p.repo === cur.repo);
+          if (e.key === "]") {
+            idx = i < 0 ? 0 : Math.min(list.length - 1, i + 1);
+          } else {
+            idx = i < 0 ? 0 : Math.max(0, i - 1);
+          }
+        } else {
+          idx = e.key === "[" ? list.length - 1 : 0;
+        }
+        const next = list[idx];
+        if (next) {
+          setSelectedFile(null);
+          setSelectedPR({ number: next.number, repo: next.repo });
+        }
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [shortcutsOpen]);
+
   // Load repos and user when the main app is active
   useEffect(() => {
     if (appGate !== "ready") return;
     api.getRepos().then(setRepos).catch(() => {});
-    api.getUser().then((u) => setCurrentUser(u.login)).catch(() => {});
+    api.getUser().then((u) => setCurrentUser(u.login || null)).catch(() => {});
   }, [appGate]);
 
   // Initial load: use cache or fetch when the main app is active
@@ -245,6 +366,20 @@ export default function App() {
     setNextPollDeadline(status.nextPoll);
     setRefreshing(status.polling);
     setFixJobs(status.fixJobs);
+    setPollMeta({
+      polling: status.polling,
+      intervalMs: status.intervalMs,
+      baseIntervalMs: status.baseIntervalMs ?? null,
+      estimatedGithubRequestsPerHour: status.estimatedGithubRequestsPerHour ?? null,
+      estimatedPollRequests: status.estimatedPollRequests ?? null,
+      pollBudgetNote: status.pollBudgetNote ?? null,
+      rateLimited: status.rateLimited ?? false,
+      rateLimitResetAt: status.rateLimitResetAt ?? null,
+      rateLimitRemaining: status.rateLimitRemaining ?? null,
+      rateLimitLimit: status.rateLimitLimit ?? null,
+      rateLimitResource: status.rateLimitResource ?? null,
+      lastPollError: status.lastPollError ?? null,
+    });
 
     for (const job of status.fixJobs) {
       const prev = prevFixJobsRef.current.get(job.commentId);
@@ -286,6 +421,24 @@ export default function App() {
     if (appGate !== "ready") return;
     api.getPollStatus().then(applyPollStatus).catch(() => {});
   }, [appGate, applyPollStatus]);
+
+  // While rate-limited, poll-status can change as the reset window advances — refresh periodically.
+  useEffect(() => {
+    if (appGate !== "ready" || !pollMeta.rateLimited) return;
+    const id = window.setInterval(() => {
+      void api.getPollStatus().then(applyPollStatus).catch(() => {});
+    }, 20_000);
+    return () => window.clearInterval(id);
+  }, [appGate, pollMeta.rateLimited, applyPollStatus]);
+
+  // Tick every second so "time until reset" counts down in the sidebar.
+  useEffect(() => {
+    if (!pollMeta.rateLimited || pollMeta.rateLimitResetAt == null) return;
+    const tick = () => setRateLimitNow(Date.now());
+    tick();
+    const id = window.setInterval(tick, 1000);
+    return () => window.clearInterval(id);
+  }, [pollMeta.rateLimited, pollMeta.rateLimitResetAt]);
 
   // Local countdown between server poll-status pushes
   useEffect(() => {
@@ -352,6 +505,7 @@ export default function App() {
   function handleSelectPR(number: number, repo: string) {
     setSelectedFile(null);
     setSelectedPR({ number, repo });
+    setMobileDrawerOpen(false);
   }
 
   async function reloadComments() {
@@ -463,27 +617,79 @@ export default function App() {
           </button>
         </div>
       )}
-      <div className="flex-1 flex overflow-hidden">
+      {!isWide && (
+        <div className="flex shrink-0 items-center justify-between gap-2 border-b border-gray-800 bg-gray-950 px-2 py-1.5 md:hidden">
+          <button
+            type="button"
+            onClick={() => setMobileDrawerOpen(true)}
+            className="rounded px-2 py-1 text-gray-300 hover:bg-gray-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+            aria-label="Open pull request list"
+          >
+            ☰
+          </button>
+          <span className="min-w-0 flex-1 truncate text-center text-xs font-semibold text-white">Code Triage</span>
+          <span className="shrink-0 font-mono text-[10px] text-gray-600" title="Time until next backend poll">
+            {timerText}
+          </span>
+        </div>
+      )}
+      <div className="relative flex flex-1 min-h-0 overflow-hidden">
+        {!isWide && mobileDrawerOpen && (
+          <button
+            type="button"
+            aria-label="Close menu"
+            className="absolute inset-0 z-40 bg-black/60 md:hidden"
+            onClick={() => setMobileDrawerOpen(false)}
+          />
+        )}
         {/* Sidebar */}
-        <div className="w-72 border-r border-gray-800 flex flex-col shrink-0">
-          <div className="px-4 py-2 border-b border-gray-800 flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <img src="/logo.png" alt="Code Triage" className="w-6 h-6 rounded-md" />
-              <h1 className="text-sm font-semibold text-white">Code Triage</h1>
+        <div
+          className={`
+            z-50 flex shrink-0 flex-col border-r border-gray-800 bg-gray-950 shadow-xl transition-[transform,width] duration-200 ease-out
+            max-md:absolute max-md:inset-y-0 max-md:left-0 max-md:w-72 max-md:max-w-[85vw]
+            md:relative md:z-auto md:shadow-none
+            ${!isWide && !mobileDrawerOpen ? "max-md:-translate-x-full" : "max-md:translate-x-0"}
+            ${isWide ? (sidebarCollapsed ? "md:w-0 md:min-w-0 md:overflow-hidden md:border-0 md:p-0" : "md:w-72") : ""}
+          `}
+        >
+          <div className="px-4 py-2 border-b border-gray-800 flex items-center justify-between gap-2 min-w-0">
+            <div className="flex items-center gap-2 min-w-0">
+              <img src="/logo.png" alt="" className="w-6 h-6 shrink-0 rounded-md" />
+              <h1 className="text-sm font-semibold text-white truncate">Code Triage</h1>
             </div>
-            <div className="flex items-center gap-2">
-              <span className="text-xs text-gray-600 font-mono" title="Time until next backend poll">
+            <div className="flex shrink-0 items-center gap-1">
+              {isWide && (
+                <button
+                  type="button"
+                  onClick={() => setSidebarCollapsed((c) => !c)}
+                  className="rounded px-1 text-xs text-gray-500 hover:text-gray-300 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+                  title={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+                  aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+                >
+                  {sidebarCollapsed ? "»" : "«"}
+                </button>
+              )}
+              <span className="text-xs text-gray-600 font-mono max-md:hidden" title="Time until next backend poll">
                 {timerText}
               </span>
               <button
                 type="button"
+                onClick={() => setShortcutsOpen(true)}
+                className="rounded px-1 text-xs text-gray-500 hover:text-gray-300 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+                title="Keyboard shortcuts (?)"
+              >
+                ?
+              </button>
+              <button
+                type="button"
                 onClick={() => void openSettingsModal()}
-                className="text-xs text-gray-500 hover:text-gray-300 transition-colors"
+                className="text-xs text-gray-500 hover:text-gray-300 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 rounded"
                 title="Settings"
               >
                 ⚙
               </button>
               <button
+                type="button"
                 onClick={() => {
                   if ("Notification" in window) {
                     if (Notification.permission === "granted") {
@@ -500,20 +706,79 @@ export default function App() {
                     }
                   }
                 }}
-                className="text-xs text-gray-500 hover:text-gray-300 transition-colors"
+                className="text-xs text-gray-500 hover:text-gray-300 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 rounded"
                 title={`Test notification (permission: ${notifPermission})`}
               >
                 🔔
               </button>
               <button
-                onClick={() => fetchPulls()}
+                type="button"
+                onClick={() => void fetchPulls(false, true)}
                 disabled={refreshing}
-                className="text-xs text-gray-500 hover:text-gray-300 disabled:text-gray-700 transition-colors"
-                title="Refresh now"
+                className="text-xs text-gray-500 hover:text-gray-300 disabled:text-gray-700 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 rounded"
+                title="Refresh lists and reset adaptive poll schedule (repo hot/cold)"
               >
                 {refreshing ? "↻" : "⟳"}
               </button>
             </div>
+          </div>
+          <div className="px-4 py-1 border-b border-gray-800 flex flex-wrap items-center justify-end gap-x-2 gap-y-0.5 text-[10px] text-gray-500 min-h-5">
+            {pollMeta.polling && <span className="text-cyan-400/90">Polling…</span>}
+            {pollMeta.rateLimited && (
+              <span
+                className="text-amber-400/90 max-w-[min(100%,360px)] truncate"
+                title={
+                  [
+                    pollMeta.rateLimitResource ? `${pollMeta.rateLimitResource} quota` : "GitHub API",
+                    pollMeta.rateLimitRemaining != null && pollMeta.rateLimitLimit != null
+                      ? `${pollMeta.rateLimitRemaining}/${pollMeta.rateLimitLimit} requests left in window`
+                      : null,
+                    pollMeta.rateLimitResetAt
+                      ? `Resets in ${formatDurationUntil(pollMeta.rateLimitResetAt, rateLimitNow)} (wall ${formatRateLimitReset(pollMeta.rateLimitResetAt)})`
+                      : null,
+                  ]
+                    .filter(Boolean)
+                    .join(" · ") || "GitHub API rate limit"
+                }
+              >
+                Rate limited
+                {pollMeta.rateLimitResource ? ` (${pollMeta.rateLimitResource})` : ""}
+                {pollMeta.rateLimitRemaining != null && pollMeta.rateLimitLimit != null
+                  ? ` ${pollMeta.rateLimitRemaining}/${pollMeta.rateLimitLimit}`
+                  : ""}
+                {pollMeta.rateLimitResetAt
+                  ? ` · in ${formatDurationUntil(pollMeta.rateLimitResetAt, rateLimitNow)}`
+                  : ""}
+              </span>
+            )}
+            {pollMeta.lastPollError && (
+              <span className="text-red-400/90 max-w-[220px] truncate" title={pollMeta.lastPollError}>
+                {pollMeta.lastPollError}
+              </span>
+            )}
+            {githubUserUnavailable && (
+              <span
+                className="text-amber-400/90 max-w-[min(100%,420px)]"
+                title="GitHub GET /user failed (often rate limited). PR lists stay empty until it succeeds; other tabs may still work."
+              >
+                GitHub user unavailable — PR lists empty until quota recovers
+              </span>
+            )}
+            {pollMeta.estimatedPollRequests != null &&
+              pollMeta.estimatedPollRequests > 0 &&
+              pollMeta.intervalMs > 0 &&
+              pollMeta.estimatedGithubRequestsPerHour != null && (
+                <span
+                  className="text-gray-500 max-w-[min(100%,420px)] truncate"
+                  title={pollMeta.pollBudgetNote ?? undefined}
+                >
+                  ~{pollMeta.estimatedGithubRequestsPerHour} poll req/h · ~{pollMeta.estimatedPollRequests} req/poll ·{" "}
+                  {Math.round(pollMeta.intervalMs / 60000)}m
+                  {pollMeta.baseIntervalMs != null && pollMeta.baseIntervalMs < pollMeta.intervalMs
+                    ? ` (base ${Math.round(pollMeta.baseIntervalMs / 60000)}m)`
+                    : ""}
+                </span>
+              )}
           </div>
           <RepoFilter
             filter={repoFilter}
@@ -553,7 +818,17 @@ export default function App() {
         </div>
 
         {/* Main area */}
-        <div className="flex-1 flex flex-col overflow-hidden">
+        <div className="relative flex min-w-0 flex-1 flex-col overflow-hidden">
+          {isWide && sidebarCollapsed && (
+            <button
+              type="button"
+              className="absolute left-0 top-1/2 z-10 -translate-y-1/2 rounded-r border border-l-0 border-gray-800 bg-gray-900/95 px-1 py-4 text-gray-400 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+              onClick={() => setSidebarCollapsed(false)}
+              aria-label="Expand sidebar"
+            >
+              »
+            </button>
+          )}
           {loadingPR ? (
             <div className="flex-1 flex items-center justify-center text-gray-500">
               Loading...
@@ -576,8 +851,9 @@ export default function App() {
                 ]).map((tab) => (
                   <button
                     key={tab.id}
+                    type="button"
                     onClick={() => setActiveTab(tab.id)}
-                    className={`px-5 py-2 text-sm transition-colors ${
+                    className={`px-5 py-2 text-sm transition-colors rounded-t focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 focus-visible:ring-offset-gray-950 ${
                       activeTab === tab.id
                         ? "text-white border-b-2 border-blue-500 -mb-px"
                         : "text-gray-500 hover:text-gray-300"
@@ -603,6 +879,8 @@ export default function App() {
                   fixJobs={fixJobs}
                   onCommentAction={reloadComments}
                   onFixStarted={(job) => setFixJobs((prev) => [...prev.filter((j) => j.commentId !== job.commentId), job])}
+                  globalModalOpen={shortcutsOpen}
+                  onOpenShortcutsHelp={() => setShortcutsOpen(true)}
                 />
               )}
 
@@ -646,6 +924,8 @@ export default function App() {
         </div>
       </div>
       <FixJobsBanner fixJobs={fixJobs} onJobAction={() => { reloadComments(); }} />
+
+      <KeyboardShortcutsModal open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />
 
       {showSettings && settingsModal && (
         <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/70 p-4">

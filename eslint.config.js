@@ -69,4 +69,12 @@ export default tseslint.config(
       '@typescript-eslint/no-explicit-any': 'warn',
     },
   },
+
+  // shadcn/ui: variant helpers + components in one file
+  {
+    files: ['web/src/components/ui/**/*.{ts,tsx}'],
+    rules: {
+      'react-refresh/only-export-components': 'off',
+    },
+  },
 )

@@ -28,6 +28,20 @@ export interface Config {
   evalPromptAppendByRepo?: Record<string, string>;
   /** Extra `claude` CLI args after `-p` and `--output-format json` (e.g. `["--model","opus"]`). */
   evalClaudeExtraArgs?: string[];
+  /**
+   * After this many days without new triage comments or in-scope open PRs, a repo is polled at
+   * `repoPollColdIntervalMinutes` instead of every `interval`. Set to `0` to disable (always poll all repos each cycle).
+   */
+  repoPollStaleAfterDays?: number;
+  /** Minimum minutes between polls for a “cold” repo. Default 60. */
+  repoPollColdIntervalMinutes?: number;
+  /**
+   * Fraction of GitHub’s remaining hourly quota to reserve for UI/API use (reviewing PRs, loading files, fixes).
+   * Used when stretching the poll interval; default 0.35 (~35%).
+   */
+  pollApiHeadroom?: number;
+  /** When true (default), lengthen the poll interval when many repos are active and quota is tight. */
+  pollRateLimitAware?: boolean;
 }
 
 const DEFAULTS: Config = {
@@ -36,6 +50,10 @@ const DEFAULTS: Config = {
   interval: 1,
   evalConcurrency: 2,
   pollReviewRequested: false,
+  repoPollStaleAfterDays: 7,
+  repoPollColdIntervalMinutes: 60,
+  pollApiHeadroom: 0.35,
+  pollRateLimitAware: true,
 };
 
 export function loadConfig(): Config {

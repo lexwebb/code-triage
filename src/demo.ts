@@ -17,7 +17,7 @@ const DEMO_PULLS = [
     createdAt: new Date(Date.now() - 2 * 86400000).toISOString(),
     updatedAt: new Date(Date.now() - 3600000).toISOString(),
     draft: false, repo: "acme-corp/web-app",
-    checksStatus: "success", openComments: 3, hasHumanApproval: false,
+    checksStatus: "success", openComments: 3, pendingTriage: 1, hasHumanApproval: false,
   },
   {
     number: 87, title: "Migrate database to PostgreSQL 16", author: "lexwebb",
@@ -26,7 +26,7 @@ const DEMO_PULLS = [
     createdAt: new Date(Date.now() - 5 * 86400000).toISOString(),
     updatedAt: new Date(Date.now() - 7200000).toISOString(),
     draft: false, repo: "acme-corp/api-server",
-    checksStatus: "success", openComments: 0, hasHumanApproval: true,
+    checksStatus: "success", openComments: 0, pendingTriage: 0, hasHumanApproval: true,
   },
   {
     number: 215, title: "Fix race condition in WebSocket reconnection", author: "lexwebb",
@@ -35,7 +35,7 @@ const DEMO_PULLS = [
     createdAt: new Date(Date.now() - 86400000).toISOString(),
     updatedAt: new Date(Date.now() - 1800000).toISOString(),
     draft: false, repo: "acme-corp/web-app",
-    checksStatus: "failure", openComments: 1, hasHumanApproval: false,
+    checksStatus: "failure", openComments: 1, pendingTriage: 0, hasHumanApproval: false,
   },
 ];
 
@@ -47,7 +47,7 @@ const DEMO_REVIEW_PULLS = [
     createdAt: new Date(Date.now() - 3 * 86400000).toISOString(),
     updatedAt: new Date(Date.now() - 5400000).toISOString(),
     draft: false, repo: "acme-corp/api-server",
-    checksStatus: "success", openComments: 2, hasHumanApproval: false,
+    checksStatus: "success", openComments: 2, pendingTriage: 2, hasHumanApproval: false,
   },
 ];
 
@@ -192,8 +192,19 @@ export function startDemoServer(port: number): void {
       lastPollWallClockMs: Date.now() - 30_000,
       nextPoll: Date.now() + 30_000,
       intervalMs: 60_000,
+      baseIntervalMs: 60_000,
+      estimatedPollRequests: 6,
+      estimatedGithubRequestsPerHour: 360,
+      pollBudgetNote: null,
       lastPollError: null,
-      rateLimit: { limited: false, resetAt: null },
+      rateLimit: {
+        limited: false,
+        resetAt: null,
+        remaining: null,
+        limit: null,
+        resource: null,
+        updatedAt: 0,
+      },
       fixJobsRunning: 0,
       persistedLastPoll: new Date().toISOString(),
     });
@@ -208,12 +219,24 @@ export function startDemoServer(port: number): void {
       lastPoll: Date.now() - 30000,
       nextPoll: Date.now() + 30000,
       intervalMs: 60000,
+      baseIntervalMs: 60000,
+      estimatedPollRequests: 6,
+      estimatedGithubRequestsPerHour: 360,
+      pollBudgetNote: null,
       polling: false,
       fixJobs: DEMO_FIX_JOBS,
+      rateLimited: false,
+      rateLimitResetAt: null,
+      rateLimitRemaining: null,
+      rateLimitLimit: null,
+      rateLimitResource: null,
+      rateLimitUpdatedAt: 0,
+      lastPollError: null,
     });
   });
 
   // No-op action endpoints for demo
+  addRoute("POST", "/api/actions/clear-repo-poll-schedule", (_req, res) => { json(res, { ok: true }); });
   addRoute("POST", "/api/actions/reply", (_req, res) => { json(res, { success: true, status: "replied" }); });
   addRoute("POST", "/api/actions/resolve", (_req, res) => { json(res, { success: true, status: "replied" }); });
   addRoute("POST", "/api/actions/dismiss", (_req, res) => { json(res, { success: true, status: "dismissed" }); });

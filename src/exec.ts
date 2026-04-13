@@ -38,11 +38,72 @@ const MAX_RETRIES = 3;
 
 let cachedToken: string | null = null;
 
-// Rate limit state — exported so the API server can surface it
-let rateLimitState: { limited: boolean; resetAt: number | null } = { limited: false, resetAt: null };
+/** Snapshot from latest GitHub REST/GraphQL response `X-RateLimit-*` headers (see `applyRateLimitFromResponse`). */
+export interface GitHubRateLimitSnapshot {
+  /** True when quota is exhausted or HTTP 429. */
+  limited: boolean;
+  /** Wall-clock ms (UTC) when the current window resets. */
+  resetAt: number | null;
+  remaining: number | null;
+  limit: number | null;
+  /** e.g. `core`, `graphql` — when GitHub sends `X-RateLimit-Resource`. */
+  resource: string | null;
+  updatedAt: number;
+}
 
-export function getRateLimitState(): { limited: boolean; resetAt: number | null } {
-  return rateLimitState;
+const emptyRateLimitSnapshot = (): GitHubRateLimitSnapshot => ({
+  limited: false,
+  resetAt: null,
+  remaining: null,
+  limit: null,
+  resource: null,
+  updatedAt: 0,
+});
+
+let rateLimitSnapshot: GitHubRateLimitSnapshot = emptyRateLimitSnapshot();
+
+export function getRateLimitState(): GitHubRateLimitSnapshot {
+  return { ...rateLimitSnapshot };
+}
+
+/** Vitest: reset between tests so snapshots do not leak. */
+export function resetRateLimitStateForTests(): void {
+  rateLimitSnapshot = emptyRateLimitSnapshot();
+}
+
+function applyRateLimitFromResponse(response: Response): void {
+  const remainingH = response.headers.get("X-RateLimit-Remaining");
+  const limitH = response.headers.get("X-RateLimit-Limit");
+  const resetH = response.headers.get("X-RateLimit-Reset");
+  const resourceH = response.headers.get("X-RateLimit-Resource");
+  if (remainingH == null && limitH == null && resetH == null) {
+    return;
+  }
+
+  const remaining =
+    remainingH != null && remainingH !== "" && !Number.isNaN(parseInt(remainingH, 10))
+      ? parseInt(remainingH, 10)
+      : null;
+  const limit =
+    limitH != null && limitH !== "" && !Number.isNaN(parseInt(limitH, 10)) ? parseInt(limitH, 10) : null;
+  const resetAt =
+    resetH != null && resetH !== "" && !Number.isNaN(parseInt(resetH, 10))
+      ? parseInt(resetH, 10) * 1000
+      : null;
+
+  const limited =
+    response.status === 429 ||
+    (response.status === 403 && remaining === 0) ||
+    (remaining !== null && remaining <= 0);
+
+  rateLimitSnapshot = {
+    limited,
+    resetAt,
+    remaining,
+    limit,
+    resource: resourceH?.trim() || null,
+    updatedAt: Date.now(),
+  };
 }
 
 // tokenResolver can be overridden by multi-account support (see config.ts accounts)
@@ -52,6 +113,26 @@ export function hasEnvGitHubToken(): boolean {
   return Boolean(process.env.GITHUB_TOKEN?.trim() || process.env.GH_TOKEN?.trim());
 }
 
+/** True in `yarn dev`, `NODE_ENV=development`, or `CODE_TRIAGE_LOG_GITHUB=1`. Off under Vitest (`NODE_ENV=test`). */
+function shouldLogGitHubRequests(): boolean {
+  if (process.env.NODE_ENV === "test") return false;
+  return (
+    process.env.NODE_ENV === "development" ||
+    process.env.npm_lifecycle_event === "dev" ||
+    process.env.CODE_TRIAGE_LOG_GITHUB === "1"
+  );
+}
+
+function formatGithubRequestUrl(input: RequestInfo | URL): string {
+  try {
+    if (typeof input === "string") return input;
+    if (input instanceof URL) return input.href;
+    return input.url;
+  } catch {
+    return String(input);
+  }
+}
+
 /**
  * Default GitHub API token: `GITHUB_TOKEN` / `GH_TOKEN`, then optional config PAT, then `gh auth token`.
  */
@@ -59,10 +140,16 @@ export function resolveGitHubTokenFromSources(configToken?: string): string {
   const env = process.env.GITHUB_TOKEN?.trim() || process.env.GH_TOKEN?.trim();
   if (env) return env;
   if (configToken?.trim()) return configToken.trim();
-  return execFileSync("gh", ["auth", "token"], {
+  const log = shouldLogGitHubRequests();
+  const t0 = log ? performance.now() : 0;
+  const token = execFileSync("gh", ["auth", "token"], {
     encoding: "utf-8",
     timeout: 5000,
   }).trim();
+  if (log) {
+    console.error(`[github-cli] gh auth token ${Math.round(performance.now() - t0)}ms`);
+  }
+  return token;
 }
 
 function defaultTokenResolver(_repo?: string): string {
@@ -77,33 +164,72 @@ export function setTokenResolver(fn: (repo?: string) => string): void {
   tokenResolver = fn;
 }
 
+/**
+ * Group repo paths that share the same resolved token so batched GraphQL never mixes PATs
+ * (see multi-account `config.accounts`).
+ */
+export function partitionRepoPathsByToken(repoPaths: string[]): string[][] {
+  const buckets = new Map<string, string[]>();
+  for (const rp of repoPaths) {
+    const token = tokenResolver(rp);
+    const list = buckets.get(token);
+    if (list) list.push(rp);
+    else buckets.set(token, [rp]);
+  }
+  return Array.from(buckets.values());
+}
+
+/** Like `partitionRepoPathsByToken` but for flat `{ repoPath }` entries (e.g. per-PR rows). */
+export function partitionEntriesByToken<T extends { repoPath: string }>(entries: T[]): T[][] {
+  const buckets = new Map<string, T[]>();
+  for (const e of entries) {
+    const token = tokenResolver(e.repoPath);
+    const list = buckets.get(token);
+    if (list) list.push(e);
+    else buckets.set(token, [e]);
+  }
+  return Array.from(buckets.values());
+}
+
 /** Clears cached PAT and restores default resolution (env → config via `installTokenResolverFromConfig` → `gh auth token`). */
 export function resetTokenResolver(): void {
   cachedToken = null;
   tokenResolver = defaultTokenResolver;
 }
 
-async function waitForRateLimit(response: Response): Promise<void> {
+async function sleepUntilRateLimitReset(response: Response): Promise<void> {
   const resetHeader = response.headers.get("X-RateLimit-Reset");
   const resetAt = resetHeader ? parseInt(resetHeader, 10) * 1000 : Date.now() + 60_000;
   const waitMs = Math.max(resetAt - Date.now() + 1000, 1000);
-  rateLimitState = { limited: true, resetAt };
   await new Promise((resolve) => setTimeout(resolve, waitMs));
-  rateLimitState = { limited: false, resetAt: null };
 }
 
 /**
  * Fetch passed into Octokit — retries 429 before Octokit sees a failure, so tests can stub `fetch`.
+ * Records `X-RateLimit-*` on every response so the UI can show quota / reset (including 403 rate limits).
  */
 async function githubFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  const log = shouldLogGitHubRequests();
+  const t0 = log ? performance.now() : 0;
+  const urlStr = formatGithubRequestUrl(input);
+  const method = (init?.method ?? "GET").toUpperCase();
+
   let response!: Response;
+  let attempts = 0;
   for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+    attempts = attempt + 1;
     response = await globalThis.fetch(input, init);
+    applyRateLimitFromResponse(response);
     if (response.status === 429 && attempt < MAX_RETRIES - 1) {
-      await waitForRateLimit(response);
+      await sleepUntilRateLimitReset(response);
       continue;
     }
     break;
+  }
+  if (log) {
+    const ms = Math.round(performance.now() - t0);
+    const retryNote = attempts > 1 ? ` (${attempts} HTTP attempts)` : "";
+    console.error(`[github-api] ${method} ${urlStr} → ${response.status} ${ms}ms${retryNote}`);
   }
   return response;
 }
@@ -162,10 +288,12 @@ export async function ghGraphQL<T>(query: string, variables: Record<string, unkn
 export async function ghPost<T>(endpoint: string, body: Record<string, unknown>, repo?: string): Promise<T> {
   const octokit = createOctokit(repo);
   const url = endpoint.startsWith("http") ? endpoint : `${GH_API_BASE}${endpoint.startsWith("/") ? "" : "/"}${endpoint}`;
+  // Use `data`, not `body`: @octokit/endpoint treats a top-level `body` option as the JSON payload
+  // but merges it wrong (nested under a `body` key). `data` maps directly to the HTTP JSON body.
   const octoResponse = await octokit.request({
     method: "POST",
     url,
-    body: Object.keys(body).length ? body : undefined,
+    data: Object.keys(body).length ? body : undefined,
   });
   return octoResponse.data as T;
 }

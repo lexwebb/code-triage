@@ -1,57 +1,147 @@
 import { addRoute, json, getRepos, getBody, getPollState, getHealthPayload, setFixJobStatus, clearFixJobStatus, getActiveFixForBranch, getActiveFixForPR, subscribeSse, getListenPort, notifyConfigSaved } from "./server.js";
+import type { RepoInfo } from "./discovery.js";
 import { loadConfig, saveConfig, configExists, type Config } from "./config.js";
-import { loadState, markComment, markCommentWithEvaluation, patchCommentTriage, saveState, addFixJob as addFixJobState, removeFixJob as removeFixJobState, getFixJobs } from "./state.js";
+import { loadState, markComment, markCommentWithEvaluation, patchCommentTriage, saveState, addFixJob as addFixJobState, removeFixJob as removeFixJobState, getFixJobs, getPendingTriageCountsByPr } from "./state.js";
 import { postReply, resolveThread, applyFixWithClaude, evaluateComment, clampEvalConcurrency } from "./actioner.js";
 import { createWorktree, getWorktreePath, getDiffInWorktree, removeWorktree, commitAndPushWorktree } from "./worktree.js";
-import { ghAsync, ghGraphQL, ghPost } from "./exec.js";
+import { ghAsync, ghPost } from "./exec.js";
+import { batchPullPollData, type PullPollData } from "./github-batching.js";
+import { clearRepoPollSchedule } from "./repo-poll-schedule.js";
 
-async function getResolvedCommentIds(repoPath: string, prNumber: number): Promise<Set<number>> {
-  const [owner, repo] = repoPath.split("/");
+const GITHUB_USER_CACHE_MS = 60_000;
+let cachedGitHubUser: { at: number; user: { login: string; avatar_url: string; html_url: string } } | null = null;
 
-  const data = await ghGraphQL<{
-    data: {
-      repository: {
-        pullRequest: {
-          reviewThreads: { nodes: Array<{
-            isResolved: boolean;
-            comments: { nodes: Array<{ databaseId: number }> };
-          }> };
-        };
-      };
-    };
-  }>(
-    `query($owner: String!, $repo: String!, $prNumber: Int!) {
-      repository(owner: $owner, name: $repo) {
-        pullRequest(number: $prNumber) {
-          reviewThreads(first: 100) {
-            nodes {
-              isResolved
-              comments(first: 100) {
-                nodes { databaseId }
-              }
-            }
-          }
-        }
-      }
-    }`,
-    { owner, repo, prNumber },
-  );
-
-  const threads = data.data.repository.pullRequest.reviewThreads.nodes;
-  const resolvedIds = new Set<number>();
-  for (const thread of threads) {
-    if (thread.isResolved) {
-      for (const comment of thread.comments.nodes) {
-        resolvedIds.add(comment.databaseId);
-      }
-    }
+/**
+ * Cached GET /user; on failure (rate limit, network) returns the last successful user (stale-while-error),
+ * or `null` if we have never successfully fetched (avoids 500 on `/api/pulls-bundle` when GitHub throttles).
+ */
+async function getCachedGitHubUser(): Promise<{ login: string; avatar_url: string; html_url: string } | null> {
+  const now = Date.now();
+  if (cachedGitHubUser && now - cachedGitHubUser.at < GITHUB_USER_CACHE_MS) {
+    return cachedGitHubUser.user;
   }
-  return resolvedIds;
+  try {
+    const user = await ghAsync<{ login: string; avatar_url: string; html_url: string }>("/user");
+    cachedGitHubUser = { at: now, user };
+    return user;
+  } catch {
+    if (cachedGitHubUser) {
+      return cachedGitHubUser.user;
+    }
+    return null;
+  }
 }
 
-async function getUsername(): Promise<string> {
-  const user = await ghAsync<{ login: string }>("/user");
-  return user.login;
+async function getUsernameOrNull(): Promise<string | null> {
+  const u = await getCachedGitHubUser();
+  return u?.login ?? null;
+}
+
+interface GhPull {
+  number: number;
+  title: string;
+  user: { login: string; avatar_url: string };
+  head: { ref: string; sha: string };
+  base: { ref: string };
+  html_url: string;
+  created_at: string;
+  updated_at: string;
+  draft: boolean;
+  additions: number;
+  deletions: number;
+  changed_files: number;
+  requested_reviewers: Array<{ login: string; avatar_url: string }>;
+  mergeable_state: string;
+}
+
+interface GhCombinedStatus {
+  state: "success" | "failure" | "pending" | "error";
+}
+
+async function getPrStatus(repoPath: string, sha: string): Promise<"success" | "failure" | "pending"> {
+  try {
+    const status = await ghAsync<GhCombinedStatus>(`/repos/${repoPath}/commits/${sha}/status`);
+    if (status.state === "success") return "success";
+    if (status.state === "failure" || status.state === "error") return "failure";
+  } catch { /* ignore */ }
+  return "pending";
+}
+
+function openTopLevelUnresolvedCount(
+  comments: Array<{ id: number; in_reply_to_id: number | null }>,
+  resolvedIds: Set<number>,
+): number {
+  return comments.filter((c) => c.in_reply_to_id === null && !resolvedIds.has(c.id)).length;
+}
+
+/** One pass per repo: single list of open PRs, then authored + review-requested rows (halves REST vs two endpoints). */
+async function buildPullSidebarLists(targetRepos: RepoInfo[]): Promise<{
+  authored: Array<Record<string, unknown>>;
+  reviewRequested: Array<Record<string, unknown>>;
+  /** True when GET /user failed and we have no cached login (sidebar lists are empty). */
+  githubUserUnavailable?: boolean;
+}> {
+  const username = await getUsernameOrNull();
+  if (username == null) {
+    return { authored: [], reviewRequested: [], githubUserUnavailable: true };
+  }
+  const triageCounts = getPendingTriageCountsByPr();
+  const authored: Array<Record<string, unknown>> = [];
+  const reviewRequested: Array<Record<string, unknown>> = [];
+
+  for (const repoInfo of targetRepos) {
+    try {
+      const pulls = await ghAsync<GhPull[]>(`/repos/${repoInfo.repo}/pulls?state=open`);
+      const myPulls = pulls.filter((pr) => pr.user.login === username);
+      const needsReview = pulls.filter(
+        (pr) =>
+          pr.user.login !== username &&
+          pr.requested_reviewers.some((r) => r.login === username),
+      );
+      const prNums = [...new Set([...myPulls.map((p) => p.number), ...needsReview.map((p) => p.number)])];
+      const pollByPr = prNums.length === 0 ? new Map<number, PullPollData>() : await batchPullPollData(repoInfo.repo, prNums);
+
+      async function buildRow(
+        pr: GhPull,
+        poll: PullPollData | undefined,
+      ): Promise<Record<string, unknown>> {
+        const checksStatus = await getPrStatus(repoInfo.repo, pr.head.sha);
+        const openComments = poll
+          ? openTopLevelUnresolvedCount(poll.comments, poll.resolvedIds)
+          : 0;
+        return {
+          number: pr.number,
+          title: pr.title,
+          author: pr.user.login,
+          authorAvatar: pr.user.avatar_url,
+          branch: pr.head.ref,
+          baseBranch: pr.base.ref,
+          url: pr.html_url,
+          createdAt: pr.created_at,
+          updatedAt: pr.updated_at,
+          draft: pr.draft,
+          repo: repoInfo.repo,
+          checksStatus,
+          openComments,
+          pendingTriage: triageCounts.get(`${repoInfo.repo}:${pr.number}`) ?? 0,
+          hasHumanApproval: poll?.hasHumanApproval ?? false,
+        };
+      }
+
+      const authoredRows = await Promise.all(
+        myPulls.map((pr) => buildRow(pr, pollByPr.get(pr.number))),
+      );
+      const reviewRows = await Promise.all(
+        needsReview.map((pr) => buildRow(pr, pollByPr.get(pr.number))),
+      );
+      authored.push(...authoredRows);
+      reviewRequested.push(...reviewRows);
+    } catch {
+      /* skip repos that fail (e.g., no access) */
+    }
+  }
+
+  return { authored, reviewRequested };
 }
 
 export function toInt(v: unknown, fallback: number): number {
@@ -79,6 +169,10 @@ export function serializeConfigForClient(c: Config): Record<string, unknown> {
     evalPromptAppend: c.evalPromptAppend ?? "",
     evalPromptAppendByRepo: c.evalPromptAppendByRepo ?? {},
     evalClaudeExtraArgs: c.evalClaudeExtraArgs ?? [],
+    repoPollStaleAfterDays: c.repoPollStaleAfterDays ?? 7,
+    repoPollColdIntervalMinutes: c.repoPollColdIntervalMinutes ?? 60,
+    pollApiHeadroom: c.pollApiHeadroom ?? 0.35,
+    pollRateLimitAware: c.pollRateLimitAware !== false,
   };
 }
 
@@ -194,6 +288,34 @@ export function mergeConfigFromBody(body: Record<string, unknown>, previous: Con
     throw new Error("evalClaudeExtraArgs must be an array of strings");
   }
 
+  let repoPollStaleAfterDays: number | undefined;
+  if (body.repoPollStaleAfterDays === undefined || body.repoPollStaleAfterDays === null || body.repoPollStaleAfterDays === "") {
+    repoPollStaleAfterDays = previous.repoPollStaleAfterDays;
+  } else {
+    repoPollStaleAfterDays = Math.max(0, toInt(body.repoPollStaleAfterDays, previous.repoPollStaleAfterDays ?? 7));
+  }
+
+  let repoPollColdIntervalMinutes: number | undefined;
+  if (body.repoPollColdIntervalMinutes === undefined || body.repoPollColdIntervalMinutes === null || body.repoPollColdIntervalMinutes === "") {
+    repoPollColdIntervalMinutes = previous.repoPollColdIntervalMinutes;
+  } else {
+    repoPollColdIntervalMinutes = Math.max(1, toInt(body.repoPollColdIntervalMinutes, previous.repoPollColdIntervalMinutes ?? 60));
+  }
+
+  let pollApiHeadroom: number | undefined;
+  if (body.pollApiHeadroom === undefined || body.pollApiHeadroom === null || body.pollApiHeadroom === "") {
+    pollApiHeadroom = previous.pollApiHeadroom ?? 0.35;
+  } else {
+    const h = typeof body.pollApiHeadroom === "number" ? body.pollApiHeadroom : parseFloat(String(body.pollApiHeadroom));
+    if (!Number.isFinite(h) || h < 0 || h > 0.95) throw new Error("pollApiHeadroom must be between 0 and 0.95");
+    pollApiHeadroom = h;
+  }
+
+  const pollRateLimitAware =
+    typeof body.pollRateLimitAware === "boolean"
+      ? body.pollRateLimitAware
+      : (previous.pollRateLimitAware !== false);
+
   return {
     root,
     port,
@@ -207,6 +329,10 @@ export function mergeConfigFromBody(body: Record<string, unknown>, previous: Con
     evalPromptAppend,
     evalPromptAppendByRepo,
     evalClaudeExtraArgs,
+    repoPollStaleAfterDays,
+    repoPollColdIntervalMinutes,
+    pollApiHeadroom,
+    pollRateLimitAware,
   };
 }
 
@@ -218,58 +344,6 @@ function requireRepo(query: URLSearchParams): string {
     throw new Error(`Repo "${repo}" is not tracked`);
   }
   return repo;
-}
-
-interface GhPull {
-  number: number;
-  title: string;
-  user: { login: string; avatar_url: string };
-  head: { ref: string; sha: string };
-  base: { ref: string };
-  html_url: string;
-  created_at: string;
-  updated_at: string;
-  draft: boolean;
-  additions: number;
-  deletions: number;
-  changed_files: number;
-  requested_reviewers: Array<{ login: string; avatar_url: string }>;
-  mergeable_state: string;
-}
-
-interface GhCombinedStatus {
-  state: "success" | "failure" | "pending" | "error";
-}
-
-async function getPrStatus(repoPath: string, sha: string): Promise<"success" | "failure" | "pending"> {
-  try {
-    const status = await ghAsync<GhCombinedStatus>(`/repos/${repoPath}/commits/${sha}/status`);
-    if (status.state === "success") return "success";
-    if (status.state === "failure" || status.state === "error") return "failure";
-  } catch { /* ignore */ }
-  return "pending";
-}
-
-async function getOpenCommentCount(repoPath: string, prNumber: number): Promise<number> {
-  const resolvedIds = await getResolvedCommentIds(repoPath, prNumber);
-  try {
-    interface GhComment { id: number; user: { login: string }; in_reply_to_id: number | null; }
-    const comments = await ghAsync<GhComment[]>(`/repos/${repoPath}/pulls/${prNumber}/comments`);
-    return comments.filter((c) => c.in_reply_to_id === null && !resolvedIds.has(c.id)).length;
-  } catch {
-    return 0;
-  }
-}
-
-async function hasHumanApproval(repoPath: string, prNumber: number): Promise<boolean> {
-  try {
-    interface GhReview { user: { login: string; type: string }; state: string; }
-    const reviews = await ghAsync<GhReview[]>(`/repos/${repoPath}/pulls/${prNumber}/reviews`);
-    // A human approval is one where user.type is "User" (not "Bot") and state is APPROVED
-    return reviews.some((r) => r.state === "APPROVED" && !r.user.login.includes("[bot]"));
-  } catch {
-    return false;
-  }
 }
 
 export function registerRoutes(): void {
@@ -302,7 +376,11 @@ export function registerRoutes(): void {
 
   // GET /api/user
   addRoute("GET", "/api/user", async (_req, res) => {
-    const user = await ghAsync<{ login: string; avatar_url: string; html_url: string }>("/user");
+    const user = await getCachedGitHubUser();
+    if (!user) {
+      json(res, { login: "", avatarUrl: "", url: "", degraded: true });
+      return;
+    }
     json(res, { login: user.login, avatarUrl: user.avatar_url, url: user.html_url });
   });
 
@@ -311,99 +389,34 @@ export function registerRoutes(): void {
     json(res, getRepos());
   });
 
-  // GET /api/pulls?repo=owner/repo (optional — if omitted, returns all)
-  addRoute("GET", "/api/pulls", async (_req, res, _params, query) => {
-    const username = await getUsername();
+  // GET /api/pulls-bundle?repo= — single round-trip for sidebar (authored + review-requested; one GET pulls per repo)
+  addRoute("GET", "/api/pulls-bundle", async (_req, res, _params, query) => {
     const repoFilter = query.get("repo");
     const targetRepos = repoFilter
       ? getRepos().filter((r) => r.repo === repoFilter)
       : getRepos();
+    const lists = await buildPullSidebarLists(targetRepos);
+    json(res, lists);
+  });
 
-    const allPulls: Array<Record<string, unknown>> = [];
-
-    for (const repoInfo of targetRepos) {
-      try {
-        const pulls = await ghAsync<GhPull[]>(`/repos/${repoInfo.repo}/pulls?state=open`);
-        const myPulls = pulls.filter((pr) => pr.user.login === username);
-
-        for (const pr of myPulls) {
-          const [checksStatus, openComments, approved] = await Promise.all([
-            getPrStatus(repoInfo.repo, pr.head.sha),
-            getOpenCommentCount(repoInfo.repo, pr.number),
-            hasHumanApproval(repoInfo.repo, pr.number),
-          ]);
-          allPulls.push({
-            number: pr.number,
-            title: pr.title,
-            author: pr.user.login,
-            authorAvatar: pr.user.avatar_url,
-            branch: pr.head.ref,
-            baseBranch: pr.base.ref,
-            url: pr.html_url,
-            createdAt: pr.created_at,
-            updatedAt: pr.updated_at,
-            draft: pr.draft,
-            repo: repoInfo.repo,
-            checksStatus,
-            openComments,
-            hasHumanApproval: approved,
-          });
-        }
-      } catch {
-        // Skip repos that fail (e.g., no access)
-      }
-    }
-
-    json(res, allPulls);
+  // GET /api/pulls?repo=owner/repo (optional — if omitted, returns all)
+  addRoute("GET", "/api/pulls", async (_req, res, _params, query) => {
+    const repoFilter = query.get("repo");
+    const targetRepos = repoFilter
+      ? getRepos().filter((r) => r.repo === repoFilter)
+      : getRepos();
+    const { authored } = await buildPullSidebarLists(targetRepos);
+    json(res, authored);
   });
 
   // GET /api/pulls/review-requested?repo=owner/repo (optional)
   addRoute("GET", "/api/pulls/review-requested", async (_req, res, _params, query) => {
-    const username = await getUsername();
     const repoFilter = query.get("repo");
     const targetRepos = repoFilter
       ? getRepos().filter((r) => r.repo === repoFilter)
       : getRepos();
-
-    const reviewPulls: Array<Record<string, unknown>> = [];
-
-    for (const repoInfo of targetRepos) {
-      try {
-        const pulls = await ghAsync<GhPull[]>(`/repos/${repoInfo.repo}/pulls?state=open`);
-        const needsReview = pulls.filter((pr) =>
-          pr.user.login !== username &&
-          pr.requested_reviewers.some((r) => r.login === username),
-        );
-
-        for (const pr of needsReview) {
-          const [checksStatus, openComments, approved] = await Promise.all([
-            getPrStatus(repoInfo.repo, pr.head.sha),
-            getOpenCommentCount(repoInfo.repo, pr.number),
-            hasHumanApproval(repoInfo.repo, pr.number),
-          ]);
-          reviewPulls.push({
-            number: pr.number,
-            title: pr.title,
-            author: pr.user.login,
-            authorAvatar: pr.user.avatar_url,
-            branch: pr.head.ref,
-            baseBranch: pr.base.ref,
-            url: pr.html_url,
-            createdAt: pr.created_at,
-            updatedAt: pr.updated_at,
-            draft: pr.draft,
-            repo: repoInfo.repo,
-            checksStatus,
-            openComments,
-            hasHumanApproval: approved,
-          });
-        }
-      } catch {
-        // Skip repos that fail
-      }
-    }
-
-    json(res, reviewPulls);
+    const { reviewRequested } = await buildPullSidebarLists(targetRepos);
+    json(res, reviewRequested);
   });
 
   // GET /api/pulls/:number?repo=owner/repo
@@ -502,22 +515,10 @@ export function registerRoutes(): void {
     const repo = requireRepo(query);
     const prNumber = parseInt(params.number, 10);
 
-    interface GhComment {
-      id: number;
-      user: { login: string; avatar_url: string };
-      path: string;
-      line: number | null;
-      original_line: number | null;
-      diff_hunk: string;
-      body: string;
-      created_at: string;
-      in_reply_to_id: number | null;
-    }
-
-    const [comments, resolvedIds] = await Promise.all([
-      ghAsync<GhComment[]>(`/repos/${repo}/pulls/${prNumber}/comments`),
-      getResolvedCommentIds(repo, prNumber),
-    ]);
+    const pollByPr = await batchPullPollData(repo, [prNumber]);
+    const poll = pollByPr.get(prNumber);
+    const comments = poll?.comments ?? [];
+    const resolvedIds = poll?.resolvedIds ?? new Set<number>();
 
     const state = loadState();
 
@@ -526,13 +527,14 @@ export function registerRoutes(): void {
       const record = state.comments[stateKey];
       return {
         id: c.id,
+        htmlUrl: c.html_url ?? "",
         author: c.user.login,
-        authorAvatar: c.user.avatar_url,
+        authorAvatar: c.user.avatar_url ?? "",
         path: c.path,
         line: c.line || c.original_line || 0,
         diffHunk: c.diff_hunk,
         body: c.body,
-        createdAt: c.created_at,
+        createdAt: c.created_at ?? "",
         inReplyToId: c.in_reply_to_id ?? null,
         isResolved: resolvedIds.has(c.id),
         evaluation: record?.evaluation ?? null,
@@ -602,6 +604,12 @@ export function registerRoutes(): void {
     } catch (err) {
       json(res, { localSha: "unknown", remoteSha: "unknown", behind: 0, checkedAt: Date.now(), error: (err as Error).message });
     }
+  });
+
+  // POST /api/actions/clear-repo-poll-schedule — wipe `repo_poll` so the next CLI poll recomputes adaptive hot/cold
+  addRoute("POST", "/api/actions/clear-repo-poll-schedule", async (_req, res) => {
+    clearRepoPollSchedule();
+    json(res, { ok: true });
   });
 
   // POST /api/actions/reply
@@ -895,12 +903,19 @@ export function registerRoutes(): void {
 
   // POST /api/actions/review — submit a PR review (approve or request changes)
   addRoute("POST", "/api/actions/review", async (req, res) => {
-    const body = getBody<{ repo: string; prNumber: number; event: "APPROVE" | "REQUEST_CHANGES" | "COMMENT"; body?: string }>(req);
+    const parsed = getBody<{ repo: string; prNumber: number; event: "APPROVE" | "REQUEST_CHANGES" | "COMMENT"; body?: string }>(req);
     try {
-      await ghPost(`/repos/${body.repo}/pulls/${body.prNumber}/reviews`, {
-        event: body.event,
-        body: body.body || "",
-      });
+      const reviewText = typeof parsed.body === "string" ? parsed.body.trim() : "";
+      if (parsed.event !== "APPROVE" && reviewText.length === 0) {
+        json(res, { error: "Review comment body is required for this action." }, 400);
+        return;
+      }
+      // Omit `body` when empty for APPROVE — GitHub rejects blank `body` on create-review.
+      const payload: Record<string, unknown> = { event: parsed.event };
+      if (reviewText.length > 0) {
+        payload.body = reviewText;
+      }
+      await ghPost(`/repos/${parsed.repo}/pulls/${parsed.prNumber}/reviews`, payload);
       json(res, { success: true });
     } catch (err) {
       json(res, { error: `Review failed: ${(err as Error).message}` }, 500);

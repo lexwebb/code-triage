@@ -54,6 +54,11 @@ function ensureSchema(raw: Database.Database): void {
       worktree_path TEXT NOT NULL,
       started_at TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS repo_poll (
+      repo TEXT PRIMARY KEY,
+      last_activity_ms INTEGER NOT NULL,
+      last_poll_ms INTEGER NOT NULL
+    );
   `);
   raw.prepare("INSERT OR IGNORE INTO meta (id, last_poll) VALUES (1, NULL)").run();
   migrateCommentsColumns(raw);

@@ -25,6 +25,18 @@ export default function Comment({ comment, compact }: CommentProps) {
           {comment.author}
         </span>
         <span className="text-gray-500">{timeAgo}</span>
+        {comment.htmlUrl && (
+          <a
+            href={comment.htmlUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="ml-auto shrink-0 text-blue-400/90 hover:text-blue-300 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 rounded px-0.5"
+            title="Open comment on GitHub"
+            onClick={(e) => e.stopPropagation()}
+          >
+            GitHub ↗
+          </a>
+        )}
       </div>
       <div className="px-3 py-2 text-xs text-gray-300 leading-relaxed markdown-body">
         <ReactMarkdown

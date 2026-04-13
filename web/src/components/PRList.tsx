@@ -58,6 +58,7 @@ export default function PRList({ pulls, selectedPR, onSelectPR, showRepo }: PRLi
         const isSelected = selectedPR?.number === pr.number && selectedPR?.repo === pr.repo;
         const mergeReady = pr.checksStatus === "success" && pr.openComments === 0 && pr.hasHumanApproval;
         const failed = pr.checksStatus === "failure";
+        const pendingTriage = pr.pendingTriage ?? 0;
 
         let bgClass = "";
         if (isSelected) {
@@ -71,15 +72,24 @@ export default function PRList({ pulls, selectedPR, onSelectPR, showRepo }: PRLi
         return (
           <button
             key={key}
+            type="button"
             onClick={() => onSelectPR(pr.number, pr.repo)}
-            className={`text-left px-4 py-3 border-b border-gray-800 hover:bg-gray-800/50 transition-colors ${bgClass}`}
+            className={`text-left px-4 py-3 border-b border-gray-800 hover:bg-gray-800/50 transition-colors rounded-none focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-inset ${bgClass}`}
           >
             <div className="flex items-center justify-between">
               <span className="text-gray-500 text-xs font-mono">#{pr.number}</span>
               <span className="flex items-center gap-1.5">
                 {pr.openComments > 0 && (
-                  <span className="bg-orange-500/20 text-orange-400 text-xs px-1.5 py-0.5 rounded-full" title={`${pr.openComments} open comment${pr.openComments !== 1 ? "s" : ""}`}>
+                  <span className="bg-orange-500/20 text-orange-400 text-xs px-1.5 py-0.5 rounded-full" title={`${pr.openComments} open thread${pr.openComments !== 1 ? "s" : ""} (GitHub)`}>
                     {pr.openComments}
+                  </span>
+                )}
+                {pendingTriage > 0 && (
+                  <span
+                    className="bg-amber-500/20 text-amber-300 text-xs px-1.5 py-0.5 rounded-full tabular-nums"
+                    title={`${pendingTriage} pending in local triage (not dismissed / replied / fixed)`}
+                  >
+                    {pendingTriage}
                   </span>
                 )}
                 <StatusIcon pr={pr} />

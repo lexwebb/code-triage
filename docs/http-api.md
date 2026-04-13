@@ -46,6 +46,7 @@ The CLI embeds an HTTP server (default port **3100**, configurable). All routes 
 | `/api/actions/fix-discard` | `branch`, optional `repo`, `commentId` | Remove worktree; clear fix status if `commentId` set. |
 | `/api/actions/review` | `repo`, `prNumber`, `event` (`APPROVE` \| `REQUEST_CHANGES` \| `COMMENT`), optional `body` | Submit PR review. |
 | `/api/actions/comment` | `repo`, `prNumber`, `commitId`, `path`, `line`, `side`, `body` | Create a new review line comment. |
+| `/api/actions/clear-repo-poll-schedule` | _(empty)_ | Deletes SQLite `repo_poll` rows so the **CLI poller** recomputes adaptive hot/cold on the next cycle. Used by the web refresh control. |
 
 ## Errors
 

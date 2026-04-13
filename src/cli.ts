@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 import { parseArgs } from "util";
-import { execSync } from "child_process";
+import { execSync, execFileSync } from "child_process";
 import { loadState, saveState, isNewComment, getCommentsByStatus, compactCommentHistory } from "./state.js";
-import { fetchNewComments } from "./poller.js";
+import { fetchNewComments, fetchNewCommentsBatch, getGitHubLogin } from "./poller.js";
 import { notifyNewComments } from "./notifier.js";
 import { analyzeComments, clampEvalConcurrency, killAllChildren } from "./actioner.js";
 import { cleanupAllWorktrees, pruneOrphanedWorktrees } from "./worktree.js";
-import { setTokenResolver, resolveGitHubTokenFromSources, hasEnvGitHubToken } from "./exec.js";
+import { setTokenResolver, resolveGitHubTokenFromSources, hasEnvGitHubToken, getRateLimitState } from "./exec.js";
 import {
   enableRawMode,
   registerHotkeys,
@@ -18,7 +18,10 @@ import {
 } from "./terminal.js";
 import { startServer, updateRepos, updatePollState, triggerTestNotification, sseBroadcast, setConfigSavedHandler } from "./server.js";
 import { discoverRepos, type RepoInfo } from "./discovery.js";
+import { filterRepoPathsWithPushAccess } from "./github-batching.js";
 import { loadConfig, saveConfig, configExists, type Config } from "./config.js";
+import { computeEffectivePollIntervalMs, estimatePollRequestCount } from "./poll-rate-budget.js";
+import { recordPollOutcomes, selectReposToPoll } from "./repo-poll-schedule.js";
 
 const { values: flags } = parseArgs({
   options: {
@@ -78,10 +81,10 @@ if (flags.demo) {
   await new Promise(() => {});
 }
 
-// Check required CLI tools
+// Check required CLI tools (avoid Unix `which` — it is not available in Windows cmd.exe)
 function checkDependency(cmd: string, helpUrl: string): void {
   try {
-    execSync(`which ${cmd}`, { stdio: "pipe" });
+    execFileSync(cmd, ["--version"], { stdio: "pipe" });
   } catch {
     console.error(`\n  Error: '${cmd}' is not installed or not in PATH.`);
     console.error(`  Install it from: ${helpUrl}\n`);
@@ -185,9 +188,20 @@ function getRoot(): string {
   return flags.root || loadConfig().root;
 }
 
+/** Drops discovered repos where the GitHub token cannot push (avoids polling read-only / unrelated clones). */
+async function filterReposToPushAccess(repoList: RepoInfo[]): Promise<RepoInfo[]> {
+  if (repoList.length === 0) return repoList;
+  const allowed = new Set(await filterRepoPathsWithPushAccess(repoList.map((r) => r.repo)));
+  const skipped = repoList.length - allowed.size;
+  if (skipped > 0) {
+    console.log(`  Skipping ${skipped} repo(s) without push access (read-only or no access).`);
+  }
+  return repoList.filter((r) => allowed.has(r.repo));
+}
+
 // CLI flags override config
 const port = flags.port ? parseInt(flags.port, 10) : config.port;
-let intervalMs = (flags.interval ? parseInt(flags.interval, 10) : config.interval) * 60 * 1000;
+let baseIntervalMs = (flags.interval ? parseInt(flags.interval, 10) : config.interval) * 60 * 1000;
 const dryRun = flags["dry-run"]!;
 let evalConcurrency = clampEvalConcurrency(
   flags["eval-concurrency"] ? parseInt(flags["eval-concurrency"]!, 10) : (config.evalConcurrency ?? 2),
@@ -217,6 +231,14 @@ if (flags.repo) {
   }
 }
 
+repos = await filterReposToPushAccess(repos);
+if (repos.length === 0 && (flags.repo || configExists())) {
+  console.error(
+    "No GitHub repositories with push access. Remove read-only clones from your repos directory, or use a token with write access.",
+  );
+  process.exit(1);
+}
+
 function openBrowser(): void {
   const url = `http://localhost:${port}`;
   try {
@@ -233,11 +255,11 @@ if (flags.open) {
 }
 
 console.log(`code-triage started`);
-console.log(`  Repos: ${repos.length}`);
+console.log(`  Repos (push access): ${repos.length}`);
 for (const r of repos) {
   console.log(`    ${r.repo}`);
 }
-console.log(`  Interval: ${intervalMs / 60000}m`);
+console.log(`  Base poll interval: ${baseIntervalMs / 60000}m (may stretch when quota is tight)`);
 console.log(`  Dry run: ${dryRun}`);
 console.log(`  Eval concurrency: ${evalConcurrency}`);
 console.log(`  Poll review-requested PRs: ${pollReviewRequested}`);
@@ -261,17 +283,35 @@ let running = false;
 let shuttingDown = false;
 let pollTimer: ReturnType<typeof setTimeout> | null = null;
 
-function schedulePoll(): void {
+function schedulePoll(reposPolledCount?: number): void {
+  const n = reposPolledCount ?? repos.length;
+  const headroom = config.pollApiHeadroom ?? 0.35;
+  const rateAware = config.pollRateLimitAware !== false;
+  let effectiveMs = baseIntervalMs;
+  let est = estimatePollRequestCount(n);
+  let note: string | null = null;
+  if (rateAware && n > 0) {
+    const r = computeEffectivePollIntervalMs(baseIntervalMs, n, getRateLimitState(), Date.now(), headroom);
+    effectiveMs = r.intervalMs;
+    est = r.estimatedRequestsPerPoll;
+    note = r.budgetReason;
+  }
   if (pollTimer) clearTimeout(pollTimer);
-  setNextPollTime(intervalMs);
-  const nextPoll = Date.now() + intervalMs;
-  updatePollState({ nextPoll, intervalMs });
-  pollTimer = setTimeout(poll, intervalMs);
+  setNextPollTime(effectiveMs);
+  const nextPoll = Date.now() + effectiveMs;
+  updatePollState({
+    nextPoll,
+    intervalMs: effectiveMs,
+    baseIntervalMs,
+    estimatedPollRequests: est,
+    pollBudgetNote: note,
+  });
+  pollTimer = setTimeout(poll, effectiveMs);
 }
 
-function applyConfigReload(): void {
+async function applyConfigReload(): Promise<void> {
   config = loadConfig();
-  intervalMs = config.interval * 60 * 1000;
+  baseIntervalMs = config.interval * 60 * 1000;
   evalConcurrency = clampEvalConcurrency(config.evalConcurrency ?? 2);
   pollReviewRequested = config.pollReviewRequested === true;
   commentRetentionDays = config.commentRetentionDays ?? 0;
@@ -280,7 +320,8 @@ function applyConfigReload(): void {
     const rootPath = getRoot();
     console.log(`\n  Re-discovering repos under ${rootPath}...`);
     repos = discoverRepos(rootPath);
-    console.log(`  Found ${repos.length} repo(s).`);
+    repos = await filterReposToPushAccess(repos);
+    console.log(`  Found ${repos.length} repo(s) with push access.`);
     for (const r of repos) {
       console.log(`    ${r.repo}`);
     }
@@ -291,7 +332,7 @@ function applyConfigReload(): void {
       if (repoInfo.localPath) pruneOrphanedWorktrees(repoInfo.localPath, activeJobs);
     }
   }
-  schedulePoll();
+  schedulePoll(repos.length);
 }
 
 setConfigSavedHandler(applyConfigReload);
@@ -308,32 +349,82 @@ async function poll(): Promise<void> {
   }
   clearCountdown();
 
+  let reposPolledCount = 0;
   try {
     const state = loadState();
-    setStatus(`Polling ${repos.length} repo(s)...`);
+    const allRepoPaths = repos.map((r) => r.repo);
+    const staleDays = config.repoPollStaleAfterDays ?? 7;
+    const useAdaptive = !flags.repo && staleDays > 0;
+    const reposToPoll = useAdaptive
+      ? selectReposToPoll(allRepoPaths, Date.now(), {
+          staleAfterDays: staleDays,
+          coldIntervalMinutes: config.repoPollColdIntervalMinutes ?? 60,
+        })
+      : allRepoPaths;
+    reposPolledCount = reposToPoll.length;
+    if (useAdaptive && reposToPoll.length < allRepoPaths.length) {
+      setStatus(`Polling ${reposToPoll.length} of ${allRepoPaths.length} repo(s) (adaptive)…`);
+    } else {
+      setStatus(`Polling ${reposToPoll.length} repo(s)...`);
+    }
 
-    for (const repoInfo of repos) {
-      try {
-        const { comments, pullsByNumber } = await fetchNewComments(
-          repoInfo.repo,
-          (id) => isNewComment(state, id, repoInfo.repo),
-          pollReviewRequested,
-        );
+    const githubLogin = await getGitHubLogin();
+    const pollOutcomes: Array<{ repo: string; hadActivity: boolean }> = [];
+    try {
+      const batch = await fetchNewCommentsBatch(
+        reposToPoll,
+        (repo, id) => isNewComment(state, id, repo),
+        pollReviewRequested,
+        githubLogin,
+      );
+      for (const repoInfo of repos) {
+        if (!reposToPoll.includes(repoInfo.repo)) continue;
+        try {
+          const { comments, pullsByNumber } = batch.get(repoInfo.repo) ?? {
+            comments: [],
+            pullsByNumber: {},
+          };
+          const hadActivity = comments.length > 0;
+          pollOutcomes.push({ repo: repoInfo.repo, hadActivity });
 
-        if (comments.length > 0) {
-          notifyNewComments(comments, pullsByNumber);
-          await analyzeComments(comments, pullsByNumber, state, repoInfo.repo, dryRun, evalConcurrency);
+          if (comments.length > 0) {
+            notifyNewComments(comments, pullsByNumber);
+            await analyzeComments(comments, pullsByNumber, state, repoInfo.repo, dryRun, evalConcurrency);
+          }
+        } catch (err) {
+          console.error(`\n  Error processing ${repoInfo.repo}: ${(err as Error).message}`);
         }
-      } catch (err) {
-        console.error(`\n  Error polling ${repoInfo.repo}: ${(err as Error).message}`);
+      }
+    } catch (err) {
+      console.error(`\n  Batch poll failed: ${(err as Error).message}`);
+      for (const repoInfo of repos) {
+        if (!reposToPoll.includes(repoInfo.repo)) continue;
+        try {
+          const { comments, pullsByNumber } = await fetchNewComments(
+            repoInfo.repo,
+            (id) => isNewComment(state, id, repoInfo.repo),
+            pollReviewRequested,
+            githubLogin,
+          );
+          const hadActivity = comments.length > 0;
+          pollOutcomes.push({ repo: repoInfo.repo, hadActivity });
+          if (comments.length > 0) {
+            notifyNewComments(comments, pullsByNumber);
+            await analyzeComments(comments, pullsByNumber, state, repoInfo.repo, dryRun, evalConcurrency);
+          }
+        } catch (e2) {
+          console.error(`\n  Error polling ${repoInfo.repo}: ${(e2 as Error).message}`);
+        }
       }
     }
+
+    recordPollOutcomes(pollOutcomes, Date.now());
 
     state.lastPoll = new Date().toISOString();
     saveState(state);
 
     const now = new Date().toLocaleTimeString();
-    setStatus(`[${now}] Analyzed ${repos.length} repo(s).`);
+    setStatus(`[${now}] Analyzed ${reposToPoll.length} of ${allRepoPaths.length} repo(s).`);
     updatePollState({ lastPoll: Date.now(), polling: false, lastPollError: null });
     sseBroadcast("poll", { ok: true, at: Date.now() });
     if (Number.isFinite(commentRetentionDays) && commentRetentionDays > 0) {
@@ -349,7 +440,7 @@ async function poll(): Promise<void> {
 
   running = false;
   setProcessing(false);
-  schedulePoll();
+  schedulePoll(reposPolledCount);
 }
 
 async function listPRs(): Promise<void> {
@@ -358,13 +449,19 @@ async function listPRs(): Promise<void> {
   setProcessing(true);
 
   try {
+    const githubLogin = await getGitHubLogin();
+    const state = loadState();
+    const batch = await fetchNewCommentsBatch(
+      repos.map((r) => r.repo),
+      (repo, id) => isNewComment(state, id, repo),
+      pollReviewRequested,
+      githubLogin,
+    );
     for (const repoInfo of repos) {
-      const state = loadState();
-      const { comments, pullsByNumber } = await fetchNewComments(
-        repoInfo.repo,
-        (id) => isNewComment(state, id, repoInfo.repo),
-        pollReviewRequested,
-      );
+      const { comments, pullsByNumber } = batch.get(repoInfo.repo) ?? {
+        comments: [],
+        pullsByNumber: {},
+      };
 
       const prNumbers = Object.keys(pullsByNumber);
       if (prNumbers.length === 0) continue;
@@ -386,7 +483,7 @@ async function listPRs(): Promise<void> {
   setProcessing(false);
 }
 
-function rediscover(): void {
+async function rediscover(): Promise<void> {
   if (flags.repo) {
     console.log("\n  Single-repo mode, skipping discovery.\n");
     return;
@@ -395,7 +492,8 @@ function rediscover(): void {
   const rootPath = getRoot();
   console.log("\n  Re-discovering repos...");
   repos = discoverRepos(rootPath);
-  console.log(`  Found ${repos.length} repo(s).`);
+  repos = await filterReposToPushAccess(repos);
+  console.log(`  Found ${repos.length} repo(s) with push access.`);
   for (const r of repos) {
     console.log(`    ${r.repo}`);
   }
@@ -436,7 +534,7 @@ process.on("SIGTERM", shutdown);
 registerHotkeys([
   { key: "r", label: "Refresh", handler: () => { poll(); } },
   { key: "o", label: "Open UI", handler: openBrowser },
-  { key: "d", label: "Discover", handler: rediscover },
+  { key: "d", label: "Discover", handler: () => { void rediscover().catch((e) => console.error(e)); } },
   { key: "c", label: "Clear state", handler: clearState },
   { key: "s", label: "Status", handler: () => { printStatus(); } },
   { key: "p", label: "List PRs", handler: () => { listPRs(); } },

@@ -7,6 +7,8 @@ export interface User {
   login: string;
   avatarUrl: string;
   url: string;
+  /** GitHub GET /user failed with no cached login (e.g. rate limited). */
+  degraded?: boolean;
 }
 
 export interface PullRequest {
@@ -23,6 +25,8 @@ export interface PullRequest {
   repo: string;
   checksStatus: "success" | "failure" | "pending";
   openComments: number;
+  /** Local SQLite rows still `pending` (not replied/dismissed/fixed), excluding active snoozes. */
+  pendingTriage?: number;
   hasHumanApproval: boolean;
 }
 
@@ -58,6 +62,8 @@ export interface CommentEvaluation {
 
 export interface ReviewComment {
   id: number;
+  /** GitHub permalink for this review comment (when provided by API). */
+  htmlUrl?: string;
   author: string;
   authorAvatar: string;
   path: string;

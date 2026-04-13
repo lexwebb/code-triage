@@ -1,5 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ghAsync, hasEnvGitHubToken, resolveGitHubTokenFromSources, setTokenResolver } from "./exec.js";
+import {
+  getRateLimitState,
+  ghAsync,
+  hasEnvGitHubToken,
+  resetRateLimitStateForTests,
+  resolveGitHubTokenFromSources,
+  setTokenResolver,
+} from "./exec.js";
 
 beforeEach(() => {
   setTokenResolver(() => "test-token");
@@ -11,6 +18,7 @@ afterEach(() => {
   delete process.env.GITHUB_TOKEN;
   delete process.env.GH_TOKEN;
   vi.restoreAllMocks();
+  resetRateLimitStateForTests();
 });
 
 describe("ghAsync", () => {
@@ -77,7 +85,12 @@ describe("ghAsync", () => {
         .mockResolvedValueOnce(
           new Response(JSON.stringify({ ok: true }), {
             status: 200,
-            headers: { "Content-Type": "application/json" },
+            headers: {
+              "Content-Type": "application/json",
+              "X-RateLimit-Remaining": "4999",
+              "X-RateLimit-Limit": "5000",
+              "X-RateLimit-Reset": String(Math.floor(Date.now() / 1000) + 3600),
+            },
           }),
         ),
     );
@@ -86,6 +99,52 @@ describe("ghAsync", () => {
     const out = await p;
     expect(out).toEqual({ ok: true });
     expect(vi.mocked(fetch)).toHaveBeenCalledTimes(2);
+  });
+
+  it("records X-RateLimit-* on successful responses", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ login: "u" }), {
+          status: 200,
+          headers: {
+            "Content-Type": "application/json",
+            "X-RateLimit-Remaining": "100",
+            "X-RateLimit-Limit": "5000",
+            "X-RateLimit-Reset": String(Math.floor(Date.now() / 1000) + 3600),
+            "X-RateLimit-Resource": "core",
+          },
+        }),
+      ),
+    );
+    await ghAsync<{ login: string }>("/user");
+    const s = getRateLimitState();
+    expect(s.remaining).toBe(100);
+    expect(s.limit).toBe(5000);
+    expect(s.resource).toBe("core");
+    expect(s.limited).toBe(false);
+  });
+
+  it("marks limited and keeps snapshot when GitHub returns 403 exhausted quota", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ message: "API rate limit exceeded" }), {
+          status: 403,
+          headers: {
+            "X-RateLimit-Remaining": "0",
+            "X-RateLimit-Limit": "5000",
+            "X-RateLimit-Reset": String(Math.floor(Date.now() / 1000) + 120),
+            "X-RateLimit-Resource": "core",
+          },
+        }),
+      ),
+    );
+    await expect(ghAsync("/user")).rejects.toThrow();
+    const s = getRateLimitState();
+    expect(s.limited).toBe(true);
+    expect(s.remaining).toBe(0);
+    expect(s.resource).toBe("core");
   });
 });
 

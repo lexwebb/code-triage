@@ -15,6 +15,10 @@ function payloadToForm(c: AppConfigPayload): {
   evalConcurrency: number;
   pollReviewRequested: boolean;
   commentRetentionDays: number;
+  repoPollStaleAfterDays: number;
+  repoPollColdIntervalMinutes: number;
+  pollApiHeadroom: number;
+  pollRateLimitAware: boolean;
   ignoredBots: string;
   githubToken: string;
   hasGithubToken: boolean;
@@ -30,6 +34,10 @@ function payloadToForm(c: AppConfigPayload): {
     evalConcurrency: c.evalConcurrency,
     pollReviewRequested: c.pollReviewRequested,
     commentRetentionDays: c.commentRetentionDays,
+    repoPollStaleAfterDays: c.repoPollStaleAfterDays ?? 7,
+    repoPollColdIntervalMinutes: c.repoPollColdIntervalMinutes ?? 60,
+    pollApiHeadroom: c.pollApiHeadroom ?? 0.35,
+    pollRateLimitAware: c.pollRateLimitAware !== false,
     ignoredBots: (c.ignoredBots ?? []).join("\n"),
     githubToken: "",
     hasGithubToken: Boolean(c.hasGithubToken),
@@ -121,6 +129,10 @@ export default function SettingsView({
         evalConcurrency: form.evalConcurrency,
         pollReviewRequested: form.pollReviewRequested,
         commentRetentionDays: form.commentRetentionDays,
+        repoPollStaleAfterDays: form.repoPollStaleAfterDays,
+        repoPollColdIntervalMinutes: form.repoPollColdIntervalMinutes,
+        pollApiHeadroom: form.pollApiHeadroom,
+        pollRateLimitAware: form.pollRateLimitAware,
         ignoredBots,
         accounts,
         evalPromptAppend: form.evalPromptAppend.trim() || undefined,
@@ -273,6 +285,59 @@ export default function SettingsView({
             />
             <span className="text-sm text-gray-300">Poll review-requested PRs (not your authored)</span>
           </label>
+          <div className="grid grid-cols-2 gap-4 pt-2 border-t border-gray-800/80">
+            <label className="block space-y-1">
+              <span className="text-sm text-gray-400">Adaptive: stale after (days, 0 = off)</span>
+              <input
+                type="number"
+                min={0}
+                className="w-full rounded-md border border-gray-700 bg-gray-900 px-3 py-2 text-sm"
+                value={form.repoPollStaleAfterDays}
+                onChange={(e) => update("repoPollStaleAfterDays", Math.max(0, parseInt(e.target.value, 10) || 0))}
+              />
+            </label>
+            <label className="block space-y-1">
+              <span className="text-sm text-gray-400">Cold repo poll interval (minutes)</span>
+              <input
+                type="number"
+                min={1}
+                className="w-full rounded-md border border-gray-700 bg-gray-900 px-3 py-2 text-sm"
+                value={form.repoPollColdIntervalMinutes}
+                onChange={(e) => update("repoPollColdIntervalMinutes", Math.max(1, parseInt(e.target.value, 10) || 60))}
+              />
+            </label>
+          </div>
+          <p className="text-xs text-gray-600">
+            Inactive repos (no new triage comments or in-scope open PRs for the stale period) are polled at the cold interval instead of every main poll.
+          </p>
+          <div className="grid grid-cols-2 gap-4 pt-2 border-t border-gray-800/80">
+            <label className="block space-y-1">
+              <span className="text-sm text-gray-400">API headroom for UI (0–0.95)</span>
+              <input
+                type="number"
+                min={0}
+                max={0.95}
+                step={0.05}
+                className="w-full rounded-md border border-gray-700 bg-gray-900 px-3 py-2 text-sm"
+                value={form.pollApiHeadroom}
+                onChange={(e) =>
+                  update("pollApiHeadroom", Math.min(0.95, Math.max(0, parseFloat(e.target.value) || 0)))
+                }
+              />
+            </label>
+            <label className="flex items-end gap-2 cursor-pointer pb-2">
+              <input
+                type="checkbox"
+                checked={form.pollRateLimitAware}
+                onChange={(e) => update("pollRateLimitAware", e.target.checked)}
+                className="rounded border-gray-600"
+              />
+              <span className="text-sm text-gray-300">Slow polling when GitHub quota is tight</span>
+            </label>
+          </div>
+          <p className="text-xs text-gray-600">
+            When enabled, the app may lengthen the poll interval so background polling leaves room for browsing PRs, loading files, and fixes.
+          </p>
         </section>
 
         <section className="space-y-2">

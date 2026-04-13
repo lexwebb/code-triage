@@ -127,7 +127,7 @@ export default function PRDetail({ pr, currentUser, onReviewSubmitted }: PRDetai
             href={pr.url}
             target="_blank"
             rel="noopener noreferrer"
-            className="text-xs text-blue-400 hover:text-blue-300 px-2 py-1.5"
+            className="text-xs text-blue-400 hover:text-blue-300 px-2 py-1.5 rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 focus-visible:ring-offset-gray-950"
           >
             GitHub &rarr;
           </a>

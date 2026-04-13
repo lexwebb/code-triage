@@ -22,6 +22,9 @@ interface CommentThreadsProps {
   fixJobs: FixJobStatus[];
   onCommentAction: () => void;
   onFixStarted: (job: FixJobStatus) => void;
+  /** When true, thread hotkeys are disabled (e.g. shortcuts modal open). */
+  globalModalOpen?: boolean;
+  onOpenShortcutsHelp?: () => void;
 }
 
 interface Thread {
@@ -248,16 +251,31 @@ function ThreadItem({ thread, onSelectFile, repo, prNumber, branch, fixBlocked, 
         thread.isResolved || isActedOn ? "border-gray-800/50 opacity-70" : "border-gray-800"
       }`}>
       <button
+        type="button"
         onClick={() => setExpanded(!expanded)}
-        className="w-full px-3 py-1.5 bg-gray-800/50 text-left text-xs font-mono flex items-center justify-between hover:bg-gray-800/80 transition-colors"
+        className="w-full px-3 py-1.5 bg-gray-800/50 text-left text-xs font-mono flex items-center justify-between hover:bg-gray-800/80 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/80 focus-visible:ring-inset"
       >
-        <span
-          onClick={(e) => { e.stopPropagation(); onSelectFile(thread.root.path); }}
-          className="text-blue-400 hover:text-blue-300"
-        >
-          {thread.root.path}:{thread.root.line}
+        <span className="flex items-center gap-2 min-w-0 flex-wrap">
+          <span
+            onClick={(e) => { e.stopPropagation(); onSelectFile(thread.root.path); }}
+            className="text-blue-400 hover:text-blue-300 shrink-0"
+          >
+            {thread.root.path}:{thread.root.line}
+          </span>
+          {thread.root.htmlUrl && (
+            <a
+              href={thread.root.htmlUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-gray-500 hover:text-blue-400 font-sans text-[10px] shrink-0 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 rounded px-0.5"
+              title="Open thread on GitHub"
+              onClick={(e) => e.stopPropagation()}
+            >
+              GH
+            </a>
+          )}
         </span>
-        <span className="flex items-center gap-2">
+        <span className="flex items-center gap-2 shrink-0">
           {isActedOn && <StatusBadge status={status!} />}
           {!isActedOn && eval_ && <EvalBadge action={eval_.action} />}
           {thread.isResolved && <span className="text-green-500/70 text-xs font-sans">Resolved</span>}
@@ -428,7 +446,7 @@ function ThreadItem({ thread, onSelectFile, repo, prNumber, branch, fixBlocked, 
   );
 }
 
-export default function CommentThreads({ comments, onSelectFile, repo, prNumber, branch, fixJobs, onCommentAction, onFixStarted }: CommentThreadsProps) {
+export default function CommentThreads({ comments, onSelectFile, repo, prNumber, branch, fixJobs, onCommentAction, onFixStarted, globalModalOpen = false, onOpenShortcutsHelp }: CommentThreadsProps) {
   const [collapsed, setCollapsed] = useState(false);
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [batching, setBatching] = useState(false);
@@ -481,6 +499,7 @@ export default function CommentThreads({ comments, onSelectFile, repo, prNumber,
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if (globalModalOpen) return;
       const tgt = e.target;
       if (tgt instanceof HTMLInputElement || tgt instanceof HTMLTextAreaElement || tgt instanceof HTMLSelectElement) {
         return;
@@ -547,7 +566,7 @@ export default function CommentThreads({ comments, onSelectFile, repo, prNumber,
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, []);
+  }, [globalModalOpen]);
 
   if (threads.length === 0) return null;
 
@@ -647,14 +666,26 @@ export default function CommentThreads({ comments, onSelectFile, repo, prNumber,
               />
               Snoozed
             </label>
-            <details className="text-xs text-gray-600 shrink-0">
-              <summary className="cursor-pointer hover:text-gray-400 select-none">Keys</summary>
-              <div className="mt-1 pl-2 text-[10px] text-gray-500 space-y-0.5 font-sans normal-case tracking-normal">
-                <div>j / k — focus thread</div>
-                <div>Enter / Space — expand or collapse</div>
-                <div>r reply · x resolve · d dismiss · f fix · e re-evaluate</div>
-              </div>
-            </details>
+            <div className="flex items-center gap-1 shrink-0 text-xs text-gray-600">
+              {onOpenShortcutsHelp && (
+                <button
+                  type="button"
+                  onClick={() => onOpenShortcutsHelp()}
+                  className="rounded px-1.5 py-0.5 text-blue-400/90 hover:text-blue-300 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+                  title="All keyboard shortcuts"
+                >
+                  ?
+                </button>
+              )}
+              <details className="text-xs">
+                <summary className="cursor-pointer hover:text-gray-400 select-none">Keys</summary>
+                <div className="mt-1 pl-2 text-[10px] text-gray-500 space-y-0.5 font-sans normal-case tracking-normal">
+                  <div>j / k — focus thread</div>
+                  <div>Enter / Space — expand or collapse</div>
+                  <div>r reply · x resolve · d dismiss · f fix · e re-evaluate</div>
+                </div>
+              </details>
+            </div>
           </div>
           {/* Bulk action toolbar */}
           {actionableThreads.length > 0 && (

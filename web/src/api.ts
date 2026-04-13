@@ -60,6 +60,14 @@ export interface AppConfigPayload {
   evalPromptAppend: string;
   evalPromptAppendByRepo: Record<string, string>;
   evalClaudeExtraArgs: string[];
+  /** Days without activity before a repo is polled less often; 0 = poll every repo every cycle. */
+  repoPollStaleAfterDays: number;
+  /** Minutes between polls for inactive repos. */
+  repoPollColdIntervalMinutes: number;
+  /** Reserve this fraction of GitHub quota for UI (0–0.95). Default 0.35. */
+  pollApiHeadroom: number;
+  /** Stretch poll interval when quota is tight (default true). */
+  pollRateLimitAware: boolean;
 }
 
 export interface ConfigGetResponse {
@@ -72,18 +80,40 @@ export interface PollStatus {
   lastPoll: number;
   nextPoll: number;
   intervalMs: number;
+  /** Configured minimum interval (ms); `intervalMs` may be larger when rate-aware. */
+  baseIntervalMs?: number;
+  estimatedPollRequests?: number;
+  /** Rough polling-only GET count per hour at current effective interval. */
+  estimatedGithubRequestsPerHour?: number;
+  pollBudgetNote?: string | null;
   polling: boolean;
   fixJobs: FixJobStatus[];
   testNotification: boolean;
   rateLimited?: boolean;
   rateLimitResetAt?: number | null;
+  /** From GitHub `X-RateLimit-Remaining` / `X-RateLimit-Limit` when present. */
+  rateLimitRemaining?: number | null;
+  rateLimitLimit?: number | null;
+  /** e.g. `core` vs `graphql` (when GitHub sends `X-RateLimit-Resource`). */
+  rateLimitResource?: string | null;
+  rateLimitUpdatedAt?: number;
   /** Present when CLI records a top-level poll failure (see `/api/health`). */
   lastPollError?: string | null;
 }
 
+export interface PullsBundleResponse {
+  authored: PullRequest[];
+  reviewRequested: PullRequest[];
+  /** Server could not resolve the GitHub login; lists are empty until /user succeeds. */
+  githubUserUnavailable?: boolean;
+}
+
 export const api = {
+  clearRepoPollSchedule: () => postJSON<{ ok: boolean }>("/api/actions/clear-repo-poll-schedule", {}),
   getUser: () => fetchJSON<User>("/api/user"),
   getRepos: () => fetchJSON<RepoInfo[]>("/api/repos"),
+  /** One server pass over repos (use instead of getPulls + getReviewRequested together). */
+  getPullsBundle: (repo?: string) => fetchJSON<PullsBundleResponse>(`/api/pulls-bundle${repoQuery(repo)}`),
   getPulls: (repo?: string) => fetchJSON<PullRequest[]>(`/api/pulls${repoQuery(repo)}`),
   getReviewRequested: (repo?: string) => fetchJSON<PullRequest[]>(`/api/pulls/review-requested${repoQuery(repo)}`),
   getPull: (number: number, repo: string) => fetchJSON<PullRequestDetail>(`/api/pulls/${number}${repoQueryRequired(repo)}`),
