@@ -29,13 +29,19 @@ export function saveState(state: CrWatchState): void {
   renameSync(STATE_TMP, STATE_FILE);
 }
 
+function commentKey(commentId: number, repo?: string): string {
+  return repo ? `${repo}:${commentId}` : String(commentId);
+}
+
 export function markComment(
   state: CrWatchState,
   commentId: number,
   status: CommentStatus,
   prNumber: number,
+  repo?: string,
 ): CrWatchState {
-  state.comments[commentId] = {
+  const key = commentKey(commentId, repo);
+  state.comments[key] = {
     status,
     prNumber,
     timestamp: new Date().toISOString(),
@@ -43,8 +49,11 @@ export function markComment(
   return state;
 }
 
-export function isNewComment(state: CrWatchState, commentId: number): boolean {
-  return !state.comments[commentId];
+export function isNewComment(state: CrWatchState, commentId: number, repo?: string): boolean {
+  const prefixedKey = commentKey(commentId, repo);
+  if (state.comments[prefixedKey]) return false;
+  if (state.comments[String(commentId)]) return false;
+  return true;
 }
 
 export function getCommentsByStatus(state: CrWatchState, status: CommentStatus) {

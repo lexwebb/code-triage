@@ -293,7 +293,7 @@ export async function processComments(
         evaluation = await evaluateComment(comment);
       } catch (err) {
         console.error(`  Error evaluating comment ${comment.id}: ${(err as Error).message}`);
-        markComment(state, comment.id, "seen", prNumber);
+        markComment(state, comment.id, "seen", prNumber, repoPath);
         saveState(state);
         continue;
       }
@@ -311,7 +311,7 @@ export async function processComments(
             console.error(`  Failed to resolve: ${(err as Error).message}`);
           }
         }
-        markComment(state, comment.id, "replied", prNumber);
+        markComment(state, comment.id, "replied", prNumber, repoPath);
         saveState(state);
       } else if (evaluation.action === "reply") {
         if (dryRun) {
@@ -324,7 +324,7 @@ export async function processComments(
             console.error(`  Failed to reply/resolve: ${(err as Error).message}`);
           }
         }
-        markComment(state, comment.id, "replied", prNumber);
+        markComment(state, comment.id, "replied", prNumber, repoPath);
         saveState(state);
       } else {
         fixComments.push({ comment, evaluation });
@@ -347,7 +347,7 @@ export async function processComments(
         const answer2 = await prompt("\n  Apply fixes? [y/n] ");
         if (answer2 !== "y") {
           for (const { comment } of fixComments) {
-            markComment(state, comment.id, "skipped", prNumber);
+            markComment(state, comment.id, "skipped", prNumber, repoPath);
           }
           saveState(state);
           console.log("  Skipped.");
@@ -355,7 +355,7 @@ export async function processComments(
         }
       } else if (answer !== "y") {
         for (const { comment } of fixComments) {
-          markComment(state, comment.id, "skipped", prNumber);
+          markComment(state, comment.id, "skipped", prNumber, repoPath);
         }
         saveState(state);
         console.log("  Skipped.");
@@ -365,7 +365,7 @@ export async function processComments(
       if (dryRun) {
         console.log("  [dry-run] Would create worktree and apply fixes.");
         for (const { comment } of fixComments) {
-          markComment(state, comment.id, "seen", prNumber);
+          markComment(state, comment.id, "seen", prNumber, repoPath);
         }
         saveState(state);
         continue;
@@ -377,7 +377,7 @@ export async function processComments(
       } catch (err) {
         console.error(`  Failed to create worktree: ${(err as Error).message}`);
         for (const { comment } of fixComments) {
-          markComment(state, comment.id, "seen", prNumber);
+          markComment(state, comment.id, "seen", prNumber, repoPath);
         }
         saveState(state);
         continue;
@@ -398,7 +398,7 @@ export async function processComments(
           console.log("  No changes were made.");
           removeWorktree(pr.branch);
           for (const { comment } of fixComments) {
-            markComment(state, comment.id, "seen", prNumber);
+            markComment(state, comment.id, "seen", prNumber, repoPath);
           }
           saveState(state);
           continue;
@@ -416,20 +416,20 @@ export async function processComments(
           console.log("  Pushed.");
           removeWorktree(pr.branch);
           for (const { comment } of fixComments) {
-            markComment(state, comment.id, "fixed", prNumber);
+            markComment(state, comment.id, "fixed", prNumber, repoPath);
           }
         } else if (pushAnswer === "edit") {
           console.log(`  Worktree left at: ${worktreePath}`);
           console.log("  Make your edits, then run: git add -A && git commit && git push");
           console.log("  Clean up with: cr-watch --cleanup");
           for (const { comment } of fixComments) {
-            markComment(state, comment.id, "seen", prNumber);
+            markComment(state, comment.id, "seen", prNumber, repoPath);
           }
         } else {
           removeWorktree(pr.branch);
           console.log("  Discarded.");
           for (const { comment } of fixComments) {
-            markComment(state, comment.id, "skipped", prNumber);
+            markComment(state, comment.id, "skipped", prNumber, repoPath);
           }
         }
         saveState(state);
@@ -437,7 +437,7 @@ export async function processComments(
         console.error(`  Error applying fixes: ${(err as Error).message}`);
         removeWorktree(pr.branch);
         for (const { comment } of fixComments) {
-          markComment(state, comment.id, "seen", prNumber);
+          markComment(state, comment.id, "seen", prNumber, repoPath);
         }
         saveState(state);
       }
