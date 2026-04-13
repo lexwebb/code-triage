@@ -3,10 +3,11 @@ import { registerRoutes } from "./api.js";
 import { readFileSync, existsSync } from "fs";
 import { join, extname } from "path";
 import { fileURLToPath } from "url";
+import type { RepoInfo } from "./discovery.js";
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 
-type RouteHandler = (req: IncomingMessage, res: ServerResponse, params: Record<string, string>) => void | Promise<void>;
+type RouteHandler = (req: IncomingMessage, res: ServerResponse, params: Record<string, string>, query: URLSearchParams) => void | Promise<void>;
 
 interface Route {
   method: string;
@@ -55,13 +56,25 @@ function serveStatic(res: ServerResponse, filePath: string): boolean {
   return true;
 }
 
-export function startServer(port: number, repos: Array<{ repo: string }>): void {
-  registerRoutes(repos[0]?.repo ?? "");
+let currentRepos: RepoInfo[] = [];
+
+export function updateRepos(repos: RepoInfo[]): void {
+  currentRepos = repos;
+}
+
+export function getRepos(): RepoInfo[] {
+  return currentRepos;
+}
+
+export function startServer(port: number, repos: RepoInfo[]): void {
+  currentRepos = repos;
+  registerRoutes();
   const webDist = join(__dirname, "..", "web", "dist");
 
   const server = createServer(async (req, res) => {
     const url = new URL(req.url || "/", `http://localhost:${port}`);
     const pathname = url.pathname;
+    const query = url.searchParams;
 
     // CORS preflight
     if (req.method === "OPTIONS") {
@@ -84,7 +97,7 @@ export function startServer(port: number, repos: Array<{ repo: string }>): void 
         params[name] = decodeURIComponent(match[i + 1]);
       });
       try {
-        await route.handler(req, res, params);
+        await route.handler(req, res, params, query);
       } catch (err) {
         json(res, { error: (err as Error).message }, 500);
       }
@@ -109,7 +122,5 @@ export function startServer(port: number, repos: Array<{ repo: string }>): void 
     console.log(`  WebUI: http://localhost:${port}\n`);
   });
 }
-
-export function updateRepos(_repos: unknown): void { /* updated in Task 4 */ }
 
 export { addRoute, json };

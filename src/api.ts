@@ -1,8 +1,6 @@
 import { execFileSync } from "child_process";
-import { addRoute, json } from "./server.js";
+import { addRoute, json, getRepos } from "./server.js";
 import { loadState } from "./state.js";
-
-let repoPath = "";
 
 function gh<T>(endpoint: string): T {
   const result = execFileSync("gh", ["api", endpoint, "--paginate"], {
@@ -12,8 +10,39 @@ function gh<T>(endpoint: string): T {
   return JSON.parse(result) as T;
 }
 
-export function registerRoutes(repo: string): void {
-  repoPath = repo;
+function getUsername(): string {
+  return execFileSync("gh", ["api", "/user", "--jq", ".login"], {
+    encoding: "utf-8",
+    timeout: 10000,
+  }).trim();
+}
+
+function requireRepo(query: URLSearchParams): string {
+  const repo = query.get("repo");
+  if (!repo) throw new Error("Missing required ?repo= query parameter");
+  const repos = getRepos();
+  if (!repos.some((r) => r.repo === repo)) {
+    throw new Error(`Repo "${repo}" is not tracked`);
+  }
+  return repo;
+}
+
+interface GhPull {
+  number: number;
+  title: string;
+  user: { login: string; avatar_url: string };
+  head: { ref: string };
+  base: { ref: string };
+  html_url: string;
+  created_at: string;
+  updated_at: string;
+  draft: boolean;
+  additions: number;
+  deletions: number;
+  changed_files: number;
+}
+
+export function registerRoutes(): void {
 
   // GET /api/user
   addRoute("GET", "/api/user", (_req, res) => {
@@ -25,49 +54,52 @@ export function registerRoutes(repo: string): void {
     json(res, { login: user.login, avatarUrl: user.avatar_url, url: user.html_url });
   });
 
-  // GET /api/pulls
-  addRoute("GET", "/api/pulls", (_req, res) => {
-    const username = execFileSync("gh", ["api", "/user", "--jq", ".login"], {
-      encoding: "utf-8",
-      timeout: 10000,
-    }).trim();
-
-    interface GhPull {
-      number: number;
-      title: string;
-      user: { login: string; avatar_url: string };
-      head: { ref: string };
-      base: { ref: string };
-      html_url: string;
-      created_at: string;
-      updated_at: string;
-      draft: boolean;
-      additions: number;
-      deletions: number;
-      changed_files: number;
-    }
-
-    const pulls = gh<GhPull[]>(`/repos/${repoPath}/pulls?state=open`);
-    const myPulls = pulls.filter((pr) => pr.user.login === username);
-
-    const result = myPulls.map((pr) => ({
-      number: pr.number,
-      title: pr.title,
-      author: pr.user.login,
-      authorAvatar: pr.user.avatar_url,
-      branch: pr.head.ref,
-      baseBranch: pr.base.ref,
-      url: pr.html_url,
-      createdAt: pr.created_at,
-      updatedAt: pr.updated_at,
-      draft: pr.draft,
-    }));
-
-    json(res, result);
+  // GET /api/repos
+  addRoute("GET", "/api/repos", (_req, res) => {
+    json(res, getRepos());
   });
 
-  // GET /api/pulls/:number
-  addRoute("GET", "/api/pulls/:number", (_req, res, params) => {
+  // GET /api/pulls?repo=owner/repo (optional — if omitted, returns all)
+  addRoute("GET", "/api/pulls", (_req, res, _params, query) => {
+    const username = getUsername();
+    const repoFilter = query.get("repo");
+    const targetRepos = repoFilter
+      ? getRepos().filter((r) => r.repo === repoFilter)
+      : getRepos();
+
+    const allPulls: Array<Record<string, unknown>> = [];
+
+    for (const repoInfo of targetRepos) {
+      try {
+        const pulls = gh<GhPull[]>(`/repos/${repoInfo.repo}/pulls?state=open`);
+        const myPulls = pulls.filter((pr) => pr.user.login === username);
+
+        for (const pr of myPulls) {
+          allPulls.push({
+            number: pr.number,
+            title: pr.title,
+            author: pr.user.login,
+            authorAvatar: pr.user.avatar_url,
+            branch: pr.head.ref,
+            baseBranch: pr.base.ref,
+            url: pr.html_url,
+            createdAt: pr.created_at,
+            updatedAt: pr.updated_at,
+            draft: pr.draft,
+            repo: repoInfo.repo,
+          });
+        }
+      } catch {
+        // Skip repos that fail (e.g., no access)
+      }
+    }
+
+    json(res, allPulls);
+  });
+
+  // GET /api/pulls/:number?repo=owner/repo
+  addRoute("GET", "/api/pulls/:number", (_req, res, params, query) => {
+    const repo = requireRepo(query);
     const pr = gh<{
       number: number;
       title: string;
@@ -82,7 +114,7 @@ export function registerRoutes(repo: string): void {
       additions: number;
       deletions: number;
       changed_files: number;
-    }>(`/repos/${repoPath}/pulls/${params.number}`);
+    }>(`/repos/${repo}/pulls/${params.number}`);
 
     json(res, {
       number: pr.number,
@@ -99,11 +131,14 @@ export function registerRoutes(repo: string): void {
       additions: pr.additions,
       deletions: pr.deletions,
       changedFiles: pr.changed_files,
+      repo,
     });
   });
 
-  // GET /api/pulls/:number/files
-  addRoute("GET", "/api/pulls/:number/files", (_req, res, params) => {
+  // GET /api/pulls/:number/files?repo=owner/repo
+  addRoute("GET", "/api/pulls/:number/files", (_req, res, params, query) => {
+    const repo = requireRepo(query);
+
     interface GhFile {
       sha: string;
       filename: string;
@@ -113,7 +148,7 @@ export function registerRoutes(repo: string): void {
       patch?: string;
     }
 
-    const files = gh<GhFile[]>(`/repos/${repoPath}/pulls/${params.number}/files`);
+    const files = gh<GhFile[]>(`/repos/${repo}/pulls/${params.number}/files`);
 
     json(res, files.map((f) => ({
       filename: f.filename,
@@ -124,8 +159,10 @@ export function registerRoutes(repo: string): void {
     })));
   });
 
-  // GET /api/pulls/:number/comments
-  addRoute("GET", "/api/pulls/:number/comments", (_req, res, params) => {
+  // GET /api/pulls/:number/comments?repo=owner/repo
+  addRoute("GET", "/api/pulls/:number/comments", (_req, res, params, query) => {
+    const repo = requireRepo(query);
+
     interface GhComment {
       id: number;
       user: { login: string; avatar_url: string };
@@ -138,7 +175,7 @@ export function registerRoutes(repo: string): void {
       in_reply_to_id: number | null;
     }
 
-    const comments = gh<GhComment[]>(`/repos/${repoPath}/pulls/${params.number}/comments`);
+    const comments = gh<GhComment[]>(`/repos/${repo}/pulls/${params.number}/comments`);
 
     json(res, comments.map((c) => ({
       id: c.id,
@@ -153,15 +190,16 @@ export function registerRoutes(repo: string): void {
     })));
   });
 
-  // GET /api/pulls/:number/files/*path (full file content)
-  addRoute("GET", "/api/pulls/:number/files/*path", (_req, res, params) => {
-    const pr = gh<{ head: { ref: string } }>(`/repos/${repoPath}/pulls/${params.number}`);
+  // GET /api/pulls/:number/files/*path?repo=owner/repo (full file content)
+  addRoute("GET", "/api/pulls/:number/files/*path", (_req, res, params, query) => {
+    const repo = requireRepo(query);
+    const pr = gh<{ head: { ref: string } }>(`/repos/${repo}/pulls/${params.number}`);
     const filePath = params.path;
 
     try {
       const content = execFileSync(
         "gh",
-        ["api", `/repos/${repoPath}/contents/${filePath}?ref=${pr.head.ref}`, "--jq", ".content"],
+        ["api", `/repos/${repo}/contents/${filePath}?ref=${pr.head.ref}`, "--jq", ".content"],
         { encoding: "utf-8", timeout: 15000 },
       ).trim();
 
