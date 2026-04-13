@@ -61,6 +61,29 @@ if (flags.status) {
   process.exit(0);
 }
 
+// Check required CLI tools
+function checkDependency(cmd: string, helpUrl: string): void {
+  try {
+    execSync(`which ${cmd}`, { stdio: "pipe" });
+  } catch {
+    console.error(`\n  Error: '${cmd}' is not installed or not in PATH.`);
+    console.error(`  Install it from: ${helpUrl}\n`);
+    process.exit(1);
+  }
+}
+
+checkDependency("gh", "https://cli.github.com");
+checkDependency("claude", "https://docs.anthropic.com/en/docs/claude-code");
+
+// Verify gh is authenticated
+try {
+  execSync("gh auth status", { stdio: "pipe" });
+} catch {
+  console.error("\n  Error: GitHub CLI is not authenticated.");
+  console.error("  Run: gh auth login\n");
+  process.exit(1);
+}
+
 // First-run setup or --config flag
 async function runSetup(existing: Config): Promise<Config> {
   console.log("\n  Code Triage Setup\n");
