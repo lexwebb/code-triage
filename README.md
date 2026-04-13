@@ -1,51 +1,90 @@
-# cr-watch
+# Code Triage
 
-Monitor CodeRabbit review comments on your open PRs and action them with Claude Code.
+A PR review dashboard that monitors your GitHub pull requests, analyzes review comments with Claude, and lets you act on them from a web UI.
 
-## Install
+## Quick Start
 
 ```bash
-# From source
-git clone <repo-url> && cd cr-watch
-yarn install && yarn build
-npm link  # makes `cr-watch` available globally
+git clone git@github.com:lexwebb/code-triage.git
+cd code-triage
+yarn install
+cd web && yarn install && cd ..
+yarn build:all
+yarn start
 ```
+
+Open http://localhost:3100 in your browser.
+
+On first run you'll be prompted to configure your repos directory (default `~/src`).
+
+## Requirements
+
+- Node.js 18+
+- `gh` CLI (authenticated — run `gh auth login` first)
+- `claude` CLI (for comment analysis and fixes)
+- Git repos cloned locally under a common root directory
 
 ## Usage
 
 ```bash
-cr-watch              # Start watching (polls every 5 min)
-cr-watch --dry-run    # Preview without making changes
-cr-watch --status     # Show current state
-cr-watch --cleanup    # Remove all worktrees
+yarn start                    # Start with WebUI on port 3100
+yarn start -- --open          # Start and open browser
+yarn start -- --config        # Re-run setup
+yarn start -- --port 8080     # Custom port
+yarn start -- --root ~/code   # Custom repos directory
+yarn start -- --repo owner/r  # Single repo mode
+yarn start -- --dry-run       # Skip Claude analysis
+yarn start -- --status        # Show state and exit
+yarn start -- --cleanup       # Remove all worktrees
 ```
 
-## Flags
+## Development
 
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--interval <min>` | `5` | Polling interval in minutes |
-| `--repo <owner/repo>` | auto-detect | Override repository |
-| `--cleanup` | - | Remove worktrees and exit |
-| `--dry-run` | - | Preview mode |
-| `--status` | - | Show state and exit |
+```bash
+# Terminal 1: Build CLI in watch mode
+yarn dev
 
-## How it works
+# Terminal 2: Vite dev server with hot reload
+yarn dev:web
 
-1. Polls GitHub for CodeRabbit comments on your open PRs
-2. For each new comment, Claude evaluates whether a code change is needed
-3. **No code change**: Claude auto-replies on GitHub
-4. **Already resolved**: Claude replies and resolves the thread
-5. **Code change needed**: Prompts you, then applies fix in an isolated git worktree
-6. You review the diff and confirm before pushing
+# Open http://localhost:5173 (proxies API to :3100)
+```
 
-## Requirements
+## CLI Hotkeys
 
-- `gh` CLI (authenticated)
-- `claude` CLI
-- macOS (for notifications)
-- Node.js 18+
+| Key | Action |
+|-----|--------|
+| `r` | Refresh (poll now) |
+| `o` | Open WebUI in browser |
+| `d` | Re-discover repos |
+| `s` | Show status |
+| `p` | List PRs |
+| `c` | Clear state |
+| `q` | Quit |
 
-## State
+## Features
 
-Comment state is stored at `~/.cr-watch/state.json`. Worktrees are created under `.cr-worktrees/` in the repo root.
+- **Multi-repo discovery** — scans a root directory for all GitHub repos
+- **Comment analysis** — Claude evaluates each review comment and suggests an action
+- **WebUI dashboard** — review threads, file diffs, syntax highlighting, markdown rendering
+- **Action buttons** — send replies, resolve threads, dismiss comments from the UI
+- **Fix with Claude** — Claude applies code fixes in isolated git worktrees, preview diff before pushing
+- **PR review** — approve or request changes on PRs you're reviewing
+- **Reviewer status** — see who has approved, requested changes, or is pending
+- **Web notifications** — get alerted when PRs need attention or fixes complete
+- **URL routing** — shareable URLs for specific PRs and files
+- **Repo filtering** — filter sidebar by repo name or PR title
+
+## How It Works
+
+1. Discovers GitHub repos under your configured root directory
+2. Polls for open PRs assigned to you and PRs requesting your review
+3. For each new review comment, Claude analyzes whether it needs a reply, fix, or can be resolved
+4. Results are displayed in the WebUI with action buttons
+5. You decide — send the suggested reply, apply a fix with Claude, resolve, or dismiss
+
+## Config & State
+
+- Config: `~/.code-triage/config.json`
+- State: `~/.code-triage/state.json`
+- Worktrees: `.cr-worktrees/` in each repo root
