@@ -1,6 +1,7 @@
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
+import rehypeRaw from "rehype-raw";
 import type { ReviewComment } from "../types";
 
 interface CommentProps {
@@ -28,7 +29,7 @@ export default function Comment({ comment, compact }: CommentProps) {
       <div className="px-3 py-2 text-xs text-gray-300 leading-relaxed markdown-body">
         <ReactMarkdown
           remarkPlugins={[remarkGfm]}
-          rehypePlugins={[rehypeHighlight]}
+          rehypePlugins={[rehypeRaw, rehypeHighlight]}
           components={{
             a: ({ children, href, ...props }) => (
               <a href={href} target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:text-blue-300 underline" {...props}>{children}</a>
@@ -87,6 +88,12 @@ export default function Comment({ comment, compact }: CommentProps) {
             },
             del: ({ children, ...props }) => (
               <del className="text-gray-500" {...props}>{children}</del>
+            ),
+            details: ({ children, ...props }) => (
+              <details className="my-2 border border-gray-700 rounded bg-gray-800/50 open:pb-1" {...props}>{children}</details>
+            ),
+            summary: ({ children, ...props }) => (
+              <summary className="cursor-pointer px-2 py-1 text-gray-300 hover:text-white font-medium select-none" {...props}>{children}</summary>
             ),
           }}
         >
