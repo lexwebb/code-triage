@@ -186,7 +186,7 @@ export function registerRoutes(): void {
       diffHunk: c.diff_hunk,
       body: c.body,
       createdAt: c.created_at,
-      inReplyToId: c.in_reply_to_id,
+      inReplyToId: c.in_reply_to_id ?? null,
     })));
   });
 
