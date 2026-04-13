@@ -13,7 +13,6 @@ import {
   clearCountdown,
   setStatus,
   setProcessing,
-  prompt,
   cleanup as cleanupTerminal,
 } from "./terminal.js";
 import { startServer, updateRepos, updatePollState, triggerTestNotification } from "./server.js";
@@ -102,14 +101,21 @@ try {
 async function runSetup(existing: Config): Promise<Config> {
   console.log("\n  Code Triage Setup\n");
 
-  const rootAnswer = await prompt(`  Repos directory [${existing.root}]: `);
-  const root = rootAnswer.trim() || existing.root;
+  const readline = await import("readline");
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  const ask = (q: string): Promise<string> =>
+    new Promise((resolve) => rl.question(q, (a) => resolve(a.trim())));
 
-  const portAnswer = await prompt(`  Web UI port [${existing.port}]: `);
-  const port = portAnswer.trim() ? parseInt(portAnswer.trim(), 10) : existing.port;
+  const rootAnswer = await ask(`  Repos directory [${existing.root}]: `);
+  const root = rootAnswer || existing.root;
 
-  const intervalAnswer = await prompt(`  Poll interval in minutes [${existing.interval}]: `);
-  const interval = intervalAnswer.trim() ? parseInt(intervalAnswer.trim(), 10) : existing.interval;
+  const portAnswer = await ask(`  Web UI port [${existing.port}]: `);
+  const port = portAnswer ? parseInt(portAnswer, 10) : existing.port;
+
+  const intervalAnswer = await ask(`  Poll interval in minutes [${existing.interval}]: `);
+  const interval = intervalAnswer ? parseInt(intervalAnswer, 10) : existing.interval;
+
+  rl.close();
 
   const config: Config = { root, port, interval };
   saveConfig(config);
