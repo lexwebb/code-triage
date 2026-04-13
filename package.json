@@ -8,7 +8,10 @@
   },
   "scripts": {
     "build": "tsc",
+    "build:web": "cd web && npm run build",
+    "build:all": "npm run build && npm run build:web",
     "dev": "tsc --watch",
+    "dev:web": "cd web && npm run dev",
     "start": "node dist/cli.js",
     "typecheck": "tsc --noEmit"
   },
