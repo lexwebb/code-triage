@@ -1,15 +1,23 @@
 import { useEffect, useState } from "react";
 import { api } from "./api";
-import type { PullRequest, PullRequestDetail, PullFile, ReviewComment } from "./types";
+import type { PullRequest, PullRequestDetail, PullFile, ReviewComment, RepoInfo } from "./types";
+import RepoSelector from "./components/RepoSelector";
 import PRList from "./components/PRList";
 import PRDetail from "./components/PRDetail";
 import FileList from "./components/FileList";
 import DiffView from "./components/DiffView";
 
+interface SelectedPR {
+  number: number;
+  repo: string;
+}
+
 export default function App() {
+  const [repos, setRepos] = useState<RepoInfo[]>([]);
+  const [selectedRepo, setSelectedRepo] = useState<string | null>(null);
   const [pulls, setPulls] = useState<PullRequest[]>([]);
-  const [selectedPR, setSelectedPR] = useState<number | null>(null);
-  const [commentCounts, setCommentCounts] = useState<Record<number, number>>({});
+  const [selectedPR, setSelectedPR] = useState<SelectedPR | null>(null);
+  const [commentCounts, setCommentCounts] = useState<Record<string, number>>({});
   const [prDetail, setPrDetail] = useState<PullRequestDetail | null>(null);
   const [prFiles, setPrFiles] = useState<PullFile[]>([]);
   const [prComments, setPrComments] = useState<ReviewComment[]>([]);
@@ -18,36 +26,49 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  // Load repos on mount
   useEffect(() => {
+    api.getRepos().then(setRepos).catch(() => {});
+  }, []);
+
+  // Load pulls when selectedRepo changes
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+
     async function load() {
       try {
-        const pullData = await api.getPulls();
+        const pullData = await api.getPulls(selectedRepo ?? undefined);
+        if (cancelled) return;
         setPulls(pullData);
 
-        // Fetch comment counts for each PR
-        const counts: Record<number, number> = {};
+        // Fetch comment counts
+        const counts: Record<string, number> = {};
         for (const pr of pullData) {
           try {
-            const comments = await api.getPullComments(pr.number);
-            counts[pr.number] = comments.length;
+            const comments = await api.getPullComments(pr.number, pr.repo);
+            counts[`${pr.repo}:${pr.number}`] = comments.length;
           } catch {
-            counts[pr.number] = 0;
+            counts[`${pr.repo}:${pr.number}`] = 0;
           }
         }
+        if (cancelled) return;
         setCommentCounts(counts);
 
-        if (pullData.length > 0) {
-          setSelectedPR(pullData[0].number);
+        if (pullData.length > 0 && !selectedPR) {
+          setSelectedPR({ number: pullData[0].number, repo: pullData[0].repo });
         }
       } catch (err) {
-        setError((err as Error).message);
+        if (!cancelled) setError((err as Error).message);
       } finally {
-        setLoading(false);
+        if (!cancelled) setLoading(false);
       }
     }
     load();
-  }, []);
+    return () => { cancelled = true; };
+  }, [selectedRepo]);
 
+  // Load PR detail when selectedPR changes
   useEffect(() => {
     if (!selectedPR) return;
     let cancelled = false;
@@ -56,9 +77,9 @@ export default function App() {
       setLoadingPR(true);
       try {
         const [detail, files, comments] = await Promise.all([
-          api.getPull(selectedPR!),
-          api.getPullFiles(selectedPR!),
-          api.getPullComments(selectedPR!),
+          api.getPull(selectedPR!.number, selectedPR!.repo),
+          api.getPullFiles(selectedPR!.number, selectedPR!.repo),
+          api.getPullComments(selectedPR!.number, selectedPR!.repo),
         ]);
         if (cancelled) return;
         setPrDetail(detail);
@@ -76,7 +97,20 @@ export default function App() {
     }
     loadPR();
     return () => { cancelled = true; };
-  }, [selectedPR]);
+  }, [selectedPR?.number, selectedPR?.repo]);
+
+  function handleSelectPR(number: number, repo: string) {
+    setSelectedPR({ number, repo });
+  }
+
+  function handleSelectRepo(repo: string | null) {
+    setSelectedRepo(repo);
+    setSelectedPR(null);
+    setPrDetail(null);
+    setPrFiles([]);
+    setPrComments([]);
+    setSelectedFile(null);
+  }
 
   if (loading) {
     return (
@@ -101,12 +135,18 @@ export default function App() {
         <div className="px-4 py-3 border-b border-gray-800">
           <h1 className="text-sm font-semibold text-white">cr-watch</h1>
         </div>
+        <RepoSelector
+          repos={repos}
+          selectedRepo={selectedRepo}
+          onSelectRepo={handleSelectRepo}
+        />
         <div className="overflow-y-auto flex-1">
           <PRList
             pulls={pulls}
             selectedPR={selectedPR}
-            onSelectPR={setSelectedPR}
+            onSelectPR={handleSelectPR}
             commentCounts={commentCounts}
+            showRepo={!selectedRepo}
           />
         </div>
       </div>
