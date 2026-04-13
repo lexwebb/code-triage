@@ -256,7 +256,10 @@ export default function App() {
         {/* Sidebar */}
         <div className="w-72 border-r border-gray-800 flex flex-col shrink-0">
           <div className="px-4 py-2 border-b border-gray-800 flex items-center justify-between">
-            <h1 className="text-sm font-semibold text-white">Code Triage</h1>
+            <div className="flex items-center gap-2">
+              <img src="/logo.png" alt="Code Triage" className="w-6 h-6 rounded-md" />
+              <h1 className="text-sm font-semibold text-white">Code Triage</h1>
+            </div>
             <div className="flex items-center gap-2">
               <span className="text-xs text-gray-600 font-mono" title="Time until next backend poll">
                 {timerText}
