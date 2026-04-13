@@ -40,6 +40,7 @@ export interface FixJobStatus {
   error?: string;
   diff?: string;
   branch?: string;
+  claudeOutput?: string;
 }
 
 export interface PollStatus {

@@ -12,6 +12,7 @@ interface CommentThreadsProps {
   branch: string;
   fixJobs: FixJobStatus[];
   onCommentAction: () => void;
+  onFixStarted: (job: FixJobStatus) => void;
 }
 
 interface Thread {
@@ -73,7 +74,7 @@ function StatusBadge({ status }: { status: string }) {
   return null;
 }
 
-function ThreadItem({ thread, onSelectFile, repo, prNumber, branch, fixBlocked, onCommentAction }: {
+function ThreadItem({ thread, onSelectFile, repo, prNumber, branch, fixBlocked, onCommentAction, onFixStarted }: {
   thread: Thread;
   onSelectFile: (f: string) => void;
   repo: string;
@@ -81,6 +82,7 @@ function ThreadItem({ thread, onSelectFile, repo, prNumber, branch, fixBlocked, 
   branch: string;
   fixBlocked: boolean;
   onCommentAction: () => void;
+  onFixStarted: (job: FixJobStatus) => void;
 }) {
   const eval_ = thread.root.evaluation;
   const status = thread.root.crStatus;
@@ -114,6 +116,18 @@ function ThreadItem({ thread, onSelectFile, repo, prNumber, branch, fixBlocked, 
   async function handleFixWithClaude() {
     setFixing(true);
     setFixError(null);
+
+    // Optimistic update — immediately show as running
+    onFixStarted({
+      commentId: thread.root.id,
+      repo,
+      prNumber,
+      path: thread.root.path,
+      startedAt: Date.now(),
+      status: "running",
+      branch,
+    });
+
     try {
       const result = await api.fixWithClaude(repo, thread.root.id, prNumber, branch, {
         path: thread.root.path,
@@ -124,7 +138,6 @@ function ThreadItem({ thread, onSelectFile, repo, prNumber, branch, fixBlocked, 
       if (!result.success) {
         setFixError(result.error ?? "Failed to start fix");
       }
-      // Fix runs in background — status tracked via poll-status and FixJobsBanner
     } catch (err) {
       setFixError((err as Error).message);
     } finally {
@@ -230,7 +243,7 @@ function ThreadItem({ thread, onSelectFile, repo, prNumber, branch, fixBlocked, 
   );
 }
 
-export default function CommentThreads({ comments, onSelectFile, repo, prNumber, branch, fixJobs, onCommentAction }: CommentThreadsProps) {
+export default function CommentThreads({ comments, onSelectFile, repo, prNumber, branch, fixJobs, onCommentAction, onFixStarted }: CommentThreadsProps) {
   const [collapsed, setCollapsed] = useState(false);
   const threads = buildThreads(comments);
 
@@ -268,6 +281,7 @@ export default function CommentThreads({ comments, onSelectFile, repo, prNumber,
               branch={branch}
               fixBlocked={hasRunningFix}
               onCommentAction={onCommentAction}
+              onFixStarted={onFixStarted}
             />
           ))}
         </div>

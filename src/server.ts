@@ -82,6 +82,7 @@ export interface FixJobStatus {
   error?: string;
   diff?: string;
   branch?: string;
+  claudeOutput?: string;
 }
 
 const fixJobStatuses = new Map<number, FixJobStatus>();

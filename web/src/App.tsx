@@ -364,6 +364,7 @@ export default function App() {
                 branch={prDetail.branch}
                 fixJobs={fixJobs}
                 onCommentAction={reloadComments}
+                onFixStarted={(job) => setFixJobs((prev) => [...prev.filter((j) => j.commentId !== job.commentId), job])}
               />
               {/* Collapsible files section */}
               <div className="border-t border-gray-800 shrink-0">

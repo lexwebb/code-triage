@@ -224,7 +224,7 @@ export async function resolveThread(
   );
 }
 
-export async function applyFixWithClaude(worktreePath: string, comment: { path: string; line: number; body: string; diffHunk: string }): Promise<void> {
+export async function applyFixWithClaude(worktreePath: string, comment: { path: string; line: number; body: string; diffHunk: string }): Promise<string> {
   const fixPrompt = `Apply this CodeRabbit review suggestion. Make the minimal changes needed:
 
 - File: ${comment.path}, line ${comment.line}
@@ -235,11 +235,12 @@ ${comment.diffHunk}
 
 Make the changes directly. Do not explain, just fix the code.`;
 
-  await spawnTracked("claude", ["-p", fixPrompt], {
+  const output = await spawnTracked("claude", ["-p", fixPrompt], {
     cwd: worktreePath,
     stdio: ["pipe", "pipe", "pipe"],
     stderrToConsole: true,
   });
+  return output;
 }
 
 export async function analyzeComments(

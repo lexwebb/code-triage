@@ -118,6 +118,16 @@ function JobModal({ job, onClose, onJobAction }: { job: FixJobStatus; onClose: (
           </div>
         )}
 
+        {/* Claude output */}
+        {job.claudeOutput && (
+          <div className="px-4 py-3 border-b border-gray-800">
+            <div className="text-xs text-gray-500 mb-1">Claude Output</div>
+            <pre className="p-2 text-xs overflow-x-auto max-h-48 overflow-y-auto bg-gray-800 rounded font-mono border border-gray-700 text-gray-300 whitespace-pre-wrap">
+              {job.claudeOutput}
+            </pre>
+          </div>
+        )}
+
         {/* Running spinner */}
         {job.status === "running" && (
           <div className="flex-1 flex items-center justify-center py-12 text-gray-500 text-sm">

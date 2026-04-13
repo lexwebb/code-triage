@@ -486,7 +486,7 @@ export function registerRoutes(): void {
 
     // Run Claude in background
     try {
-      await applyFixWithClaude(worktreePath, body.comment);
+      const claudeOutput = await applyFixWithClaude(worktreePath, body.comment);
       const diff = getDiffInWorktree(worktreePath);
 
       if (!diff.trim()) {
@@ -498,6 +498,7 @@ export function registerRoutes(): void {
           commentId: body.commentId, repo: body.repo, prNumber: body.prNumber,
           path: body.comment.path, startedAt: Date.now(), status: "failed",
           error: "Claude made no changes",
+          claudeOutput,
         });
         return;
       }
@@ -509,7 +510,7 @@ export function registerRoutes(): void {
       setFixJobStatus({
         commentId: body.commentId, repo: body.repo, prNumber: body.prNumber,
         path: body.comment.path, startedAt: Date.now(), status: "completed",
-        diff, branch: body.branch,
+        diff, branch: body.branch, claudeOutput,
       });
     } catch (err) {
       removeWorktree(body.branch, repoInfo?.localPath);
