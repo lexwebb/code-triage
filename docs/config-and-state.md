@@ -2,18 +2,28 @@
 
 ## Config (`~/.code-triage/config.json`)
 
-Created or updated by first-run setup or `code-triage --config`.
+**How it is created**
+
+- **First launch (no config file):** The CLI starts the HTTP server with in-memory defaults and **does not** prompt in the terminal. Open the web UI: it shows a **settings** screen until you save. That writes `config.json` and triggers an in-process reload (repo discovery, polling, token routing).
+- **Terminal setup:** Run `code-triage --config` for interactive prompts (same file).
+- **Web anytime:** From the main UI, use **Settings** (gear) to edit all fields; saving calls `POST /api/config` (see [`http-api.md`](./http-api.md)).
 
 | Field | Type | Default | Meaning |
 |-------|------|---------|---------|
 | `root` | string | `~/src` | Directory scanned for GitHub clones (unless `--repo`). |
-| `port` | number | `3100` | HTTP server port. |
+| `port` | number | `3100` | HTTP server port (changing it in the UI requires **restarting** the CLI if the process is already listening on another port). |
 | `interval` | number | `1` | Poll interval in **minutes**. |
 | `evalConcurrency` | number | `2` | Max concurrent Claude evaluation processes (`claude -p`) per poll batch; clamped **1–8**. |
 | `pollReviewRequested` | boolean | `false` | When `true`, the poller also scans **open PRs where you are a requested reviewer** (not the author) and runs Claude on new inline comments there. Increases GitHub and Claude usage. Matches **user** reviewers in `requested_reviewers` only (not requested teams). |
 | `commentRetentionDays` | number | — | After each **successful** poll, delete SQLite comment rows with status `replied`, `dismissed`, or `fixed` whose `timestamp` is older than this many days. **`pending` is never removed.** Omitted or `0` disables compaction. |
 | `ignoredBots` | string[] | — | Extra GitHub logins treated like built-in ignored bots in `poller.ts`. |
-| `accounts` | array | — | Optional multi-account PATs: `{ name, token, orgs: string[] }`. Repo **owner** matched against `orgs` selects `token`; otherwise `gh auth token` is used. |
+| `githubToken` | string | — | Optional default PAT in config (used when env tokens below are unset). Multi-account `accounts[]` still overrides per-repo owner. |
+| `accounts` | array | — | Optional multi-account PATs: `{ name, token, orgs: string[] }`. Repo **owner** matched against `orgs` selects `token`; otherwise the default token chain applies. |
+| `evalPromptAppend` | string | — | Appended to the Claude PR-comment evaluation prompt for all repos. |
+| `evalPromptAppendByRepo` | object | — | Map of `owner/repo` → string; appended after `evalPromptAppend` for that repo. |
+| `evalClaudeExtraArgs` | string[] | — | Extra arguments after `claude -p` / `--output-format json` (e.g. `["--model","opus"]`). |
+
+**GitHub API token resolution (default account):** `GITHUB_TOKEN` or `GH_TOKEN` (if set) → `githubToken` from config → `gh auth token`. If none of these are available, the CLI requires `gh auth login` unless you configure a token in Settings or env. **`gh` is not required** when a PAT is supplied via env or config.
 
 CLI flags override config: `--root`, `--port`, `--interval`, `--repo`, `--dry-run`, `--eval-concurrency`, `--poll-review-requested` (enables for this run; omit to use config), `--comment-retention-days`.
 

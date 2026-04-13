@@ -21,7 +21,7 @@ Longer explanations live under [`docs/`](./docs/README.md). Use them when you ne
 
 - **CLI Backend** (`src/`): TypeScript, ESM modules, Node16 module resolution. Uses `ink` for terminal UI. Runs an HTTP API server on port 3100.
 - **Web Frontend** (`web/`): React 19, TypeScript, Vite, Tailwind CSS v4. Yarn workspace (`code-triage-web`).
-- **GitHub API**: Direct `fetch` calls using a token from `gh auth token`. No `gh` CLI for API calls (too slow).
+- **GitHub API**: `@octokit/rest` (REST + GraphQL) with a custom `fetch` for 429 retry; token from env, config PAT, or `gh auth token`. No `gh` CLI for API calls (too slow).
 - **Claude CLI**: Used for comment evaluation (`claude -p`) and code fixes (`claude -p --dangerously-skip-permissions`).
 - **State**: Persisted to `~/.code-triage/state.sqlite` (Drizzle ORM + better-sqlite3). Legacy `state.json` is migrated once on first DB creation. Config at `~/.code-triage/config.json`.
 
@@ -46,10 +46,10 @@ yarn dev                  # Runs tsc watch + CLI auto-restart + Vite HMR concurr
 - `src/actioner.ts` — Claude evaluation and fix application
 - `src/poller.ts` — GitHub polling for new comments
 - `src/discovery.ts` — Scans directories for GitHub repos
-- `src/exec.ts` — Async GitHub API helpers (`ghAsync`, `ghGraphQL`, `ghPost`)
+- `src/exec.ts` — GitHub API via `@octokit/rest` (`ghAsync`, `ghPost`, `ghGraphQL`, `createGitHubOctokit`); custom fetch for 429 retries
 - `src/state.ts` — State persistence with repo-prefixed comment keys
 - `src/db/schema.ts`, `src/db/client.ts` — SQLite schema and connection
-- `src/config.ts` — User config (root dir, port, interval)
+- `src/config.ts` — User config (`~/.code-triage/config.json`; all fields in `docs/config-and-state.md`)
 - `src/worktree.ts` — Git worktree management for fixes
 - `src/terminal.tsx` — Ink-based terminal UI
 - `web/src/App.tsx` — Main React app with routing, polling, state management
@@ -60,8 +60,8 @@ yarn dev                  # Runs tsc watch + CLI auto-restart + Vite HMR concurr
 
 - ESM modules — imports end with `.js` extension (even for `.ts` files)
 - TSX for ink components (`terminal.tsx`), TS for everything else
-- CLI runtime deps: `ink`, `react`, `drizzle-orm`, `better-sqlite3`, `node-notifier` (see `package.json`)
-- All GitHub API calls go through `src/exec.ts` helpers (never `execFileSync` for API calls)
+- CLI runtime deps: `ink`, `react`, `drizzle-orm`, `better-sqlite3`, `node-notifier`, `@octokit/rest` (see `package.json`)
+- All GitHub API calls go through `src/exec.ts` (`ghAsync` / `ghPost` / `ghGraphQL` or `createGitHubOctokit()`); never `execFileSync` for API calls
 - Route handlers in `api.ts` are all `async` to avoid blocking the event loop
 - State comment keys are prefixed with repo: `owner/repo:commentId`
 - Web frontend uses `sessionStorage` for caching, polls backend for status
@@ -79,7 +79,7 @@ Unit tests set `CODE_TRIAGE_STATE_DIR` to a temp directory so `state.sqlite` is 
 
 ## Common Tasks
 
-- **Adding an API endpoint**: Add route in `src/api.ts` inside `registerRoutes()`. Use `ghAsync`/`ghPost` for GitHub calls. All handlers must be `async`. Readiness: `GET /api/health`. Live hints: `GET /api/events` (`sseBroadcast` from CLI / `setFixJobStatus`).
+- **Adding an API endpoint**: Add route in `src/api.ts` inside `registerRoutes()`. Use `ghAsync`/`ghPost` for GitHub calls. All handlers must be `async`. Readiness: `GET /api/health`. Live hints: `GET /api/events` (`sseBroadcast` from CLI / `setFixJobStatus`). Settings: `GET`/`POST /api/config` (`setConfigSavedHandler` in `src/server.ts` for reload after save).
 - **Adding a web component**: Create in `web/src/components/`. Import in `App.tsx`.
 - **Adding a CLI flag**: Add to `parseArgs` options in `src/cli.ts`. Override config values below. Evaluations: `--eval-concurrency` / `evalConcurrency`; review queue: `--poll-review-requested` / `pollReviewRequested` (see `fetchNewComments` / `selectPollPulls`).
 - **Modifying state shape**: Update `src/types.ts`, then `src/state.ts` helpers.

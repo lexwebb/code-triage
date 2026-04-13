@@ -37,7 +37,7 @@ flowchart LR
 
 ### Entry and lifecycle (`src/cli.ts`)
 
-- Parses flags, verifies `gh` and `claude`, runs first-time **setup** when needed (`src/config.ts`).
+- Parses flags, verifies `gh` and `claude`. **First-time config** is done in the **web UI** when `config.json` is missing (terminal prompts only with `code-triage --config`). See [`config-and-state.md`](./config-and-state.md).
 - Discovers repos (`src/discovery.ts`) or uses `--repo` for a single logical repo.
 - Starts the HTTP server, runs an **initial poll**, then schedules periodic polls on a timer.
 - Uses an **Ink** terminal UI (`src/terminal.tsx`) for status, countdown to next poll, and hotkeys (refresh, open browser, rediscover, clear state, quit).
@@ -71,9 +71,9 @@ flowchart LR
 
 ### GitHub access (`src/exec.ts`)
 
-- **REST** and **GraphQL** use `fetch` with a bearer token from `gh auth token` (cached), not subprocess `gh api` — fewer process spawns and easier pagination (follows `Link: rel="next"` for array endpoints).
-- Optional **per-repo token** when `config.accounts` is set (owner/org matched to pick PAT vs default `gh` token).
-- Retries on **429** with backoff using `X-RateLimit-Reset`.
+- **`@octokit/rest`** powers **`ghAsync`**, **`ghPost`**, and **`ghGraphQL`**; a custom **`fetch`** is injected so **429** responses are retried (with `X-RateLimit-Reset` backoff) before Octokit surfaces an error, and Vitest can stub `fetch`.
+- **Auth:** `GITHUB_TOKEN` / `GH_TOKEN`, then optional **`githubToken`** in config, then `gh auth token` (see [`config-and-state.md`](./config-and-state.md)). Optional **per-repo token** when `config.accounts` is set.
+- **Export:** `createGitHubOctokit(repo?)` for typed `octokit.rest.*` / GraphQL at call sites that need it; most routes still go through the existing helpers.
 
 ### Repo discovery (`src/discovery.ts`)
 
@@ -84,7 +84,7 @@ flowchart LR
 ### Notifications (`src/notifier.ts`)
 
 - On new comments from the poller, fires a **macOS** notification via `osascript` and logs a formatted summary to the terminal.
-- The **browser** can show separate notifications (see `web/src/useNotifications.ts`) when the UI detects poll completion or fix-job completion via `GET /api/poll-status`.
+- The **browser** can show separate notifications (see `web/src/useNotifications.ts`) when the UI refreshes PR data after a poll (`/api/events` SSE) or fix-job updates, in addition to `/api/poll-status`.
 
 ## Web frontend (`web/`)
 

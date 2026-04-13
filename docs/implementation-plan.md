@@ -43,7 +43,7 @@ Ordered backlog for **solo maintainer**, **strictly local** Code Triage: highest
 |---|-------------|-------------------|---------------------|------------------------|
 | 4.1 | **Local server hardening** | Matters if bind address is not loopback or you expose the port. | `src/config.ts`, `src/server.ts` | `host` default `127.0.0.1`; optional `apiToken` for `POST` routes; CORS tightened when configured. |
 | 4.2 | **GitHub webhooks (local)** | Lower latency than poll; requires tunnel or small local forwarder. | New small module + config | Document-only or minimal prototype: user runs tunnel; app validates signature; falls back to poll. **Low priority** for “never deploy” persona. |
-| 4.3 | **Typed GitHub client (e.g. Octokit)** | Reduces hand-written REST shapes when endpoints multiply. | `src/exec.ts`, call sites | Adopt incrementally; no regression in retry/pagination behavior. |
+| 4.3 | **Typed GitHub client (e.g. Octokit)** | Reduces hand-written REST shapes when endpoints multiply. | `src/exec.ts`, call sites | **In progress:** `@octokit/rest` backs `ghAsync` / `ghPost` / `ghGraphQL`; call sites unchanged. Optional next step: use `octokit.rest.*` at call sites for stronger types. |
 
 ---
 

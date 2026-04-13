@@ -22,6 +22,15 @@ The CLI embeds an HTTP server (default port **3100**, configurable). All routes 
 | `GET` | `/api/poll-status` | Server poll timer state, in-memory fix-job statuses, test-notification flag, rate-limit hint. |
 | `GET` | `/api/version` | Short SHAs and “commits behind `origin/main`” (best-effort; cached ~10 min). |
 | `GET` | `/api/fix-jobs/recover` | Lists persisted fix jobs from state; includes whether a worktree diff exists; prunes dead entries. |
+| `GET` | `/api/config` | Settings for the web UI and `config.json`. Returns `config` (same fields as on disk, but **account tokens are never sent**—each account has `hasToken` instead; default PAT is indicated by **`hasGithubToken`** only), `needsSetup` (`true` when `~/.code-triage/config.json` does not exist yet), and `listenPort` (the port the server process is actually bound to). |
+
+## Config (`POST`)
+
+| Path | Body (summary) | Response | Purpose |
+|------|----------------|----------|---------|
+| `/api/config` | Full or partial [`config.json`](./config-and-state.md) shape: `root`, `port`, `interval`, `evalConcurrency`, `pollReviewRequested`, `commentRetentionDays`, `ignoredBots`, `githubToken`, `accounts[]` (`name`, `orgs`, optional `token`), `evalPromptAppend`, `evalPromptAppendByRepo`, `evalClaudeExtraArgs`. | `{ ok: true, restartRequired: boolean }` | Writes `~/.code-triage/config.json`, then reloads in-process state (repo discovery, poll schedule, multi-account token resolver). **`restartRequired`** is `true` when the saved `port` differs from `listenPort`—restart the CLI so the HTTP server listens on the new port. |
+
+**Account tokens on `POST`:** For an existing account (same `name` as in the current file), an **empty or omitted `token`** keeps the previously saved token. New accounts must include a token.
 
 ## Actions (`POST`)
 

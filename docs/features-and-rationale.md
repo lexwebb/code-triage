@@ -85,6 +85,8 @@ Using `--dangerously-skip-permissions` is a deliberate trade-off: fixes are mean
 
 **Why:** `node-notifier` is the standard cross-platform Node integration; the web UI covers users who skip desktop toasts or run headless.
 
+**Detail:** After the first load, the app refreshes PR lists when the CLI finishes a poll (`EventSource` on `/api/events`). That bumps a generation counter so notification logic can re-fetch per-PR comments and detect **new threads** and **new Claude evaluations** without a separate one-minute polling loop against the pull list.
+
 ## Live UI hints (SSE)
 
 **Feature:** `GET /api/events` pushes **Server-Sent Events** when a poll cycle completes and when fix-job status changes, so the web UI can refresh without waiting for the next `/api/poll-status` interval.
@@ -111,6 +113,6 @@ Using `--dangerously-skip-permissions` is a deliberate trade-off: fixes are mean
 
 ## Minimal dependencies
 
-**Feature:** CLI runtime deps are essentially **Ink + React**; GitHub is **fetch**; no `octokit` package in the root CLI.
+**Feature:** CLI runtime deps are essentially **Ink + React** plus **`@octokit/rest`** for GitHub (helpers in `exec.ts` still expose `ghAsync` / `ghPost` / `ghGraphQL`).
 
-**Why:** Small install surface, straightforward ESM, and full control over retry and pagination behavior.
+**Why:** Typed, maintained client while keeping a custom `fetch` wrapper so rate-limit retries and tests stay predictable.
