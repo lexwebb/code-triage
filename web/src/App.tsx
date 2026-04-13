@@ -8,7 +8,7 @@ import PRDetail from "./components/PRDetail";
 import FileList from "./components/FileList";
 import DiffView from "./components/DiffView";
 import CommentThreads from "./components/CommentThreads";
-import { useNotifications } from "./useNotifications";
+import { useNotifications, requestNotificationPermission } from "./useNotifications";
 
 interface SelectedPR {
   number: number;
@@ -240,6 +240,15 @@ export default function App() {
           <h1 className="text-sm font-semibold text-white">cr-watch</h1>
           <div className="flex items-center gap-2">
             <span className="text-xs text-gray-600 font-mono">{timerText}</span>
+            {"Notification" in window && Notification.permission === "default" && (
+              <button
+                onClick={requestNotificationPermission}
+                className="text-xs text-gray-500 hover:text-gray-300 transition-colors"
+                title="Enable notifications"
+              >
+                🔔
+              </button>
+            )}
             <button
               onClick={() => fetchPulls()}
               disabled={refreshing}
@@ -288,7 +297,13 @@ export default function App() {
           </div>
         ) : prDetail ? (
           <>
-            <PRDetail pr={prDetail} />
+            <PRDetail pr={prDetail} onReviewSubmitted={async () => {
+              if (!selectedPR) return;
+              try {
+                const detail = await api.getPull(selectedPR.number, selectedPR.repo);
+                setPrDetail(detail);
+              } catch {}
+            }} />
             <CommentThreads
               comments={prComments}
               onSelectFile={(f) => { setFilesExpanded(true); setSelectedFile(f); }}

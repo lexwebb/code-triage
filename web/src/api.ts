@@ -52,4 +52,6 @@ export const api = {
     postJSON<{ success: boolean }>("/api/actions/fix-apply", { repo, commentId, prNumber, branch }),
   fixDiscard: (branch: string) =>
     postJSON<{ success: boolean }>("/api/actions/fix-discard", { branch }),
+  submitReview: (repo: string, prNumber: number, event: "APPROVE" | "REQUEST_CHANGES", body?: string) =>
+    postJSON<{ success: boolean }>("/api/actions/review", { repo, prNumber, event, body }),
 };

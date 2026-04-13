@@ -4,7 +4,7 @@ import type { PullRequest, ReviewComment } from "./types";
 
 const POLL_INTERVAL = 60_000; // 1 minute
 
-function requestPermission() {
+export function requestNotificationPermission() {
   if ("Notification" in window && Notification.permission === "default") {
     Notification.requestPermission();
   }
@@ -51,7 +51,7 @@ export function useNotifications(
 
   // Request permission on mount
   useEffect(() => {
-    requestPermission();
+    requestNotificationPermission();
   }, []);
 
   // Track review PRs — detect new ones

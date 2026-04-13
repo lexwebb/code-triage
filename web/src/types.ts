@@ -25,11 +25,18 @@ export interface PullRequest {
   openComments: number;
 }
 
+export interface Reviewer {
+  login: string;
+  avatar: string;
+  state: "PENDING" | "APPROVED" | "CHANGES_REQUESTED" | "COMMENTED" | "DISMISSED";
+}
+
 export interface PullRequestDetail extends PullRequest {
   body: string;
   additions: number;
   deletions: number;
   changedFiles: number;
+  reviewers: Reviewer[];
 }
 
 export interface PullFile {

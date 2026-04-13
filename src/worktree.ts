@@ -27,11 +27,20 @@ export function createWorktree(branch: string, repoDir?: string): string {
 
   console.log(`  Creating worktree for branch: ${branch}`);
   const cwd = repoDir ? getRepoRoot(repoDir) : undefined;
-  execFileSync("git", ["worktree", "add", worktreePath, branch], {
-    encoding: "utf-8",
-    stdio: "pipe",
-    cwd,
-  });
+  try {
+    execFileSync("git", ["worktree", "add", worktreePath, branch], {
+      encoding: "utf-8",
+      stdio: "pipe",
+      cwd,
+    });
+  } catch {
+    // Branch may already be checked out — use detached HEAD at the branch tip
+    execFileSync("git", ["worktree", "add", "--detach", worktreePath, branch], {
+      encoding: "utf-8",
+      stdio: "pipe",
+      cwd,
+    });
+  }
 
   return worktreePath;
 }

@@ -229,6 +229,8 @@ export function registerRoutes(): void {
   // GET /api/pulls/:number?repo=owner/repo
   addRoute("GET", "/api/pulls/:number", (_req, res, params, query) => {
     const repo = requireRepo(query);
+    const prNumber = parseInt(params.number, 10);
+
     const pr = gh<{
       number: number;
       title: string;
@@ -243,7 +245,38 @@ export function registerRoutes(): void {
       additions: number;
       deletions: number;
       changed_files: number;
-    }>(`/repos/${repo}/pulls/${params.number}`);
+      requested_reviewers: Array<{ login: string; avatar_url: string }>;
+    }>(`/repos/${repo}/pulls/${prNumber}`);
+
+    // Fetch reviews to get each reviewer's latest state
+    interface GhReview {
+      user: { login: string; avatar_url: string };
+      state: string; // APPROVED, CHANGES_REQUESTED, COMMENTED, DISMISSED, PENDING
+      submitted_at: string;
+    }
+    const reviews = gh<GhReview[]>(`/repos/${repo}/pulls/${prNumber}/reviews`);
+
+    // Build reviewer map: latest review state per user
+    const reviewerMap = new Map<string, { login: string; avatar: string; state: string }>();
+
+    // Add requested reviewers as "PENDING"
+    for (const r of pr.requested_reviewers) {
+      reviewerMap.set(r.login, { login: r.login, avatar: r.avatar_url, state: "PENDING" });
+    }
+
+    // Overlay actual reviews (latest wins)
+    for (const r of reviews) {
+      if (r.state === "COMMENTED" || r.state === "DISMISSED") {
+        // Don't overwrite a more meaningful state with COMMENTED
+        if (!reviewerMap.has(r.user.login)) {
+          reviewerMap.set(r.user.login, { login: r.user.login, avatar: r.user.avatar_url, state: r.state });
+        }
+        continue;
+      }
+      reviewerMap.set(r.user.login, { login: r.user.login, avatar: r.user.avatar_url, state: r.state });
+    }
+
+    const reviewers = Array.from(reviewerMap.values());
 
     json(res, {
       number: pr.number,
@@ -261,6 +294,7 @@ export function registerRoutes(): void {
       deletions: pr.deletions,
       changedFiles: pr.changed_files,
       repo,
+      reviewers,
     });
   });
 
@@ -466,5 +500,25 @@ export function registerRoutes(): void {
       removeWorktree(body.branch);
     } catch { /* ignore */ }
     json(res, { success: true });
+  });
+
+  // POST /api/actions/review — submit a PR review (approve or request changes)
+  addRoute("POST", "/api/actions/review", async (req, res) => {
+    const body = getBody<{ repo: string; prNumber: number; event: "APPROVE" | "REQUEST_CHANGES"; body?: string }>(req);
+    const payload = JSON.stringify({
+      event: body.event,
+      body: body.body || "",
+    });
+
+    try {
+      execFileSync(
+        "gh",
+        ["api", "-X", "POST", `/repos/${body.repo}/pulls/${body.prNumber}/reviews`, "--input", "-"],
+        { encoding: "utf-8", timeout: 15000, input: payload },
+      );
+      json(res, { success: true });
+    } catch (err) {
+      json(res, { error: `Review failed: ${(err as Error).message}` }, 500);
+    }
   });
 }
