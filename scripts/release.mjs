@@ -63,9 +63,9 @@ const currentVersion = pkg.version;
 
 if (DRY_RUN) console.log("\n  [dry-run] No files will be written, no commits or pushes made.\n");
 
-// Check for required tools
+// Check for required tools (cross-platform — avoids `which` which fails on Windows)
 for (const tool of ["git", "gh", "claude"]) {
-  try { run("which", [tool]); } catch {
+  try { run(tool, ["--version"]); } catch {
     console.error(`\n  Error: '${tool}' is not installed or not in PATH.\n`);
     process.exit(1);
   }
