@@ -6,6 +6,25 @@ A PR review dashboard that monitors your GitHub pull requests, analyzes review c
 
 ## Quick Start
 
+Install the [npm package](https://www.npmjs.com/package/code-triage) and run the `code-triage` CLI (or use `npx` without installing):
+
+```bash
+npm install -g code-triage
+code-triage
+```
+
+Or, without a global install:
+
+```bash
+npx code-triage
+```
+
+Open http://localhost:3100 in your browser.
+
+On first run you'll be prompted to configure your repos directory (default `~/src`).
+
+### From source (contributors)
+
 ```bash
 git clone git@github.com:lexwebb/code-triage.git
 cd code-triage
@@ -14,13 +33,11 @@ yarn build:all
 yarn start
 ```
 
-Open http://localhost:3100 in your browser.
-
-On first run you'll be prompted to configure your repos directory (default `~/src`).
+Use `yarn start` in place of `code-triage`; flags are passed after `--` (see [Usage](#usage)).
 
 ## Requirements
 
-- Node.js 18+
+- Node.js 20+
 - `gh` CLI (authenticated — run `gh auth login` first)
 - `claude` CLI (for comment analysis and fixes)
 - Git repos cloned locally under a common root directory
@@ -28,16 +45,18 @@ On first run you'll be prompted to configure your repos directory (default `~/sr
 ## Usage
 
 ```bash
-yarn start                    # Start with WebUI on port 3100
-yarn start -- --open          # Start and open browser
-yarn start -- --config        # Re-run setup
-yarn start -- --port 8080     # Custom port
-yarn start -- --root ~/code   # Custom repos directory
-yarn start -- --repo owner/r  # Single repo mode
-yarn start -- --dry-run       # Skip Claude analysis
-yarn start -- --status        # Show state and exit
-yarn start -- --cleanup       # Remove all worktrees
+code-triage                    # Start with WebUI on port 3100
+code-triage --open             # Start and open browser
+code-triage --config           # Re-run setup
+code-triage --port 8080        # Custom port
+code-triage --root ~/code      # Custom repos directory
+code-triage --repo owner/r     # Single repo mode
+code-triage --dry-run          # Skip Claude analysis
+code-triage --status           # Show state and exit
+code-triage --cleanup          # Remove all worktrees
 ```
+
+When developing from a clone, use `yarn start --` before each flag, for example `yarn start -- --open`.
 
 ## Development
 
