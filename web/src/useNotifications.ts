@@ -14,7 +14,7 @@ export async function requestNotificationPermission(): Promise<void> {
 
 function notify(title: string, body: string, onClick?: () => void) {
   if ("Notification" in window && Notification.permission === "granted") {
-    const n = new Notification(title, { body, icon: "/favicon.ico" });
+    const n = new Notification(title, { body, icon: "/logo.png" });
     if (onClick) {
       n.onclick = () => {
         window.focus();
@@ -27,7 +27,10 @@ function notify(title: string, body: string, onClick?: () => void) {
 
 interface NotificationState {
   reviewPRKeys: Set<string>;
-  pendingCommentKeys: Set<string>;
+  allCommentKeys: Set<string>;      // all comments (raw, before analysis)
+  pendingCommentKeys: Set<string>;   // analyzed + pending action
+  prChecksStatus: Map<string, string>; // PR key -> checksStatus
+  prOpenComments: Map<string, number>; // PR key -> openComments count
   initialized: boolean;
   lastReviewReminder: number;
 }
@@ -71,7 +74,10 @@ export function useNotifications(
 ) {
   const prevState = useRef<NotificationState>({
     reviewPRKeys: new Set(),
+    allCommentKeys: new Set(),
     pendingCommentKeys: new Set(),
+    prChecksStatus: new Map(),
+    prOpenComments: new Map(),
     initialized: false,
     lastReviewReminder: Date.now(),
   });
@@ -81,7 +87,7 @@ export function useNotifications(
     requestNotificationPermission();
   }, []);
 
-  // Track review PRs — detect new ones
+  // ── Track review PRs — detect new ones ──
   useEffect(() => {
     const muted = getMutedPRs();
     const currentKeys = new Set(reviewPulls.map(prKey));
@@ -108,7 +114,67 @@ export function useNotifications(
     if (hasNew) onDataChanged();
   }, [reviewPulls]);
 
-  // Recurring review reminder every 30 minutes for unmuted review PRs
+  // ── Track CI status changes on your PRs ──
+  useEffect(() => {
+    if (!prevState.current.initialized) {
+      // Initialize baseline
+      for (const pr of pulls) {
+        prevState.current.prChecksStatus.set(prKey(pr), pr.checksStatus);
+      }
+      return;
+    }
+
+    const muted = getMutedPRs();
+    for (const pr of pulls) {
+      const key = prKey(pr);
+      const prev = prevState.current.prChecksStatus.get(key);
+      if (prev && prev !== pr.checksStatus && !muted.has(key)) {
+        const repoShort = pr.repo.split("/")[1] ?? pr.repo;
+        if (pr.checksStatus === "success") {
+          notify(
+            `Checks passed: ${repoShort}#${pr.number}`,
+            pr.title,
+            () => onSelectPR(pr.number, pr.repo),
+          );
+        } else if (pr.checksStatus === "failure") {
+          notify(
+            `Checks failed: ${repoShort}#${pr.number}`,
+            pr.title,
+            () => onSelectPR(pr.number, pr.repo),
+          );
+        }
+      }
+      prevState.current.prChecksStatus.set(key, pr.checksStatus);
+    }
+  }, [pulls]);
+
+  // ── Track new comments on your PRs (open comment count changes) ──
+  useEffect(() => {
+    if (!prevState.current.initialized) {
+      for (const pr of pulls) {
+        prevState.current.prOpenComments.set(prKey(pr), pr.openComments);
+      }
+      return;
+    }
+
+    const muted = getMutedPRs();
+    for (const pr of pulls) {
+      const key = prKey(pr);
+      const prev = prevState.current.prOpenComments.get(key) ?? 0;
+      if (pr.openComments > prev && !muted.has(key)) {
+        const newCount = pr.openComments - prev;
+        const repoShort = pr.repo.split("/")[1] ?? pr.repo;
+        notify(
+          `${newCount} new comment${newCount > 1 ? "s" : ""}: ${repoShort}#${pr.number}`,
+          pr.title,
+          () => onSelectPR(pr.number, pr.repo),
+        );
+      }
+      prevState.current.prOpenComments.set(key, pr.openComments);
+    }
+  }, [pulls]);
+
+  // ── Recurring review reminder every 30 minutes ──
   useEffect(() => {
     if (reviewPulls.length === 0) return;
 
@@ -135,33 +201,36 @@ export function useNotifications(
           unmutedReviews.map((pr) => `${pr.repo.split("/")[1]}#${pr.number}: ${pr.title}`).join("\n"),
         );
       }
-    }, 60_000); // check every minute, but only fire every 30 min
+    }, 60_000);
 
     return () => clearInterval(interval);
   }, [reviewPulls]);
 
-  // Initialize pending comment baseline once pulls are loaded
+  // ── Initialize baseline for comment tracking ──
   useEffect(() => {
     if (pulls.length === 0 || prevState.current.initialized) return;
 
     (async () => {
-      const keys = new Set<string>();
+      const allKeys = new Set<string>();
+      const pendingKeys = new Set<string>();
       for (const pr of pulls) {
         try {
           const comments = await api.getPullComments(pr.number, pr.repo);
           for (const c of comments) {
+            allKeys.add(commentKey(c, pr.repo, pr.number));
             if (c.crStatus === "pending" && c.evaluation) {
-              keys.add(commentKey(c, pr.repo, pr.number));
+              pendingKeys.add(commentKey(c, pr.repo, pr.number));
             }
           }
         } catch { /* ignore */ }
       }
-      prevState.current.pendingCommentKeys = keys;
+      prevState.current.allCommentKeys = allKeys;
+      prevState.current.pendingCommentKeys = pendingKeys;
       prevState.current.initialized = true;
     })();
   }, [pulls]);
 
-  // Poll for new pending comments
+  // ── Poll for new/analyzed comments ──
   useEffect(() => {
     if (pulls.length === 0) return;
 
@@ -169,17 +238,37 @@ export function useNotifications(
       if (!prevState.current.initialized) return;
 
       let hasNew = false;
-      const newKeys = new Set<string>();
+      const newAllKeys = new Set<string>();
+      const newPendingKeys = new Set<string>();
+      const muted = getMutedPRs();
 
       for (const pr of pulls) {
+        const prk = prKey(pr);
         try {
           const comments = await api.getPullComments(pr.number, pr.repo);
           for (const c of comments) {
-            if (c.crStatus === "pending" && c.evaluation) {
-              const key = commentKey(c, pr.repo, pr.number);
-              newKeys.add(key);
+            const key = commentKey(c, pr.repo, pr.number);
+            newAllKeys.add(key);
 
-              if (!prevState.current.pendingCommentKeys.has(key)) {
+            // New comment appeared (any comment, before analysis)
+            if (!prevState.current.allCommentKeys.has(key) && !muted.has(prk)) {
+              // Only notify for non-bot comments we haven't seen — analysis notifications cover bot comments
+              if (!c.author.includes("[bot]")) {
+                hasNew = true;
+                const repoShort = pr.repo.split("/")[1] ?? pr.repo;
+                notify(
+                  `New comment on ${repoShort}#${pr.number}`,
+                  `${c.author} commented on ${c.path}:${c.line}`,
+                  () => onSelectPR(pr.number, pr.repo),
+                );
+              }
+            }
+
+            // Analysis completed — comment now has evaluation and is pending action
+            if (c.crStatus === "pending" && c.evaluation) {
+              newPendingKeys.add(key);
+
+              if (!prevState.current.pendingCommentKeys.has(key) && !muted.has(prk)) {
                 hasNew = true;
                 const repoShort = pr.repo.split("/")[1] ?? pr.repo;
                 const actionLabel = c.evaluation.action === "fix" ? "Needs fix" :
@@ -195,7 +284,8 @@ export function useNotifications(
         } catch { /* ignore */ }
       }
 
-      prevState.current.pendingCommentKeys = newKeys;
+      prevState.current.allCommentKeys = newAllKeys;
+      prevState.current.pendingCommentKeys = newPendingKeys;
       if (hasNew) onDataChanged();
     }, POLL_INTERVAL);
 
