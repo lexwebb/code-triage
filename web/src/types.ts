@@ -38,6 +38,13 @@ export interface PullFile {
   patch: string;
 }
 
+export interface CommentEvaluation {
+  action: "reply" | "fix" | "resolve";
+  summary: string;
+  reply?: string;
+  fixDescription?: string;
+}
+
 export interface ReviewComment {
   id: number;
   author: string;
@@ -49,6 +56,8 @@ export interface ReviewComment {
   createdAt: string;
   inReplyToId: number | null;
   isResolved: boolean;
+  evaluation: CommentEvaluation | null;
+  crStatus: "pending" | "replied" | "fixed" | "dismissed" | null;
 }
 
 export interface CrWatchState {
