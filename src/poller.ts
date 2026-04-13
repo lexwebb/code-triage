@@ -1,6 +1,6 @@
 import { execFileSync } from "child_process";
 import type { CrComment, PrInfo, PollResult } from "./types.js";
-import { execAsync, ghAsync, ghGraphQL } from "./exec.js";
+import { ghAsync, ghGraphQL } from "./exec.js";
 
 interface GhPull {
   number: number;
@@ -32,8 +32,8 @@ export function getRepoFromGit(): string {
 }
 
 async function getCurrentUser(): Promise<string> {
-  const result = await execAsync("gh", ["api", "/user", "--jq", ".login"], { timeout: 10000 });
-  return result.trim();
+  const user = await ghAsync<{ login: string }>("/user");
+  return user.login;
 }
 
 async function getResolvedCommentIds(repoPath: string, prNumber: number): Promise<Set<number>> {

@@ -2,7 +2,7 @@ import { addRoute, json, getRepos, getBody, getPollState } from "./server.js";
 import { loadState, markComment, saveState } from "./state.js";
 import { postReply, resolveThread, applyFixWithClaude } from "./actioner.js";
 import { createWorktree, getDiffInWorktree, removeWorktree, commitAndPushWorktree } from "./worktree.js";
-import { execAsync, ghAsync, ghGraphQL } from "./exec.js";
+import { ghAsync, ghGraphQL, ghPost } from "./exec.js";
 
 async function getResolvedCommentIds(repoPath: string, prNumber: number): Promise<Set<number>> {
   const [owner, repo] = repoPath.split("/");
@@ -49,8 +49,8 @@ async function getResolvedCommentIds(repoPath: string, prNumber: number): Promis
 }
 
 async function getUsername(): Promise<string> {
-  const result = await execAsync("gh", ["api", "/user", "--jq", ".login"], { timeout: 10000 });
-  return result.trim();
+  const user = await ghAsync<{ login: string }>("/user");
+  return user.login;
 }
 
 function requireRepo(query: URLSearchParams): string {
@@ -108,8 +108,7 @@ export function registerRoutes(): void {
 
   // GET /api/user
   addRoute("GET", "/api/user", async (_req, res) => {
-    const result = await execAsync("gh", ["api", "/user"], { timeout: 10000 });
-    const user = JSON.parse(result) as { login: string; avatar_url: string; html_url: string };
+    const user = await ghAsync<{ login: string; avatar_url: string; html_url: string }>("/user");
     json(res, { login: user.login, avatarUrl: user.avatar_url, url: user.html_url });
   });
 
@@ -350,13 +349,8 @@ export function registerRoutes(): void {
     const filePath = params.path;
 
     try {
-      const content = (await execAsync(
-        "gh",
-        ["api", `/repos/${repo}/contents/${filePath}?ref=${pr.head.ref}`, "--jq", ".content"],
-        { timeout: 15000 },
-      )).trim();
-
-      const decoded = Buffer.from(content, "base64").toString("utf-8");
+      const file = await ghAsync<{ content: string }>(`/repos/${repo}/contents/${filePath}?ref=${pr.head.ref}`);
+      const decoded = Buffer.from(file.content, "base64").toString("utf-8");
       json(res, { content: decoded, path: filePath });
     } catch {
       json(res, { error: "File not found" }, 404);
@@ -486,17 +480,11 @@ export function registerRoutes(): void {
   // POST /api/actions/review — submit a PR review (approve or request changes)
   addRoute("POST", "/api/actions/review", async (req, res) => {
     const body = getBody<{ repo: string; prNumber: number; event: "APPROVE" | "REQUEST_CHANGES"; body?: string }>(req);
-    const payload = JSON.stringify({
-      event: body.event,
-      body: body.body || "",
-    });
-
     try {
-      await execAsync(
-        "gh",
-        ["api", "-X", "POST", `/repos/${body.repo}/pulls/${body.prNumber}/reviews`, "--input", "-"],
-        { timeout: 15000, input: payload },
-      );
+      await ghPost(`/repos/${body.repo}/pulls/${body.prNumber}/reviews`, {
+        event: body.event,
+        body: body.body || "",
+      });
       json(res, { success: true });
     } catch (err) {
       json(res, { error: `Review failed: ${(err as Error).message}` }, 500);

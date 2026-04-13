@@ -1,5 +1,6 @@
 import { spawn, type ChildProcess } from "child_process";
 import { markComment, markCommentWithEvaluation, saveState } from "./state.js";
+import { ghPost, ghGraphQL } from "./exec.js";
 import type { CrComment, CrWatchState, Evaluation, PrInfo, SpawnOptions } from "./types.js";
 
 // Track all active child processes so we can kill them on shutdown
@@ -144,12 +145,7 @@ function parseEvaluation(raw: string): Evaluation {
 }
 
 export async function postReply(repoPath: string, prNumber: number, commentId: number, body: string): Promise<void> {
-  const payload = JSON.stringify({ body });
-  await spawnTracked(
-    "gh",
-    ["api", "-X", "POST", `/repos/${repoPath}/pulls/${prNumber}/comments/${commentId}/replies`, "--input", "-"],
-    { stdio: ["pipe", "pipe", "pipe"], inputData: payload },
-  );
+  await ghPost(`/repos/${repoPath}/pulls/${prNumber}/comments/${commentId}/replies`, { body });
 }
 
 interface GhReviewThread {
@@ -168,8 +164,16 @@ export async function resolveThread(
 ): Promise<void> {
   const [owner, repo] = repoPath.split("/");
 
-  const findQuery = JSON.stringify({
-    query: `query($owner: String!, $repo: String!, $prNumber: Int!) {
+  const data = await ghGraphQL<{
+    data: {
+      repository: {
+        pullRequest: {
+          reviewThreads: { nodes: GhReviewThread[] };
+        };
+      };
+    };
+  }>(
+    `query($owner: String!, $repo: String!, $prNumber: Int!) {
       repository(owner: $owner, name: $repo) {
         pullRequest(number: $prNumber) {
           reviewThreads(first: 100) {
@@ -184,24 +188,8 @@ export async function resolveThread(
         }
       }
     }`,
-    variables: { owner, repo, prNumber },
-  });
-
-  const findResult = await spawnTracked(
-    "gh",
-    ["api", "graphql", "--input", "-"],
-    { stdio: ["pipe", "pipe", "pipe"], inputData: findQuery },
+    { owner, repo, prNumber },
   );
-
-  const data = JSON.parse(findResult) as {
-    data: {
-      repository: {
-        pullRequest: {
-          reviewThreads: { nodes: GhReviewThread[] };
-        };
-      };
-    };
-  };
 
   const threads = data.data.repository.pullRequest.reviewThreads.nodes;
   const thread = threads.find(
@@ -226,19 +214,13 @@ export async function resolveThread(
     await postReply(repoPath, prNumber, commentId, replyBody);
   }
 
-  const resolveQuery = JSON.stringify({
-    query: `mutation($threadId: ID!) {
+  await ghGraphQL(
+    `mutation($threadId: ID!) {
       resolveReviewThread(input: { threadId: $threadId }) {
         thread { isResolved }
       }
     }`,
-    variables: { threadId: thread.id },
-  });
-
-  await spawnTracked(
-    "gh",
-    ["api", "graphql", "--input", "-"],
-    { stdio: ["pipe", "pipe", "pipe"], inputData: resolveQuery },
+    { threadId: thread.id },
   );
 }
 
