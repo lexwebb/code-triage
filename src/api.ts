@@ -10,6 +10,57 @@ function gh<T>(endpoint: string): T {
   return JSON.parse(result) as T;
 }
 
+function getResolvedCommentIds(repoPath: string, prNumber: number): Set<number> {
+  const [owner, repo] = repoPath.split("/");
+  const query = JSON.stringify({
+    query: `query($owner: String!, $repo: String!, $prNumber: Int!) {
+      repository(owner: $owner, name: $repo) {
+        pullRequest(number: $prNumber) {
+          reviewThreads(first: 100) {
+            nodes {
+              isResolved
+              comments(first: 100) {
+                nodes { databaseId }
+              }
+            }
+          }
+        }
+      }
+    }`,
+    variables: { owner, repo, prNumber },
+  });
+
+  const result = execFileSync("gh", ["api", "graphql", "--input", "-"], {
+    encoding: "utf-8",
+    timeout: 30000,
+    input: query,
+  });
+
+  const data = JSON.parse(result) as {
+    data: {
+      repository: {
+        pullRequest: {
+          reviewThreads: { nodes: Array<{
+            isResolved: boolean;
+            comments: { nodes: Array<{ databaseId: number }> };
+          }> };
+        };
+      };
+    };
+  };
+
+  const threads = data.data.repository.pullRequest.reviewThreads.nodes;
+  const resolvedIds = new Set<number>();
+  for (const thread of threads) {
+    if (thread.isResolved) {
+      for (const comment of thread.comments.nodes) {
+        resolvedIds.add(comment.databaseId);
+      }
+    }
+  }
+  return resolvedIds;
+}
+
 function getUsername(): string {
   return execFileSync("gh", ["api", "/user", "--jq", ".login"], {
     encoding: "utf-8",
@@ -162,6 +213,7 @@ export function registerRoutes(): void {
   // GET /api/pulls/:number/comments?repo=owner/repo
   addRoute("GET", "/api/pulls/:number/comments", (_req, res, params, query) => {
     const repo = requireRepo(query);
+    const prNumber = parseInt(params.number, 10);
 
     interface GhComment {
       id: number;
@@ -175,7 +227,10 @@ export function registerRoutes(): void {
       in_reply_to_id: number | null;
     }
 
-    const comments = gh<GhComment[]>(`/repos/${repo}/pulls/${params.number}/comments`);
+    const comments = gh<GhComment[]>(`/repos/${repo}/pulls/${prNumber}/comments`);
+
+    // Fetch resolved thread status via GraphQL
+    const resolvedIds = getResolvedCommentIds(repo, prNumber);
 
     json(res, comments.map((c) => ({
       id: c.id,
@@ -187,6 +242,7 @@ export function registerRoutes(): void {
       body: c.body,
       createdAt: c.created_at,
       inReplyToId: c.in_reply_to_id ?? null,
+      isResolved: resolvedIds.has(c.id),
     })));
   });
 

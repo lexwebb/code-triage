@@ -48,6 +48,7 @@ export interface ReviewComment {
   body: string;
   createdAt: string;
   inReplyToId: number | null;
+  isResolved: boolean;
 }
 
 export interface CrWatchState {
