@@ -4,20 +4,21 @@ import { join } from "path";
 
 const WORKTREE_DIR = ".cr-worktrees";
 
-function getRepoRoot(): string {
+function getRepoRoot(cwd?: string): string {
   return execFileSync("git", ["rev-parse", "--show-toplevel"], {
     encoding: "utf-8",
+    cwd,
   }).trim();
 }
 
-export function getWorktreePath(branch: string): string {
-  const root = getRepoRoot();
+export function getWorktreePath(branch: string, repoDir?: string): string {
+  const root = repoDir ? getRepoRoot(repoDir) : getRepoRoot();
   const safeName = branch.replace(/[^a-zA-Z0-9_-]/g, "-");
   return join(root, WORKTREE_DIR, safeName);
 }
 
-export function createWorktree(branch: string): string {
-  const worktreePath = getWorktreePath(branch);
+export function createWorktree(branch: string, repoDir?: string): string {
+  const worktreePath = getWorktreePath(branch, repoDir);
 
   if (existsSync(worktreePath)) {
     console.log(`  Worktree already exists: ${worktreePath}`);
@@ -25,9 +26,11 @@ export function createWorktree(branch: string): string {
   }
 
   console.log(`  Creating worktree for branch: ${branch}`);
+  const cwd = repoDir ? getRepoRoot(repoDir) : undefined;
   execFileSync("git", ["worktree", "add", worktreePath, branch], {
     encoding: "utf-8",
     stdio: "pipe",
+    cwd,
   });
 
   return worktreePath;

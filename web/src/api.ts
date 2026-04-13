@@ -46,4 +46,10 @@ export const api = {
     postJSON<{ success: boolean }>("/api/actions/resolve", { repo, commentId, prNumber }),
   dismissComment: (repo: string, commentId: number, prNumber: number) =>
     postJSON<{ success: boolean }>("/api/actions/dismiss", { repo, commentId, prNumber }),
+  fixWithClaude: (repo: string, commentId: number, prNumber: number, branch: string, comment: { path: string; line: number; body: string; diffHunk: string }) =>
+    postJSON<{ success: boolean; diff?: string; branch?: string; error?: string }>("/api/actions/fix", { repo, commentId, prNumber, branch, comment }),
+  fixApply: (repo: string, commentId: number, prNumber: number, branch: string) =>
+    postJSON<{ success: boolean }>("/api/actions/fix-apply", { repo, commentId, prNumber, branch }),
+  fixDiscard: (branch: string) =>
+    postJSON<{ success: boolean }>("/api/actions/fix-discard", { branch }),
 };

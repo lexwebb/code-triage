@@ -294,6 +294,7 @@ export default function App() {
               onSelectFile={(f) => { setFilesExpanded(true); setSelectedFile(f); }}
               repo={selectedPR!.repo}
               prNumber={selectedPR!.number}
+              branch={prDetail.branch}
               onCommentAction={reloadComments}
             />
             {/* Collapsible files section */}

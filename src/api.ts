@@ -1,7 +1,8 @@
 import { execFileSync } from "child_process";
 import { addRoute, json, getRepos, getBody } from "./server.js";
 import { loadState, markComment, saveState } from "./state.js";
-import { postReply, resolveThread } from "./actioner.js";
+import { postReply, resolveThread, applyFixWithClaude } from "./actioner.js";
+import { createWorktree, getDiffInWorktree, removeWorktree, commitAndPushWorktree } from "./worktree.js";
 
 function gh<T>(endpoint: string): T {
   const result = execFileSync("gh", ["api", endpoint, "--paginate"], {
@@ -395,5 +396,75 @@ export function registerRoutes(): void {
     markComment(state, body.commentId, "dismissed", body.prNumber, body.repo);
     saveState(state);
     json(res, { success: true, status: "dismissed" });
+  });
+
+  // POST /api/actions/fix — create worktree, run Claude, return diff
+  addRoute("POST", "/api/actions/fix", async (req, res) => {
+    const body = getBody<{ repo: string; commentId: number; prNumber: number; branch: string; comment: { path: string; line: number; body: string; diffHunk: string } }>(req);
+
+    // Find local path for this repo
+    const repoInfo = getRepos().find((r) => r.repo === body.repo);
+    if (!repoInfo?.localPath) {
+      json(res, { error: "Repo local path not found" }, 400);
+      return;
+    }
+
+    let worktreePath: string;
+    try {
+      worktreePath = createWorktree(body.branch, repoInfo.localPath);
+    } catch (err) {
+      json(res, { error: `Failed to create worktree: ${(err as Error).message}` }, 500);
+      return;
+    }
+
+    try {
+      await applyFixWithClaude(worktreePath, body.comment);
+      const diff = getDiffInWorktree(worktreePath);
+
+      if (!diff.trim()) {
+        removeWorktree(body.branch);
+        json(res, { success: false, error: "Claude made no changes", diff: "" });
+        return;
+      }
+
+      json(res, { success: true, diff, branch: body.branch });
+    } catch (err) {
+      removeWorktree(body.branch);
+      json(res, { error: `Fix failed: ${(err as Error).message}` }, 500);
+    }
+  });
+
+  // POST /api/actions/fix-apply — commit and push worktree changes
+  addRoute("POST", "/api/actions/fix-apply", async (req, res) => {
+    const body = getBody<{ repo: string; commentId: number; prNumber: number; branch: string }>(req);
+    const repoInfo = getRepos().find((r) => r.repo === body.repo);
+    if (!repoInfo?.localPath) {
+      json(res, { error: "Repo local path not found" }, 400);
+      return;
+    }
+
+    try {
+      const worktreePath = createWorktree(body.branch, repoInfo.localPath); // returns existing
+      const commitMsg = `fix: apply CodeRabbit suggestion for PR #${body.prNumber}`;
+      commitAndPushWorktree(worktreePath, commitMsg);
+      removeWorktree(body.branch);
+
+      const state = loadState();
+      markComment(state, body.commentId, "fixed", body.prNumber, body.repo);
+      saveState(state);
+
+      json(res, { success: true, status: "fixed" });
+    } catch (err) {
+      json(res, { error: `Push failed: ${(err as Error).message}` }, 500);
+    }
+  });
+
+  // POST /api/actions/fix-discard — discard worktree
+  addRoute("POST", "/api/actions/fix-discard", async (req, res) => {
+    const body = getBody<{ branch: string }>(req);
+    try {
+      removeWorktree(body.branch);
+    } catch { /* ignore */ }
+    json(res, { success: true });
   });
 }
