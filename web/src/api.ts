@@ -49,6 +49,7 @@ export interface PollStatus {
   intervalMs: number;
   polling: boolean;
   fixJobs: FixJobStatus[];
+  testNotification: boolean;
 }
 
 export const api = {

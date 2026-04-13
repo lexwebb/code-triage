@@ -16,7 +16,7 @@ import {
   prompt,
   cleanup as cleanupTerminal,
 } from "./terminal.js";
-import { startServer, updateRepos, updatePollState } from "./server.js";
+import { startServer, updateRepos, updatePollState, triggerTestNotification } from "./server.js";
 import { discoverRepos, type RepoInfo } from "./discovery.js";
 import { loadConfig, saveConfig, configExists, type Config } from "./config.js";
 
@@ -313,6 +313,7 @@ registerHotkeys([
   { key: "c", label: "Clear state", handler: clearState },
   { key: "s", label: "Status", handler: () => { printStatus(); } },
   { key: "p", label: "List PRs", handler: () => { listPRs(); } },
+  { key: "n", label: "Test notif", handler: () => { triggerTestNotification(); console.log("\n  Test notification triggered.\n"); } },
   { key: "q", label: "Quit", handler: shutdown },
 ]);
 

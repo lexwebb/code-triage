@@ -71,6 +71,19 @@ export function getRepos(): RepoInfo[] {
 }
 
 let pollState = { lastPoll: 0, nextPoll: 0, intervalMs: 0, polling: false };
+let testNotificationPending = false;
+
+export function triggerTestNotification(): void {
+  testNotificationPending = true;
+}
+
+export function consumeTestNotification(): boolean {
+  if (testNotificationPending) {
+    testNotificationPending = false;
+    return true;
+  }
+  return false;
+}
 
 export function updatePollState(state: { lastPoll?: number; nextPoll?: number; intervalMs?: number; polling?: boolean }): void {
   Object.assign(pollState, state);
@@ -117,6 +130,7 @@ export function getPollState() {
   return {
     ...pollState,
     fixJobs: Array.from(fixJobStatuses.values()),
+    testNotification: consumeTestNotification(),
   };
 }
 

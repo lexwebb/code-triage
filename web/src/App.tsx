@@ -60,6 +60,16 @@ export default function App() {
   );
   const lastFetchRef = useRef(Number(sessionStorage.getItem(CACHE_KEY_TIME) || "0"));
 
+  // Re-check notification permission periodically (user may change it in browser settings)
+  useEffect(() => {
+    const interval = setInterval(() => {
+      if ("Notification" in window && Notification.permission !== notifPermission) {
+        setNotifPermission(Notification.permission);
+      }
+    }, 5000);
+    return () => clearInterval(interval);
+  }, [notifPermission]);
+
   const showNotifBanner = notifPermission === "default";
 
   // Client-side filtered PR lists
@@ -187,6 +197,14 @@ export default function App() {
         }
         prevFixJobsRef.current = new Map(status.fixJobs.map((j) => [j.commentId, j.status]));
 
+        // Test notification from CLI hotkey
+        if (status.testNotification && "Notification" in window && Notification.permission === "granted") {
+          new Notification("Code Triage — Test Notification", {
+            body: "Notifications are working!",
+            icon: "/logo.png",
+          });
+        }
+
         if (status.lastPoll > lastFetchRef.current) {
           await fetchPulls();
         }
@@ -278,15 +296,24 @@ export default function App() {
           <span className="text-sm text-white">
             Enable notifications to get alerted when PRs need your attention.
           </span>
-          <button
-            onClick={async () => {
-              await requestNotificationPermission();
-              setNotifPermission(Notification.permission);
-            }}
-            className="text-sm px-3 py-1 bg-white/20 hover:bg-white/30 text-white rounded transition-colors"
-          >
-            Turn on notifications
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={async () => {
+                await requestNotificationPermission();
+                setNotifPermission(Notification.permission);
+              }}
+              className="text-sm px-3 py-1 bg-white/20 hover:bg-white/30 text-white rounded transition-colors"
+            >
+              Turn on notifications
+            </button>
+          </div>
+        </div>
+      )}
+      {notifPermission === "denied" && (
+        <div className="bg-red-600/80 px-4 py-2 flex items-center justify-between shrink-0">
+          <span className="text-sm text-white">
+            Notifications are blocked. Click the lock/shield icon in your address bar, find Notifications, and set it to Allow. Then refresh the page.
+          </span>
         </div>
       )}
       <div className="flex-1 flex overflow-hidden">
@@ -301,6 +328,28 @@ export default function App() {
               <span className="text-xs text-gray-600 font-mono" title="Time until next backend poll">
                 {timerText}
               </span>
+              <button
+                onClick={() => {
+                  if ("Notification" in window) {
+                    if (Notification.permission === "granted") {
+                      new Notification("Code Triage — Test", { body: "Notifications are working!", icon: "/logo.png" });
+                    } else if (Notification.permission === "default") {
+                      Notification.requestPermission().then((p) => {
+                        setNotifPermission(p);
+                        if (p === "granted") {
+                          new Notification("Code Triage — Test", { body: "Notifications are working!", icon: "/logo.png" });
+                        }
+                      });
+                    } else {
+                      alert("Notifications are blocked. Please enable them in your browser settings.");
+                    }
+                  }
+                }}
+                className="text-xs text-gray-500 hover:text-gray-300 transition-colors"
+                title={`Test notification (permission: ${notifPermission})`}
+              >
+                🔔
+              </button>
               <button
                 onClick={() => fetchPulls()}
                 disabled={refreshing}
