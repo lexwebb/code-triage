@@ -17,12 +17,35 @@ export function getWorktreePath(branch: string, repoDir?: string): string {
   return join(root, WORKTREE_DIR, safeName);
 }
 
+export function removeWorktree(branch: string, repoDir?: string): void {
+  const worktreePath = getWorktreePath(branch, repoDir);
+  if (!existsSync(worktreePath)) return;
+
+  const cwd = repoDir ? getRepoRoot(repoDir) : undefined;
+  console.log(`  Removing worktree: ${worktreePath}`);
+  try {
+    execFileSync("git", ["worktree", "remove", worktreePath, "--force"], {
+      encoding: "utf-8",
+      stdio: "pipe",
+      cwd,
+    });
+  } catch {
+    // Force remove the directory and prune
+    rmSync(worktreePath, { recursive: true, force: true });
+    execFileSync("git", ["worktree", "prune"], {
+      encoding: "utf-8",
+      stdio: "pipe",
+      cwd,
+    });
+  }
+}
+
 export function createWorktree(branch: string, repoDir?: string): string {
   const worktreePath = getWorktreePath(branch, repoDir);
 
   if (existsSync(worktreePath)) {
     console.log(`  Cleaning up stale worktree: ${worktreePath}`);
-    removeWorktree(branch);
+    removeWorktree(branch, repoDir);
   }
 
   console.log(`  Creating worktree for branch: ${branch}`);
@@ -43,26 +66,6 @@ export function createWorktree(branch: string, repoDir?: string): string {
   }
 
   return worktreePath;
-}
-
-export function removeWorktree(branch: string): void {
-  const worktreePath = getWorktreePath(branch);
-
-  if (!existsSync(worktreePath)) return;
-
-  console.log(`  Removing worktree: ${worktreePath}`);
-  try {
-    execFileSync("git", ["worktree", "remove", worktreePath, "--force"], {
-      encoding: "utf-8",
-      stdio: "pipe",
-    });
-  } catch {
-    rmSync(worktreePath, { recursive: true, force: true });
-    execFileSync("git", ["worktree", "prune"], {
-      encoding: "utf-8",
-      stdio: "pipe",
-    });
-  }
 }
 
 export function cleanupAllWorktrees(): void {

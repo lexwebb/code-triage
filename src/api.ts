@@ -465,7 +465,7 @@ export function registerRoutes(): void {
       const diff = getDiffInWorktree(worktreePath);
 
       if (!diff.trim()) {
-        removeWorktree(body.branch);
+        removeWorktree(body.branch, repoInfo?.localPath);
         const s = loadState();
         removeFixJobState(s, body.commentId);
         saveState(s);
@@ -487,7 +487,7 @@ export function registerRoutes(): void {
         diff, branch: body.branch,
       });
     } catch (err) {
-      removeWorktree(body.branch);
+      removeWorktree(body.branch, repoInfo?.localPath);
       const s = loadState();
       removeFixJobState(s, body.commentId);
       saveState(s);
@@ -512,7 +512,7 @@ export function registerRoutes(): void {
       const worktreePath = getWorktreePath(body.branch, repoInfo.localPath);
       const commitMsg = `fix: apply CodeRabbit suggestion for PR #${body.prNumber}`;
       commitAndPushWorktree(worktreePath, commitMsg);
-      removeWorktree(body.branch);
+      removeWorktree(body.branch, repoInfo?.localPath);
 
       const state = loadState();
       markComment(state, body.commentId, "fixed", body.prNumber, body.repo);
@@ -527,9 +527,10 @@ export function registerRoutes(): void {
 
   // POST /api/actions/fix-discard — discard worktree
   addRoute("POST", "/api/actions/fix-discard", async (req, res) => {
-    const body = getBody<{ branch: string; commentId?: number }>(req);
+    const body = getBody<{ branch: string; repo?: string; commentId?: number }>(req);
+    const discardRepoInfo = body.repo ? getRepos().find((r) => r.repo === body.repo) : undefined;
     try {
-      removeWorktree(body.branch);
+      removeWorktree(body.branch, discardRepoInfo?.localPath);
     } catch { /* ignore */ }
     if (body.commentId) clearFixJobStatus(body.commentId);
     json(res, { success: true });
