@@ -15,7 +15,7 @@ const SKIP_DIRS = new Set([
 
 const MAX_DEPTH = 3;
 
-function parseGitHubRemote(url: string): string | null {
+export function parseGitHubRemote(url: string): string | null {
   // SSH: git@github.com:owner/repo.git
   // HTTPS: https://github.com/owner/repo.git
   const match = url.match(/github\.com[:/](.+?)(?:\.git)?$/);

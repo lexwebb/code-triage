@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ghAsync, setTokenResolver } from "./exec.js";
+import { ghAsync, hasEnvGitHubToken, resolveGitHubTokenFromSources, setTokenResolver } from "./exec.js";
 
 beforeEach(() => {
   setTokenResolver(() => "test-token");
@@ -8,6 +8,9 @@ beforeEach(() => {
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.useRealTimers();
+  delete process.env.GITHUB_TOKEN;
+  delete process.env.GH_TOKEN;
+  vi.restoreAllMocks();
 });
 
 describe("ghAsync", () => {
@@ -83,5 +86,30 @@ describe("ghAsync", () => {
     const out = await p;
     expect(out).toEqual({ ok: true });
     expect(vi.mocked(fetch)).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("hasEnvGitHubToken", () => {
+  it("is false when neither env var is set", () => {
+    expect(hasEnvGitHubToken()).toBe(false);
+  });
+
+  it("is true when GITHUB_TOKEN or GH_TOKEN is non-empty", () => {
+    process.env.GITHUB_TOKEN = "x";
+    expect(hasEnvGitHubToken()).toBe(true);
+    delete process.env.GITHUB_TOKEN;
+    process.env.GH_TOKEN = "y";
+    expect(hasEnvGitHubToken()).toBe(true);
+  });
+});
+
+describe("resolveGitHubTokenFromSources", () => {
+  it("prefers env over config token", () => {
+    process.env.GITHUB_TOKEN = "from-env";
+    expect(resolveGitHubTokenFromSources("from-config")).toBe("from-env");
+  });
+
+  it("uses config when env is unset", () => {
+    expect(resolveGitHubTokenFromSources("  pat  ")).toBe("pat");
   });
 });

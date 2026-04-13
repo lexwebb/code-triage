@@ -54,14 +54,14 @@ async function getUsername(): Promise<string> {
   return user.login;
 }
 
-function toInt(v: unknown, fallback: number): number {
+export function toInt(v: unknown, fallback: number): number {
   if (typeof v === "number" && Number.isFinite(v)) return Math.floor(v);
   if (typeof v === "string" && v.trim() !== "") return parseInt(v, 10);
   return fallback;
 }
 
 /** Safe JSON shape for the web settings form (no account tokens). */
-function serializeConfigForClient(c: Config): Record<string, unknown> {
+export function serializeConfigForClient(c: Config): Record<string, unknown> {
   return {
     root: c.root,
     port: c.port,
@@ -82,7 +82,7 @@ function serializeConfigForClient(c: Config): Record<string, unknown> {
   };
 }
 
-function mergeConfigFromBody(body: Record<string, unknown>, previous: Config): Config {
+export function mergeConfigFromBody(body: Record<string, unknown>, previous: Config): Config {
   const root = typeof body.root === "string" ? body.root.trim() : previous.root;
   if (!root) throw new Error("root is required");
 
