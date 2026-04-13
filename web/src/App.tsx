@@ -3,6 +3,8 @@ import { api } from "./api";
 import type { PullRequest, PullRequestDetail, PullFile, ReviewComment } from "./types";
 import PRList from "./components/PRList";
 import PRDetail from "./components/PRDetail";
+import FileList from "./components/FileList";
+import DiffView from "./components/DiffView";
 
 export default function App() {
   const [pulls, setPulls] = useState<PullRequest[]>([]);
@@ -11,6 +13,7 @@ export default function App() {
   const [prDetail, setPrDetail] = useState<PullRequestDetail | null>(null);
   const [prFiles, setPrFiles] = useState<PullFile[]>([]);
   const [prComments, setPrComments] = useState<ReviewComment[]>([]);
+  const [selectedFile, setSelectedFile] = useState<string | null>(null);
   const [loadingPR, setLoadingPR] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -61,6 +64,10 @@ export default function App() {
         setPrDetail(detail);
         setPrFiles(files);
         setPrComments(comments);
+        const fileWithComments = files.find((f) =>
+          comments.some((c) => c.path === f.filename)
+        );
+        setSelectedFile(fileWithComments?.filename ?? files[0]?.filename ?? null);
       } catch (err) {
         console.error("Failed to load PR:", err);
       } finally {
@@ -113,8 +120,24 @@ export default function App() {
         ) : prDetail ? (
           <>
             <PRDetail pr={prDetail} />
-            <div className="flex-1 overflow-y-auto p-6 text-gray-500">
-              {prFiles.length} file(s), {prComments.length} comment(s)
+            <FileList
+              files={prFiles}
+              selectedFile={selectedFile}
+              onSelectFile={setSelectedFile}
+              comments={prComments}
+            />
+            <div className="flex-1 overflow-y-auto">
+              {selectedFile ? (
+                (() => {
+                  const file = prFiles.find((f) => f.filename === selectedFile);
+                  const fileComments = prComments.filter((c) => c.path === selectedFile);
+                  return file ? (
+                    <DiffView patch={file.patch} filename={file.filename} comments={fileComments} />
+                  ) : null;
+                })()
+              ) : (
+                <div className="text-gray-500 text-center mt-12">Select a file to view its diff</div>
+              )}
             </div>
           </>
         ) : (
