@@ -1,7 +1,5 @@
 import { spawn, type ChildProcess } from "child_process";
-import { createWorktree, removeWorktree, getDiffInWorktree, commitAndPushWorktree } from "./worktree.js";
-import { markComment, saveState } from "./state.js";
-import { prompt } from "./terminal.js";
+import { markComment, markCommentWithEvaluation, saveState } from "./state.js";
 import type { CrComment, CrWatchState, Evaluation, PrInfo, SpawnOptions } from "./types.js";
 
 // Track all active child processes so we can kill them on shutdown
@@ -145,7 +143,7 @@ function parseEvaluation(raw: string): Evaluation {
   return { action: "reply", summary: "Could not parse evaluation", reply: raw.slice(0, 200) };
 }
 
-async function postReply(repoPath: string, prNumber: number, commentId: number, body: string): Promise<void> {
+export async function postReply(repoPath: string, prNumber: number, commentId: number, body: string): Promise<void> {
   const payload = JSON.stringify({ body });
   await spawnTracked(
     "gh",
@@ -162,7 +160,7 @@ interface GhReviewThread {
   };
 }
 
-async function resolveThread(
+export async function resolveThread(
   repoPath: string,
   commentId: number,
   prNumber: number,
@@ -244,28 +242,7 @@ async function resolveThread(
   );
 }
 
-async function applyFixWithClaude(worktreePath: string, comments: CrComment[]): Promise<void> {
-  const commentDescriptions = comments
-    .map(
-      (c) =>
-        `- File: ${c.path}, line ${c.line}\n  Comment: ${c.body.split("\n").slice(0, 5).join("\n  ")}`,
-    )
-    .join("\n\n");
-
-  const fixPrompt = `Apply these CodeRabbit review suggestions. Make the minimal changes needed:
-
-${commentDescriptions}
-
-Make the changes directly. Do not explain, just fix the code.`;
-
-  await spawnTracked("claude", ["-p", fixPrompt], {
-    cwd: worktreePath,
-    stdio: ["pipe", "pipe", "pipe"],
-    stderrToConsole: true,
-  });
-}
-
-export async function processComments(
+export async function analyzeComments(
   comments: CrComment[],
   pullsByNumber: Record<number, PrInfo>,
   state: CrWatchState,
@@ -281,166 +258,31 @@ export async function processComments(
   for (const [prNum, prComments] of Object.entries(byPr)) {
     const prNumber = Number(prNum);
     const pr = pullsByNumber[prNumber];
-    console.log(`\nProcessing PR #${prNum}: ${pr?.title || "Unknown"}`);
-
-    const fixComments: Array<{ comment: CrComment; evaluation: Evaluation }> = [];
+    console.log(`\nAnalyzing PR #${prNum}: ${pr?.title || "Unknown"}`);
 
     for (const comment of prComments) {
       console.log(`\n  Evaluating: ${comment.path}:${comment.line}`);
+
+      if (dryRun) {
+        console.log(`  [dry-run] Would evaluate with Claude.`);
+        markComment(state, comment.id, "pending", prNumber, repoPath);
+        saveState(state);
+        continue;
+      }
 
       let evaluation: Evaluation;
       try {
         evaluation = await evaluateComment(comment);
       } catch (err) {
         console.error(`  Error evaluating comment ${comment.id}: ${(err as Error).message}`);
-        markComment(state, comment.id, "seen", prNumber, repoPath);
+        markComment(state, comment.id, "pending", prNumber, repoPath);
         saveState(state);
         continue;
       }
 
-      console.log(`  Decision: ${evaluation.action} — ${evaluation.summary}`);
-
-      if (evaluation.action === "resolve") {
-        if (dryRun) {
-          console.log(`  [dry-run] Would resolve: ${evaluation.reply || "(no reply)"}`);
-        } else {
-          try {
-            await resolveThread(repoPath, comment.id, prNumber, evaluation.reply);
-            console.log("  Resolved on GitHub.");
-          } catch (err) {
-            console.error(`  Failed to resolve: ${(err as Error).message}`);
-          }
-        }
-        markComment(state, comment.id, "replied", prNumber, repoPath);
-        saveState(state);
-      } else if (evaluation.action === "reply") {
-        if (dryRun) {
-          console.log(`  [dry-run] Would reply and resolve: ${evaluation.reply}`);
-        } else {
-          try {
-            await resolveThread(repoPath, comment.id, prNumber, evaluation.reply);
-            console.log("  Replied and resolved on GitHub.");
-          } catch (err) {
-            console.error(`  Failed to reply/resolve: ${(err as Error).message}`);
-          }
-        }
-        markComment(state, comment.id, "replied", prNumber, repoPath);
-        saveState(state);
-      } else {
-        fixComments.push({ comment, evaluation });
-      }
-    }
-
-    if (fixComments.length > 0) {
-      console.log(`\n  ${fixComments.length} comment(s) need code changes on PR #${prNum}:`);
-      for (const { comment, evaluation } of fixComments) {
-        console.log(`    - ${comment.path}:${comment.line} — ${evaluation.summary}`);
-      }
-
-      const answer = await prompt("\n  Apply fixes? [y/n/view] ");
-
-      if (answer === "view") {
-        for (const { comment } of fixComments) {
-          console.log(`\n  --- ${comment.path}:${comment.line} ---`);
-          console.log(`  ${comment.body.slice(0, 500)}`);
-        }
-        const answer2 = await prompt("\n  Apply fixes? [y/n] ");
-        if (answer2 !== "y") {
-          for (const { comment } of fixComments) {
-            markComment(state, comment.id, "skipped", prNumber, repoPath);
-          }
-          saveState(state);
-          console.log("  Skipped.");
-          continue;
-        }
-      } else if (answer !== "y") {
-        for (const { comment } of fixComments) {
-          markComment(state, comment.id, "skipped", prNumber, repoPath);
-        }
-        saveState(state);
-        console.log("  Skipped.");
-        continue;
-      }
-
-      if (dryRun) {
-        console.log("  [dry-run] Would create worktree and apply fixes.");
-        for (const { comment } of fixComments) {
-          markComment(state, comment.id, "seen", prNumber, repoPath);
-        }
-        saveState(state);
-        continue;
-      }
-
-      let worktreePath: string;
-      try {
-        worktreePath = createWorktree(pr.branch);
-      } catch (err) {
-        console.error(`  Failed to create worktree: ${(err as Error).message}`);
-        for (const { comment } of fixComments) {
-          markComment(state, comment.id, "seen", prNumber, repoPath);
-        }
-        saveState(state);
-        continue;
-      }
-
-      try {
-        console.log(`  Worktree: ${worktreePath}`);
-        console.log("  Running Claude to apply fixes...");
-
-        await applyFixWithClaude(
-          worktreePath,
-          fixComments.map((f) => f.comment),
-        );
-
-        const diff = getDiffInWorktree(worktreePath);
-
-        if (!diff.trim()) {
-          console.log("  No changes were made.");
-          removeWorktree(pr.branch);
-          for (const { comment } of fixComments) {
-            markComment(state, comment.id, "seen", prNumber, repoPath);
-          }
-          saveState(state);
-          continue;
-        }
-
-        console.log("\n  --- Diff ---");
-        console.log(diff);
-        console.log("  --- End diff ---\n");
-
-        const pushAnswer = await prompt("  Push these changes? [y/n/edit] ");
-
-        if (pushAnswer === "y") {
-          const commitMsg = `fix: apply CodeRabbit suggestions for PR #${prNum}`;
-          commitAndPushWorktree(worktreePath, commitMsg);
-          console.log("  Pushed.");
-          removeWorktree(pr.branch);
-          for (const { comment } of fixComments) {
-            markComment(state, comment.id, "fixed", prNumber, repoPath);
-          }
-        } else if (pushAnswer === "edit") {
-          console.log(`  Worktree left at: ${worktreePath}`);
-          console.log("  Make your edits, then run: git add -A && git commit && git push");
-          console.log("  Clean up with: cr-watch --cleanup");
-          for (const { comment } of fixComments) {
-            markComment(state, comment.id, "seen", prNumber, repoPath);
-          }
-        } else {
-          removeWorktree(pr.branch);
-          console.log("  Discarded.");
-          for (const { comment } of fixComments) {
-            markComment(state, comment.id, "skipped", prNumber, repoPath);
-          }
-        }
-        saveState(state);
-      } catch (err) {
-        console.error(`  Error applying fixes: ${(err as Error).message}`);
-        removeWorktree(pr.branch);
-        for (const { comment } of fixComments) {
-          markComment(state, comment.id, "seen", prNumber, repoPath);
-        }
-        saveState(state);
-      }
+      console.log(`  Result: ${evaluation.action} — ${evaluation.summary}`);
+      markCommentWithEvaluation(state, comment.id, "pending", prNumber, evaluation, repoPath);
+      saveState(state);
     }
   }
 }
