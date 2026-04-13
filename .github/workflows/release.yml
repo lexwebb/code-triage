@@ -31,7 +31,8 @@ jobs:
 
       - name: Set version from release tag
         # Strips leading 'v' so 'v1.2.3' becomes '1.2.3'
-        run: npm version --no-git-tag-version "${GITHUB_REF_NAME#v}"
+        # --allow-same-version handles the case where the release script already bumped package.json
+        run: npm version --no-git-tag-version --allow-same-version "${GITHUB_REF_NAME#v}"
 
       - name: Remove private flag for publishing
         # Yarn workspaces require private:true, but npm publish requires it absent
