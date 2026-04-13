@@ -21,6 +21,8 @@ export interface PullRequest {
   updatedAt: string;
   draft: boolean;
   repo: string;
+  checksStatus: "success" | "failure" | "pending";
+  openComments: number;
 }
 
 export interface PullRequestDetail extends PullRequest {

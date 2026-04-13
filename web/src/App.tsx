@@ -26,7 +26,6 @@ export default function App() {
   const [selectedPR, setSelectedPR] = useState<SelectedPR | null>(
     initial.repo && initial.prNumber ? { repo: initial.repo, number: initial.prNumber } : null,
   );
-  const [commentCounts, setCommentCounts] = useState<Record<string, number>>({});
   const [prDetail, setPrDetail] = useState<PullRequestDetail | null>(null);
   const [prFiles, setPrFiles] = useState<PullFile[]>([]);
   const [prComments, setPrComments] = useState<ReviewComment[]>([]);
@@ -96,19 +95,6 @@ export default function App() {
         if (cancelled) return;
         setPulls(pullData);
         setReviewPulls(reviewData);
-
-        // Fetch comment counts
-        const counts: Record<string, number> = {};
-        for (const pr of pullData) {
-          try {
-            const comments = await api.getPullComments(pr.number, pr.repo);
-            counts[`${pr.repo}:${pr.number}`] = comments.length;
-          } catch {
-            counts[`${pr.repo}:${pr.number}`] = 0;
-          }
-        }
-        if (cancelled) return;
-        setCommentCounts(counts);
 
         // Auto-select first PR only if nothing from URL
         if (pullData.length > 0 && !selectedPR) {
@@ -210,7 +196,7 @@ export default function App() {
             pulls={filteredPulls}
             selectedPR={selectedPR}
             onSelectPR={handleSelectPR}
-            commentCounts={commentCounts}
+
             showRepo
           />
           {filteredReviewPulls.length > 0 && (
@@ -222,7 +208,7 @@ export default function App() {
                 pulls={filteredReviewPulls}
                 selectedPR={selectedPR}
                 onSelectPR={handleSelectPR}
-                commentCounts={{}}
+
                 showRepo
               />
             </>

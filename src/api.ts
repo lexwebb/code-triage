@@ -83,7 +83,7 @@ interface GhPull {
   number: number;
   title: string;
   user: { login: string; avatar_url: string };
-  head: { ref: string };
+  head: { ref: string; sha: string };
   base: { ref: string };
   html_url: string;
   created_at: string;
@@ -93,6 +93,32 @@ interface GhPull {
   deletions: number;
   changed_files: number;
   requested_reviewers: Array<{ login: string; avatar_url: string }>;
+  mergeable_state: string;
+}
+
+interface GhCombinedStatus {
+  state: "success" | "failure" | "pending" | "error";
+}
+
+function getPrStatus(repoPath: string, sha: string): "success" | "failure" | "pending" {
+  try {
+    const status = gh<GhCombinedStatus>(`/repos/${repoPath}/commits/${sha}/status`);
+    if (status.state === "success") return "success";
+    if (status.state === "failure" || status.state === "error") return "failure";
+  } catch { /* ignore */ }
+  return "pending";
+}
+
+function getOpenCommentCount(repoPath: string, prNumber: number): number {
+  const resolvedIds = getResolvedCommentIds(repoPath, prNumber);
+  try {
+    interface GhComment { id: number; user: { login: string }; in_reply_to_id: number | null; }
+    const comments = gh<GhComment[]>(`/repos/${repoPath}/pulls/${prNumber}/comments`);
+    // Count root comments that are NOT resolved
+    return comments.filter((c) => c.in_reply_to_id === null && !resolvedIds.has(c.id)).length;
+  } catch {
+    return 0;
+  }
 }
 
 export function registerRoutes(): void {
@@ -128,6 +154,8 @@ export function registerRoutes(): void {
         const myPulls = pulls.filter((pr) => pr.user.login === username);
 
         for (const pr of myPulls) {
+          const checksStatus = getPrStatus(repoInfo.repo, pr.head.sha);
+          const openComments = getOpenCommentCount(repoInfo.repo, pr.number);
           allPulls.push({
             number: pr.number,
             title: pr.title,
@@ -140,6 +168,8 @@ export function registerRoutes(): void {
             updatedAt: pr.updated_at,
             draft: pr.draft,
             repo: repoInfo.repo,
+            checksStatus,
+            openComments,
           });
         }
       } catch {
@@ -169,6 +199,8 @@ export function registerRoutes(): void {
         );
 
         for (const pr of needsReview) {
+          const checksStatus = getPrStatus(repoInfo.repo, pr.head.sha);
+          const openComments = getOpenCommentCount(repoInfo.repo, pr.number);
           reviewPulls.push({
             number: pr.number,
             title: pr.title,
@@ -181,6 +213,8 @@ export function registerRoutes(): void {
             updatedAt: pr.updated_at,
             draft: pr.draft,
             repo: repoInfo.repo,
+            checksStatus,
+            openComments,
           });
         }
       } catch {

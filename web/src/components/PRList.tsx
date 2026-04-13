@@ -4,7 +4,6 @@ interface PRListProps {
   pulls: PullRequest[];
   selectedPR: { number: number; repo: string } | null;
   onSelectPR: (number: number, repo: string) => void;
-  commentCounts: Record<string, number>;
   showRepo: boolean;
 }
 
@@ -12,7 +11,30 @@ function prKey(pr: PullRequest): string {
   return `${pr.repo}:${pr.number}`;
 }
 
-export default function PRList({ pulls, selectedPR, onSelectPR, commentCounts, showRepo }: PRListProps) {
+function StatusIcon({ pr }: { pr: PullRequest }) {
+  const mergeReady = pr.checksStatus === "success" && pr.openComments === 0;
+  const failed = pr.checksStatus === "failure";
+
+  if (mergeReady) {
+    return (
+      <span className="flex items-center gap-1 bg-green-500/15 text-green-400 text-xs px-1.5 py-0.5 rounded-full">
+        ✓
+      </span>
+    );
+  }
+
+  if (failed) {
+    return (
+      <span className="flex items-center gap-1 bg-red-500/15 text-red-400 text-xs px-1.5 py-0.5 rounded-full">
+        ✗
+      </span>
+    );
+  }
+
+  return null;
+}
+
+export default function PRList({ pulls, selectedPR, onSelectPR, showRepo }: PRListProps) {
   if (pulls.length === 0) {
     return (
       <div className="p-4 text-gray-500 text-sm">
@@ -26,21 +48,34 @@ export default function PRList({ pulls, selectedPR, onSelectPR, commentCounts, s
       {pulls.map((pr) => {
         const key = prKey(pr);
         const isSelected = selectedPR?.number === pr.number && selectedPR?.repo === pr.repo;
+        const mergeReady = pr.checksStatus === "success" && pr.openComments === 0;
+        const failed = pr.checksStatus === "failure";
+
+        let bgClass = "";
+        if (isSelected) {
+          bgClass = "bg-gray-800 border-l-2 border-l-blue-500";
+        } else if (mergeReady) {
+          bgClass = "bg-green-500/5";
+        } else if (failed) {
+          bgClass = "bg-red-500/5";
+        }
+
         return (
           <button
             key={key}
             onClick={() => onSelectPR(pr.number, pr.repo)}
-            className={`text-left px-4 py-3 border-b border-gray-800 hover:bg-gray-800/50 transition-colors ${
-              isSelected ? "bg-gray-800 border-l-2 border-l-blue-500" : ""
-            }`}
+            className={`text-left px-4 py-3 border-b border-gray-800 hover:bg-gray-800/50 transition-colors ${bgClass}`}
           >
             <div className="flex items-center justify-between">
               <span className="text-gray-500 text-xs font-mono">#{pr.number}</span>
-              {(commentCounts[key] ?? 0) > 0 && (
-                <span className="bg-blue-500/20 text-blue-400 text-xs px-1.5 py-0.5 rounded-full">
-                  {commentCounts[key]}
-                </span>
-              )}
+              <span className="flex items-center gap-1.5">
+                {pr.openComments > 0 && (
+                  <span className="bg-blue-500/20 text-blue-400 text-xs px-1.5 py-0.5 rounded-full">
+                    {pr.openComments}
+                  </span>
+                )}
+                <StatusIcon pr={pr} />
+              </span>
             </div>
             <div className="text-sm text-gray-200 mt-0.5 line-clamp-2">{pr.title}</div>
             <div className="text-xs text-gray-500 mt-1">
