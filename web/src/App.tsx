@@ -9,6 +9,8 @@ import FileList from "./components/FileList";
 import DiffView from "./components/DiffView";
 import CommentThreads from "./components/CommentThreads";
 import { useNotifications, requestNotificationPermission } from "./useNotifications";
+import FixJobsBanner from "./components/FixJobsBanner";
+import type { FixJobStatus } from "./api";
 
 interface SelectedPR {
   number: number;
@@ -50,6 +52,7 @@ export default function App() {
   const [loading, setLoading] = useState(() => !loadCache(CACHE_KEY_PULLS));
   const [error, setError] = useState<string | null>(null);
   const [filesExpanded, setFilesExpanded] = useState(false);
+  const [fixJobs, setFixJobs] = useState<FixJobStatus[]>([]);
   const [refreshing, setRefreshing] = useState(false);
   const [countdown, setCountdown] = useState(0);
   const [notifPermission, setNotifPermission] = useState(() =>
@@ -146,6 +149,9 @@ export default function App() {
     }
   }, []);
 
+  // Track previous fix job states for notifications
+  const prevFixJobsRef = useRef<Map<number, string>>(new Map());
+
   // Poll backend status — wait for each request to finish before scheduling the next
   useEffect(() => {
     let cancelled = false;
@@ -158,6 +164,28 @@ export default function App() {
         const remaining = Math.max(0, status.nextPoll - Date.now());
         setCountdown(remaining);
         setRefreshing(status.polling);
+        setFixJobs(status.fixJobs);
+
+        // Notify on fix job state changes
+        for (const job of status.fixJobs) {
+          const prev = prevFixJobsRef.current.get(job.commentId);
+          if (prev === "running" && job.status === "completed") {
+            const repoShort = job.repo.split("/")[1] ?? job.repo;
+            if ("Notification" in window && Notification.permission === "granted") {
+              new Notification(`Fix ready: ${repoShort}#${job.prNumber}`, {
+                body: `${job.path} — review and apply the changes`,
+              });
+            }
+          } else if (prev === "running" && job.status === "failed") {
+            const repoShort = job.repo.split("/")[1] ?? job.repo;
+            if ("Notification" in window && Notification.permission === "granted") {
+              new Notification(`Fix failed: ${repoShort}#${job.prNumber}`, {
+                body: `${job.path} — ${job.error ?? "unknown error"}`,
+              });
+            }
+          }
+        }
+        prevFixJobsRef.current = new Map(status.fixJobs.map((j) => [j.commentId, j.status]));
 
         if (status.lastPoll > lastFetchRef.current) {
           await fetchPulls();
@@ -377,6 +405,7 @@ export default function App() {
           )}
         </div>
       </div>
+      <FixJobsBanner fixJobs={fixJobs} onJobAction={() => { reloadComments(); }} />
     </div>
   );
 }

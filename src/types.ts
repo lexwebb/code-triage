@@ -9,9 +9,20 @@ export interface CommentRecord {
   evaluation?: Evaluation;
 }
 
+export interface FixJobRecord {
+  commentId: number;
+  repo: string;
+  prNumber: number;
+  branch: string;
+  path: string;
+  worktreePath: string;
+  startedAt: string;
+}
+
 export interface CrWatchState {
   lastPoll: string | null;
   comments: Record<string, CommentRecord>;
+  fixJobs?: FixJobRecord[];
 }
 
 export interface CrComment {

@@ -72,28 +72,32 @@ export function updatePollState(state: { lastPoll?: number; nextPoll?: number; i
   Object.assign(pollState, state);
 }
 
-export interface FixJob {
+export interface FixJobStatus {
   commentId: number;
   repo: string;
   prNumber: number;
   path: string;
   startedAt: number;
+  status: "running" | "completed" | "failed";
+  error?: string;
+  diff?: string;
+  branch?: string;
 }
 
-const activeFixJobs = new Map<number, FixJob>();
+const fixJobStatuses = new Map<number, FixJobStatus>();
 
-export function addFixJob(job: FixJob): void {
-  activeFixJobs.set(job.commentId, job);
+export function setFixJobStatus(job: FixJobStatus): void {
+  fixJobStatuses.set(job.commentId, job);
 }
 
-export function removeFixJob(commentId: number): void {
-  activeFixJobs.delete(commentId);
+export function clearFixJobStatus(commentId: number): void {
+  fixJobStatuses.delete(commentId);
 }
 
 export function getPollState() {
   return {
     ...pollState,
-    fixJobs: Array.from(activeFixJobs.values()),
+    fixJobs: Array.from(fixJobStatuses.values()),
   };
 }
 

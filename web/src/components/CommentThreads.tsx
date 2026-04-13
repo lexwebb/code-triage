@@ -71,46 +71,6 @@ function StatusBadge({ status }: { status: string }) {
   return null;
 }
 
-function FixDiffPreview({ diff, onApply, onDiscard, applying }: {
-  diff: string;
-  onApply: () => void;
-  onDiscard: () => void;
-  applying: boolean;
-}) {
-  return (
-    <div className="mx-1 mt-2 border border-orange-500/30 rounded-lg overflow-hidden">
-      <div className="px-3 py-1.5 bg-orange-500/10 text-xs text-orange-400 font-medium flex items-center justify-between">
-        <span>Proposed Changes</span>
-        <span className="flex items-center gap-2">
-          <button
-            onClick={onApply}
-            disabled={applying}
-            className="px-2 py-0.5 bg-green-600 hover:bg-green-500 disabled:bg-green-800 disabled:text-gray-400 text-white rounded text-xs transition-colors"
-          >
-            {applying ? "Pushing..." : "Apply & Push"}
-          </button>
-          <button
-            onClick={onDiscard}
-            disabled={applying}
-            className="px-2 py-0.5 bg-gray-700 hover:bg-gray-600 disabled:bg-gray-800 text-gray-300 rounded text-xs transition-colors"
-          >
-            Discard
-          </button>
-        </span>
-      </div>
-      <pre className="p-2 text-xs overflow-x-auto max-h-64 overflow-y-auto bg-gray-900 font-mono">
-        {diff.split("\n").map((line, i) => {
-          let cls = "text-gray-400";
-          if (line.startsWith("+") && !line.startsWith("+++")) cls = "text-green-400";
-          else if (line.startsWith("-") && !line.startsWith("---")) cls = "text-red-400";
-          else if (line.startsWith("@@")) cls = "text-blue-400";
-          return <div key={i} className={cls}>{line}</div>;
-        })}
-      </pre>
-    </div>
-  );
-}
-
 function ThreadItem({ thread, onSelectFile, repo, prNumber, branch, onCommentAction }: {
   thread: Thread;
   onSelectFile: (f: string) => void;
@@ -128,10 +88,7 @@ function ThreadItem({ thread, onSelectFile, repo, prNumber, branch, onCommentAct
 
   // Fix with Claude state
   const [fixing, setFixing] = useState(false);
-  const [fixDiff, setFixDiff] = useState<string | null>(null);
-  const [fixBranch, setFixBranch] = useState<string | null>(null);
   const [fixError, setFixError] = useState<string | null>(null);
-  const [applying, setApplying] = useState(false);
 
   async function handleAction(action: "reply" | "resolve" | "dismiss") {
     setActing(true);
@@ -154,7 +111,6 @@ function ThreadItem({ thread, onSelectFile, repo, prNumber, branch, onCommentAct
   async function handleFixWithClaude() {
     setFixing(true);
     setFixError(null);
-    setFixDiff(null);
     try {
       const result = await api.fixWithClaude(repo, thread.root.id, prNumber, branch, {
         path: thread.root.path,
@@ -162,41 +118,15 @@ function ThreadItem({ thread, onSelectFile, repo, prNumber, branch, onCommentAct
         body: thread.root.body,
         diffHunk: thread.root.diffHunk,
       });
-      if (result.success && result.diff) {
-        setFixDiff(result.diff);
-        setFixBranch(result.branch ?? branch);
-      } else {
-        setFixError(result.error ?? "Claude made no changes");
+      if (!result.success) {
+        setFixError(result.error ?? "Failed to start fix");
       }
+      // Fix runs in background — status tracked via poll-status and FixJobsBanner
     } catch (err) {
       setFixError((err as Error).message);
     } finally {
       setFixing(false);
     }
-  }
-
-  async function handleFixApply() {
-    if (!fixBranch) return;
-    setApplying(true);
-    try {
-      await api.fixApply(repo, thread.root.id, prNumber, fixBranch);
-      setFixDiff(null);
-      setFixBranch(null);
-      onCommentAction();
-    } catch (err) {
-      setFixError((err as Error).message);
-    } finally {
-      setApplying(false);
-    }
-  }
-
-  async function handleFixDiscard() {
-    if (fixBranch) {
-      try { await api.fixDiscard(fixBranch); } catch { /* ignore */ }
-    }
-    setFixDiff(null);
-    setFixBranch(null);
-    setFixError(null);
   }
 
   return (
@@ -247,16 +177,6 @@ function ThreadItem({ thread, onSelectFile, repo, prNumber, branch, onCommentAct
             </div>
           )}
 
-          {/* Fix diff preview */}
-          {fixDiff && fixBranch && (
-            <FixDiffPreview
-              diff={fixDiff}
-              onApply={handleFixApply}
-              onDiscard={handleFixDiscard}
-              applying={applying}
-            />
-          )}
-
           {/* Fix error */}
           {fixError && (
             <div className="mx-1 mt-2 p-2 bg-red-500/10 border border-red-500/30 rounded text-xs text-red-400">
@@ -279,7 +199,7 @@ function ThreadItem({ thread, onSelectFile, repo, prNumber, branch, onCommentAct
               )}
               <button
                 onClick={handleFixWithClaude}
-                disabled={acting || fixing || !!fixDiff}
+                disabled={acting || fixing}
                 className="text-xs px-3 py-1 bg-orange-600 hover:bg-orange-500 disabled:bg-orange-800 disabled:text-gray-400 text-white rounded transition-colors"
               >
                 {fixing ? "Claude is fixing..." : "Fix with Claude"}

@@ -1,7 +1,7 @@
 import { readFileSync, writeFileSync, renameSync, mkdirSync, existsSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
-import type { CrWatchState, CommentStatus, Evaluation } from "./types.js";
+import type { CrWatchState, CommentStatus, Evaluation, FixJobRecord } from "./types.js";
 
 const STATE_DIR = join(homedir(), ".code-triage");
 const STATE_FILE = join(STATE_DIR, "state.json");
@@ -78,4 +78,19 @@ export function getCommentsByStatus(state: CrWatchState, status: CommentStatus) 
   return Object.entries(state.comments)
     .filter(([, v]) => v.status === status)
     .map(([id, v]) => ({ id, ...v }));
+}
+
+export function addFixJob(state: CrWatchState, job: FixJobRecord): void {
+  if (!state.fixJobs) state.fixJobs = [];
+  state.fixJobs = state.fixJobs.filter((j) => j.commentId !== job.commentId);
+  state.fixJobs.push(job);
+}
+
+export function removeFixJob(state: CrWatchState, commentId: number): void {
+  if (!state.fixJobs) return;
+  state.fixJobs = state.fixJobs.filter((j) => j.commentId !== commentId);
+}
+
+export function getFixJobs(state: CrWatchState): FixJobRecord[] {
+  return state.fixJobs ?? [];
 }

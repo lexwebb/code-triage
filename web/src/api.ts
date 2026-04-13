@@ -30,6 +30,26 @@ function repoQueryRequired(repo: string): string {
   return `?repo=${encodeURIComponent(repo)}`;
 }
 
+export interface FixJobStatus {
+  commentId: number;
+  repo: string;
+  prNumber: number;
+  path: string;
+  startedAt: number;
+  status: "running" | "completed" | "failed";
+  error?: string;
+  diff?: string;
+  branch?: string;
+}
+
+export interface PollStatus {
+  lastPoll: number;
+  nextPoll: number;
+  intervalMs: number;
+  polling: boolean;
+  fixJobs: FixJobStatus[];
+}
+
 export const api = {
   getUser: () => fetchJSON<User>("/api/user"),
   getRepos: () => fetchJSON<RepoInfo[]>("/api/repos"),
@@ -40,7 +60,7 @@ export const api = {
   getPullComments: (number: number, repo: string) => fetchJSON<ReviewComment[]>(`/api/pulls/${number}/comments${repoQueryRequired(repo)}`),
   getFileContent: (prNumber: number, path: string, repo: string) => fetchJSON<{ content: string; path: string }>(`/api/pulls/${prNumber}/files/${path}${repoQueryRequired(repo)}`),
   getState: () => fetchJSON<CrWatchState>("/api/state"),
-  getPollStatus: () => fetchJSON<{ lastPoll: number; nextPoll: number; intervalMs: number; polling: boolean }>("/api/poll-status"),
+  getPollStatus: () => fetchJSON<PollStatus>("/api/poll-status"),
   replyToComment: (repo: string, commentId: number, prNumber: number) =>
     postJSON<{ success: boolean }>("/api/actions/reply", { repo, commentId, prNumber }),
   resolveComment: (repo: string, commentId: number, prNumber: number) =>
@@ -48,11 +68,11 @@ export const api = {
   dismissComment: (repo: string, commentId: number, prNumber: number) =>
     postJSON<{ success: boolean }>("/api/actions/dismiss", { repo, commentId, prNumber }),
   fixWithClaude: (repo: string, commentId: number, prNumber: number, branch: string, comment: { path: string; line: number; body: string; diffHunk: string }) =>
-    postJSON<{ success: boolean; diff?: string; branch?: string; error?: string }>("/api/actions/fix", { repo, commentId, prNumber, branch, comment }),
+    postJSON<{ success: boolean; status: string; branch?: string; error?: string }>("/api/actions/fix", { repo, commentId, prNumber, branch, comment }),
   fixApply: (repo: string, commentId: number, prNumber: number, branch: string) =>
     postJSON<{ success: boolean }>("/api/actions/fix-apply", { repo, commentId, prNumber, branch }),
-  fixDiscard: (branch: string) =>
-    postJSON<{ success: boolean }>("/api/actions/fix-discard", { branch }),
+  fixDiscard: (branch: string, commentId?: number) =>
+    postJSON<{ success: boolean }>("/api/actions/fix-discard", { branch, commentId }),
   submitReview: (repo: string, prNumber: number, event: "APPROVE" | "REQUEST_CHANGES", body?: string) =>
     postJSON<{ success: boolean }>("/api/actions/review", { repo, prNumber, event, body }),
 };

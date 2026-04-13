@@ -1,5 +1,5 @@
-import { addRoute, json, getRepos, getBody, getPollState, addFixJob, removeFixJob } from "./server.js";
-import { loadState, markComment, saveState } from "./state.js";
+import { addRoute, json, getRepos, getBody, getPollState, setFixJobStatus, clearFixJobStatus } from "./server.js";
+import { loadState, markComment, saveState, addFixJob as addFixJobState, removeFixJob as removeFixJobState, getFixJobs } from "./state.js";
 import { postReply, resolveThread, applyFixWithClaude } from "./actioner.js";
 import { createWorktree, getWorktreePath, getDiffInWorktree, removeWorktree, commitAndPushWorktree } from "./worktree.js";
 import { ghAsync, ghGraphQL, ghPost } from "./exec.js";
@@ -412,6 +412,14 @@ export function registerRoutes(): void {
   addRoute("POST", "/api/actions/fix", async (req, res) => {
     const body = getBody<{ repo: string; commentId: number; prNumber: number; branch: string; comment: { path: string; line: number; body: string; diffHunk: string } }>(req);
 
+    // Prevent concurrent fixes on the same branch
+    const state = loadState();
+    const existingJob = getFixJobs(state).find((j) => j.branch === body.branch);
+    if (existingJob) {
+      json(res, { error: `A fix is already in progress on branch ${body.branch} (${existingJob.path})` }, 409);
+      return;
+    }
+
     const repoInfo = getRepos().find((r) => r.repo === body.repo);
     if (!repoInfo?.localPath) {
       json(res, { error: "Repo local path not found" }, 400);
@@ -426,30 +434,68 @@ export function registerRoutes(): void {
       return;
     }
 
-    addFixJob({
+    // Persist job to disk and track in memory
+    const jobRecord = {
+      commentId: body.commentId,
+      repo: body.repo,
+      prNumber: body.prNumber,
+      branch: body.branch,
+      path: body.comment.path,
+      worktreePath,
+      startedAt: new Date().toISOString(),
+    };
+    addFixJobState(state, jobRecord);
+    saveState(state);
+
+    setFixJobStatus({
       commentId: body.commentId,
       repo: body.repo,
       prNumber: body.prNumber,
       path: body.comment.path,
       startedAt: Date.now(),
+      status: "running",
     });
 
+    // Respond immediately — the fix runs async, frontend polls for status
+    json(res, { success: true, status: "running", branch: body.branch });
+
+    // Run Claude in background
     try {
       await applyFixWithClaude(worktreePath, body.comment);
-      removeFixJob(body.commentId);
       const diff = getDiffInWorktree(worktreePath);
 
       if (!diff.trim()) {
         removeWorktree(body.branch);
-        json(res, { success: false, error: "Claude made no changes", diff: "" });
+        const s = loadState();
+        removeFixJobState(s, body.commentId);
+        saveState(s);
+        setFixJobStatus({
+          commentId: body.commentId, repo: body.repo, prNumber: body.prNumber,
+          path: body.comment.path, startedAt: Date.now(), status: "failed",
+          error: "Claude made no changes",
+        });
         return;
       }
 
-      json(res, { success: true, diff, branch: body.branch });
+      // Mark completed with diff — keep worktree for apply/discard
+      const s = loadState();
+      removeFixJobState(s, body.commentId);
+      saveState(s);
+      setFixJobStatus({
+        commentId: body.commentId, repo: body.repo, prNumber: body.prNumber,
+        path: body.comment.path, startedAt: Date.now(), status: "completed",
+        diff, branch: body.branch,
+      });
     } catch (err) {
-      removeFixJob(body.commentId);
       removeWorktree(body.branch);
-      json(res, { error: `Fix failed: ${(err as Error).message}` }, 500);
+      const s = loadState();
+      removeFixJobState(s, body.commentId);
+      saveState(s);
+      setFixJobStatus({
+        commentId: body.commentId, repo: body.repo, prNumber: body.prNumber,
+        path: body.comment.path, startedAt: Date.now(), status: "failed",
+        error: (err as Error).message,
+      });
     }
   });
 
@@ -471,6 +517,7 @@ export function registerRoutes(): void {
       const state = loadState();
       markComment(state, body.commentId, "fixed", body.prNumber, body.repo);
       saveState(state);
+      clearFixJobStatus(body.commentId);
 
       json(res, { success: true, status: "fixed" });
     } catch (err) {
@@ -480,11 +527,32 @@ export function registerRoutes(): void {
 
   // POST /api/actions/fix-discard — discard worktree
   addRoute("POST", "/api/actions/fix-discard", async (req, res) => {
-    const body = getBody<{ branch: string }>(req);
+    const body = getBody<{ branch: string; commentId?: number }>(req);
     try {
       removeWorktree(body.branch);
     } catch { /* ignore */ }
+    if (body.commentId) clearFixJobStatus(body.commentId);
     json(res, { success: true });
+  });
+
+  // GET /api/fix-jobs/recover — check for stale fix jobs from a previous session
+  addRoute("GET", "/api/fix-jobs/recover", (_req, res) => {
+    const state = loadState();
+    const staleJobs = getFixJobs(state);
+    const results: Array<{ job: typeof staleJobs[0]; hasDiff: boolean; diff?: string }> = [];
+
+    for (const job of staleJobs) {
+      try {
+        const diff = getDiffInWorktree(job.worktreePath);
+        results.push({ job, hasDiff: !!diff.trim(), diff: diff.trim() || undefined });
+      } catch {
+        // Worktree no longer exists — clean up
+        removeFixJobState(state, job.commentId);
+      }
+    }
+
+    saveState(state);
+    json(res, results);
   });
 
   // POST /api/actions/review — submit a PR review (approve or request changes)
