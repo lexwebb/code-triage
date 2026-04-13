@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { ReviewComment } from "../types";
 import { api } from "../api";
+import type { FixJobStatus } from "../api";
 import Comment from "./Comment";
 
 interface CommentThreadsProps {
@@ -9,6 +10,7 @@ interface CommentThreadsProps {
   repo: string;
   prNumber: number;
   branch: string;
+  fixJobs: FixJobStatus[];
   onCommentAction: () => void;
 }
 
@@ -71,12 +73,13 @@ function StatusBadge({ status }: { status: string }) {
   return null;
 }
 
-function ThreadItem({ thread, onSelectFile, repo, prNumber, branch, onCommentAction }: {
+function ThreadItem({ thread, onSelectFile, repo, prNumber, branch, fixBlocked, onCommentAction }: {
   thread: Thread;
   onSelectFile: (f: string) => void;
   repo: string;
   prNumber: number;
   branch: string;
+  fixBlocked: boolean;
   onCommentAction: () => void;
 }) {
   const eval_ = thread.root.evaluation;
@@ -199,10 +202,11 @@ function ThreadItem({ thread, onSelectFile, repo, prNumber, branch, onCommentAct
               )}
               <button
                 onClick={handleFixWithClaude}
-                disabled={acting || fixing}
+                disabled={acting || fixing || fixBlocked}
                 className="text-xs px-3 py-1 bg-orange-600 hover:bg-orange-500 disabled:bg-orange-800 disabled:text-gray-400 text-white rounded transition-colors"
+                title={fixBlocked ? "A fix is already running on this PR" : undefined}
               >
-                {fixing ? "Claude is fixing..." : "Fix with Claude"}
+                {fixing ? "Starting fix..." : fixBlocked ? "Fix running..." : "Fix with Claude"}
               </button>
               <button
                 onClick={() => handleAction("resolve")}
@@ -226,7 +230,7 @@ function ThreadItem({ thread, onSelectFile, repo, prNumber, branch, onCommentAct
   );
 }
 
-export default function CommentThreads({ comments, onSelectFile, repo, prNumber, branch, onCommentAction }: CommentThreadsProps) {
+export default function CommentThreads({ comments, onSelectFile, repo, prNumber, branch, fixJobs, onCommentAction }: CommentThreadsProps) {
   const [collapsed, setCollapsed] = useState(false);
   const threads = buildThreads(comments);
 
@@ -234,6 +238,7 @@ export default function CommentThreads({ comments, onSelectFile, repo, prNumber,
 
   const openCount = threads.filter((t) => !t.isResolved).length;
   const resolvedCount = threads.filter((t) => t.isResolved).length;
+  const hasRunningFix = fixJobs.some((j) => j.repo === repo && j.prNumber === prNumber && j.status === "running");
 
   return (
     <div className="border-b border-gray-800 flex-1 overflow-y-auto">
@@ -261,6 +266,7 @@ export default function CommentThreads({ comments, onSelectFile, repo, prNumber,
               repo={repo}
               prNumber={prNumber}
               branch={branch}
+              fixBlocked={hasRunningFix}
               onCommentAction={onCommentAction}
             />
           ))}

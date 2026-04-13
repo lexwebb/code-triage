@@ -1,4 +1,4 @@
-import { addRoute, json, getRepos, getBody, getPollState, setFixJobStatus, clearFixJobStatus } from "./server.js";
+import { addRoute, json, getRepos, getBody, getPollState, setFixJobStatus, clearFixJobStatus, getActiveFixForBranch, getActiveFixForPR } from "./server.js";
 import { loadState, markComment, saveState, addFixJob as addFixJobState, removeFixJob as removeFixJobState, getFixJobs } from "./state.js";
 import { postReply, resolveThread, applyFixWithClaude } from "./actioner.js";
 import { createWorktree, getWorktreePath, getDiffInWorktree, removeWorktree, commitAndPushWorktree } from "./worktree.js";
@@ -412,11 +412,21 @@ export function registerRoutes(): void {
   addRoute("POST", "/api/actions/fix", async (req, res) => {
     const body = getBody<{ repo: string; commentId: number; prNumber: number; branch: string; comment: { path: string; line: number; body: string; diffHunk: string } }>(req);
 
-    // Prevent concurrent fixes on the same branch
+    // Prevent concurrent fixes on the same branch or PR
+    const activeBranch = getActiveFixForBranch(body.branch);
+    if (activeBranch) {
+      json(res, { error: `A fix is already running on branch ${body.branch} (${activeBranch.path})` }, 409);
+      return;
+    }
+    const activePR = getActiveFixForPR(body.repo, body.prNumber);
+    if (activePR) {
+      json(res, { error: `A fix is already running on this PR (${activePR.path})` }, 409);
+      return;
+    }
     const state = loadState();
-    const existingJob = getFixJobs(state).find((j) => j.branch === body.branch);
-    if (existingJob) {
-      json(res, { error: `A fix is already in progress on branch ${body.branch} (${existingJob.path})` }, 409);
+    const persistedJob = getFixJobs(state).find((j) => j.branch === body.branch);
+    if (persistedJob) {
+      json(res, { error: `A fix is already in progress on branch ${body.branch} (${persistedJob.path})` }, 409);
       return;
     }
 

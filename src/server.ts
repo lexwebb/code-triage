@@ -90,6 +90,20 @@ export function setFixJobStatus(job: FixJobStatus): void {
   fixJobStatuses.set(job.commentId, job);
 }
 
+export function getActiveFixForBranch(branch: string): FixJobStatus | undefined {
+  for (const job of fixJobStatuses.values()) {
+    if (job.branch === branch && job.status === "running") return job;
+  }
+  return undefined;
+}
+
+export function getActiveFixForPR(repo: string, prNumber: number): FixJobStatus | undefined {
+  for (const job of fixJobStatuses.values()) {
+    if (job.repo === repo && job.prNumber === prNumber && job.status === "running") return job;
+  }
+  return undefined;
+}
+
 export function clearFixJobStatus(commentId: number): void {
   fixJobStatuses.delete(commentId);
 }

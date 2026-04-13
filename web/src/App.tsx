@@ -362,6 +362,7 @@ export default function App() {
                 repo={selectedPR!.repo}
                 prNumber={selectedPR!.number}
                 branch={prDetail.branch}
+                fixJobs={fixJobs}
                 onCommentAction={reloadComments}
               />
               {/* Collapsible files section */}
