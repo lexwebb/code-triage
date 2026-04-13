@@ -1,7 +1,7 @@
 import { readFileSync, writeFileSync, renameSync, mkdirSync, existsSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
-import type { CrWatchState, CommentStatus } from "./types.js";
+import type { CrWatchState, CommentStatus, Evaluation } from "./types.js";
 
 const STATE_DIR = join(homedir(), ".cr-watch");
 const STATE_FILE = join(STATE_DIR, "state.json");
@@ -45,6 +45,24 @@ export function markComment(
     status,
     prNumber,
     timestamp: new Date().toISOString(),
+  };
+  return state;
+}
+
+export function markCommentWithEvaluation(
+  state: CrWatchState,
+  commentId: number,
+  status: CommentStatus,
+  prNumber: number,
+  evaluation: Evaluation,
+  repo?: string,
+): CrWatchState {
+  const key = commentKey(commentId, repo);
+  state.comments[key] = {
+    status,
+    prNumber,
+    timestamp: new Date().toISOString(),
+    evaluation,
   };
   return state;
 }

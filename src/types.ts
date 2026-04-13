@@ -1,10 +1,12 @@
-export type CommentStatus = "seen" | "replied" | "fixed" | "skipped";
+export type CommentStatus = "pending" | "replied" | "fixed" | "dismissed";
 export type EvalAction = "reply" | "fix" | "resolve";
 
 export interface CommentRecord {
   status: CommentStatus;
   prNumber: number;
+  repo?: string;
   timestamp: string;
+  evaluation?: Evaluation;
 }
 
 export interface CrWatchState {
@@ -38,6 +40,7 @@ export interface Evaluation {
   action: EvalAction;
   summary: string;
   reply?: string;
+  fixDescription?: string;
 }
 
 export interface SpawnOptions {
