@@ -6,6 +6,7 @@ import PRList from "./components/PRList";
 import PRDetail from "./components/PRDetail";
 import FileList from "./components/FileList";
 import DiffView from "./components/DiffView";
+import CommentThreads from "./components/CommentThreads";
 
 interface SelectedPR {
   number: number;
@@ -160,6 +161,10 @@ export default function App() {
         ) : prDetail ? (
           <>
             <PRDetail pr={prDetail} />
+            <CommentThreads
+              comments={prComments}
+              onSelectFile={setSelectedFile}
+            />
             <FileList
               files={prFiles}
               selectedFile={selectedFile}
