@@ -1,4 +1,4 @@
-import type { User, PullRequest, PullRequestDetail, PullFile, ReviewComment, CrWatchState } from "./types";
+import type { User, RepoInfo, PullRequest, PullRequestDetail, PullFile, ReviewComment, CrWatchState } from "./types";
 
 const BASE = "";
 
@@ -10,12 +10,21 @@ async function fetchJSON<T>(path: string): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+function repoQuery(repo?: string): string {
+  return repo ? `?repo=${encodeURIComponent(repo)}` : "";
+}
+
+function repoQueryRequired(repo: string): string {
+  return `?repo=${encodeURIComponent(repo)}`;
+}
+
 export const api = {
   getUser: () => fetchJSON<User>("/api/user"),
-  getPulls: () => fetchJSON<PullRequest[]>("/api/pulls"),
-  getPull: (number: number) => fetchJSON<PullRequestDetail>(`/api/pulls/${number}`),
-  getPullFiles: (number: number) => fetchJSON<PullFile[]>(`/api/pulls/${number}/files`),
-  getPullComments: (number: number) => fetchJSON<ReviewComment[]>(`/api/pulls/${number}/comments`),
-  getFileContent: (prNumber: number, path: string) => fetchJSON<{ content: string; path: string }>(`/api/pulls/${prNumber}/files/${path}`),
+  getRepos: () => fetchJSON<RepoInfo[]>("/api/repos"),
+  getPulls: (repo?: string) => fetchJSON<PullRequest[]>(`/api/pulls${repoQuery(repo)}`),
+  getPull: (number: number, repo: string) => fetchJSON<PullRequestDetail>(`/api/pulls/${number}${repoQueryRequired(repo)}`),
+  getPullFiles: (number: number, repo: string) => fetchJSON<PullFile[]>(`/api/pulls/${number}/files${repoQueryRequired(repo)}`),
+  getPullComments: (number: number, repo: string) => fetchJSON<ReviewComment[]>(`/api/pulls/${number}/comments${repoQueryRequired(repo)}`),
+  getFileContent: (prNumber: number, path: string, repo: string) => fetchJSON<{ content: string; path: string }>(`/api/pulls/${prNumber}/files/${path}${repoQueryRequired(repo)}`),
   getState: () => fetchJSON<CrWatchState>("/api/state"),
 };

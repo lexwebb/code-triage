@@ -1,3 +1,8 @@
+export interface RepoInfo {
+  repo: string;
+  localPath: string;
+}
+
 export interface User {
   login: string;
   avatarUrl: string;
@@ -15,6 +20,7 @@ export interface PullRequest {
   createdAt: string;
   updatedAt: string;
   draft: boolean;
+  repo: string;
 }
 
 export interface PullRequestDetail extends PullRequest {
