@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo } from "react";
+import { useEffect, useState, useMemo, useCallback, useRef } from "react";
 import { api } from "./api";
 import type { PullRequest, PullRequestDetail, PullFile, ReviewComment, RepoInfo } from "./types";
 import { parseRoute, pushRoute, type RouteState } from "./router";
@@ -15,14 +15,29 @@ interface SelectedPR {
   repo: string;
 }
 
+const REFRESH_INTERVAL = 5 * 60_000; // 5 minutes
+const CACHE_KEY_PULLS = "cr-watch:pulls";
+const CACHE_KEY_REVIEW = "cr-watch:reviewPulls";
+const CACHE_KEY_TIME = "cr-watch:lastRefresh";
+
+function loadCache<T>(key: string): T | null {
+  try {
+    const raw = sessionStorage.getItem(key);
+    return raw ? JSON.parse(raw) as T : null;
+  } catch { return null; }
+}
+
+function saveCache<T>(key: string, data: T): void {
+  try { sessionStorage.setItem(key, JSON.stringify(data)); } catch { /* full */ }
+}
+
 export default function App() {
-  // Initialize state from URL
   const initial = parseRoute();
 
   const [_repos, setRepos] = useState<RepoInfo[]>([]);
   const [repoFilter, setRepoFilter] = useState("");
-  const [pulls, setPulls] = useState<PullRequest[]>([]);
-  const [reviewPulls, setReviewPulls] = useState<PullRequest[]>([]);
+  const [pulls, setPulls] = useState<PullRequest[]>(() => loadCache(CACHE_KEY_PULLS) ?? []);
+  const [reviewPulls, setReviewPulls] = useState<PullRequest[]>(() => loadCache(CACHE_KEY_REVIEW) ?? []);
   const [selectedPR, setSelectedPR] = useState<SelectedPR | null>(
     initial.repo && initial.prNumber ? { repo: initial.repo, number: initial.prNumber } : null,
   );
@@ -31,9 +46,12 @@ export default function App() {
   const [prComments, setPrComments] = useState<ReviewComment[]>([]);
   const [selectedFile, setSelectedFile] = useState<string | null>(initial.file);
   const [loadingPR, setLoadingPR] = useState(false);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(() => !loadCache(CACHE_KEY_PULLS));
   const [error, setError] = useState<string | null>(null);
   const [filesExpanded, setFilesExpanded] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [countdown, setCountdown] = useState(REFRESH_INTERVAL);
+  const lastRefreshRef = useRef(Number(sessionStorage.getItem(CACHE_KEY_TIME) || "0"));
 
   // Client-side filtered PR lists
   const filteredPulls = useMemo(() => {
@@ -47,6 +65,35 @@ export default function App() {
     const lower = repoFilter.toLowerCase();
     return reviewPulls.filter((pr) => pr.repo.toLowerCase().includes(lower) || pr.title.toLowerCase().includes(lower));
   }, [reviewPulls, repoFilter]);
+
+  // Fetch pulls from API and cache
+  const fetchPulls = useCallback(async (isInitial = false) => {
+    if (!isInitial) setRefreshing(true);
+    try {
+      const [pullData, reviewData] = await Promise.all([
+        api.getPulls(),
+        api.getReviewRequested(),
+      ]);
+      setPulls(pullData);
+      setReviewPulls(reviewData);
+      saveCache(CACHE_KEY_PULLS, pullData);
+      saveCache(CACHE_KEY_REVIEW, reviewData);
+      const now = Date.now();
+      sessionStorage.setItem(CACHE_KEY_TIME, String(now));
+      lastRefreshRef.current = now;
+      setCountdown(REFRESH_INTERVAL);
+
+      // Auto-select first PR only if nothing selected
+      if (isInitial && pullData.length > 0 && !selectedPR) {
+        setSelectedPR({ number: pullData[0].number, repo: pullData[0].repo });
+      }
+    } catch (err) {
+      if (isInitial) setError((err as Error).message);
+    } finally {
+      if (isInitial) setLoading(false);
+      setRefreshing(false);
+    }
+  }, [selectedPR]);
 
   // Sync URL when state changes
   useEffect(() => {
@@ -81,34 +128,39 @@ export default function App() {
     api.getRepos().then(setRepos).catch(() => {});
   }, []);
 
-  // Always load ALL pulls on mount (no repo filter on API)
+  // Initial load: use cache if fresh enough, otherwise fetch
   useEffect(() => {
-    let cancelled = false;
-    setLoading(true);
+    const cached = loadCache<PullRequest[]>(CACHE_KEY_PULLS);
+    const elapsed = Date.now() - lastRefreshRef.current;
 
-    async function load() {
-      try {
-        const [pullData, reviewData] = await Promise.all([
-          api.getPulls(),
-          api.getReviewRequested(),
-        ]);
-        if (cancelled) return;
-        setPulls(pullData);
-        setReviewPulls(reviewData);
+    if (cached && cached.length > 0 && elapsed < REFRESH_INTERVAL) {
+      // Cache is fresh — just set countdown for remaining time
+      setLoading(false);
+      setCountdown(REFRESH_INTERVAL - elapsed);
 
-        // Auto-select first PR only if nothing from URL
-        if (pullData.length > 0 && !selectedPR) {
-          setSelectedPR({ number: pullData[0].number, repo: pullData[0].repo });
-        }
-      } catch (err) {
-        if (!cancelled) setError((err as Error).message);
-      } finally {
-        if (!cancelled) setLoading(false);
+      // Still auto-select if needed
+      if (cached.length > 0 && !selectedPR) {
+        setSelectedPR({ number: cached[0].number, repo: cached[0].repo });
       }
+    } else {
+      fetchPulls(true);
     }
-    load();
-    return () => { cancelled = true; };
   }, []);
+
+  // Auto-refresh timer
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setCountdown((prev) => {
+        const next = prev - 1000;
+        if (next <= 0) {
+          fetchPulls();
+          return REFRESH_INTERVAL;
+        }
+        return next;
+      });
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [fetchPulls]);
 
   // Load PR detail when selectedPR changes
   useEffect(() => {
@@ -158,7 +210,6 @@ export default function App() {
     }
   }
 
-  // Web notifications for new review requests and pending comments
   useNotifications(pulls, reviewPulls, handleSelectPR, reloadComments);
 
   if (loading) {
@@ -177,12 +228,27 @@ export default function App() {
     );
   }
 
+  const minutes = Math.floor(countdown / 60000);
+  const seconds = Math.floor((countdown % 60000) / 1000);
+  const timerText = `${minutes}:${seconds.toString().padStart(2, "0")}`;
+
   return (
     <div className="h-screen flex bg-gray-950 text-gray-200">
       {/* Sidebar */}
       <div className="w-72 border-r border-gray-800 flex flex-col shrink-0">
-        <div className="px-4 py-3 border-b border-gray-800">
+        <div className="px-4 py-2 border-b border-gray-800 flex items-center justify-between">
           <h1 className="text-sm font-semibold text-white">cr-watch</h1>
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-gray-600 font-mono">{timerText}</span>
+            <button
+              onClick={() => fetchPulls()}
+              disabled={refreshing}
+              className="text-xs text-gray-500 hover:text-gray-300 disabled:text-gray-700 transition-colors"
+              title="Refresh now"
+            >
+              {refreshing ? "↻" : "⟳"}
+            </button>
+          </div>
         </div>
         <RepoFilter
           filter={repoFilter}
@@ -196,7 +262,6 @@ export default function App() {
             pulls={filteredPulls}
             selectedPR={selectedPR}
             onSelectPR={handleSelectPR}
-
             showRepo
           />
           {filteredReviewPulls.length > 0 && (
@@ -208,7 +273,6 @@ export default function App() {
                 pulls={filteredReviewPulls}
                 selectedPR={selectedPR}
                 onSelectPR={handleSelectPR}
-
                 showRepo
               />
             </>
