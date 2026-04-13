@@ -3,7 +3,7 @@ import { parseArgs } from "util";
 import { loadState, saveState, isNewComment, getCommentsByStatus } from "./state.js";
 import { fetchNewComments } from "./poller.js";
 import { notifyNewComments } from "./notifier.js";
-import { processComments, killAllChildren } from "./actioner.js";
+import { analyzeComments, killAllChildren } from "./actioner.js";
 import { cleanupAllWorktrees } from "./worktree.js";
 import {
   enableRawMode,
@@ -31,18 +31,18 @@ const { values: flags } = parseArgs({
 
 function printStatus(): void {
   const state = loadState();
-  const seen = getCommentsByStatus(state, "seen");
+  const pending = getCommentsByStatus(state, "pending");
   const replied = getCommentsByStatus(state, "replied");
   const fixed = getCommentsByStatus(state, "fixed");
-  const skipped = getCommentsByStatus(state, "skipped");
+  const dismissed = getCommentsByStatus(state, "dismissed");
 
   console.log("\ncr-watch status:");
   console.log(`  Last poll: ${state.lastPoll || "never"}`);
   console.log(`  Comments: ${Object.keys(state.comments).length} total`);
-  console.log(`    Pending:  ${seen.length}`);
-  console.log(`    Replied:  ${replied.length}`);
-  console.log(`    Fixed:    ${fixed.length}`);
-  console.log(`    Skipped:  ${skipped.length}`);
+  console.log(`    Pending:   ${pending.length}`);
+  console.log(`    Replied:   ${replied.length}`);
+  console.log(`    Fixed:     ${fixed.length}`);
+  console.log(`    Dismissed: ${dismissed.length}`);
   console.log("");
 }
 
@@ -115,7 +115,7 @@ async function poll(): Promise<void> {
 
         if (comments.length > 0) {
           notifyNewComments(comments, pullsByNumber);
-          await processComments(comments, pullsByNumber, state, repoInfo.repo, dryRun);
+          await analyzeComments(comments, pullsByNumber, state, repoInfo.repo, dryRun);
         }
       } catch (err) {
         console.error(`\n  Error polling ${repoInfo.repo}: ${(err as Error).message}`);
@@ -126,7 +126,7 @@ async function poll(): Promise<void> {
     saveState(state);
 
     const now = new Date().toLocaleTimeString();
-    setStatus(`[${now}] Polled ${repos.length} repo(s).`);
+    setStatus(`[${now}] Analyzed ${repos.length} repo(s).`);
   } catch (err) {
     console.error(`\nPoll error: ${(err as Error).message}`);
     setStatus(`Error: ${(err as Error).message}`);
