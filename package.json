@@ -43,6 +43,10 @@
     "github"
   ],
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/lexwebb/code-triage.git"
+  },
   "dependencies": {
     "ink": "^7.0.0",
     "react": "^19.2.5"
