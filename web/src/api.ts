@@ -53,6 +53,8 @@ export interface PollStatus {
   testNotification: boolean;
   rateLimited?: boolean;
   rateLimitResetAt?: number | null;
+  /** Present when CLI records a top-level poll failure (see `/api/health`). */
+  lastPollError?: string | null;
 }
 
 export const api = {

@@ -11,6 +11,7 @@ export default tseslint.config(
   // CLI + shared TypeScript source
   {
     files: ['src/**/*.{ts,tsx}'],
+    ignores: ['src/**/*.test.ts'],
     extends: [js.configs.recommended, ...tseslint.configs.recommended],
     languageOptions: {
       parserOptions: {
@@ -21,6 +22,20 @@ export default tseslint.config(
     rules: {
       '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_', varsIgnorePattern: '^_' }],
       '@typescript-eslint/no-explicit-any': 'warn',
+    },
+  },
+
+  // Unit tests (Vitest) — not part of main tsc emit project
+  {
+    files: ['src/**/*.test.ts'],
+    extends: [js.configs.recommended, ...tseslint.configs.recommended],
+    languageOptions: {
+      parserOptions: {
+        projectService: false,
+      },
+    },
+    rules: {
+      '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_', varsIgnorePattern: '^_' }],
     },
   },
 

@@ -1,32 +1,53 @@
-import { readFileSync, writeFileSync, renameSync, mkdirSync, existsSync } from "fs";
-import { join } from "path";
-import { homedir } from "os";
+import { eq } from "drizzle-orm";
 import type { CrWatchState, CommentStatus, Evaluation, FixJobRecord } from "./types.js";
-
-const STATE_DIR = join(homedir(), ".code-triage");
-const STATE_FILE = join(STATE_DIR, "state.json");
-const STATE_TMP = join(STATE_DIR, "state.json.tmp");
-
-const DEFAULT_STATE: CrWatchState = {
-  lastPoll: null,
-  comments: {},
-};
+import * as schema from "./db/schema.js";
+import { openStateDatabase, writeStateToDb, getRawSqlite } from "./db/client.js";
 
 export function loadState(): CrWatchState {
-  if (!existsSync(STATE_FILE)) {
-    return { ...DEFAULT_STATE };
+  const db = openStateDatabase();
+  const metaRow = db.select().from(schema.meta).where(eq(schema.meta.id, 1)).get();
+  const lastPoll = metaRow?.lastPoll ?? null;
+
+  const rows = db.select().from(schema.comments).all();
+  const comments: CrWatchState["comments"] = {};
+  for (const row of rows) {
+    let evaluation: Evaluation | undefined;
+    if (row.evaluationJson) {
+      try {
+        evaluation = JSON.parse(row.evaluationJson) as Evaluation;
+      } catch {
+        evaluation = undefined;
+      }
+    }
+    comments[row.commentKey] = {
+      status: row.status as CommentStatus,
+      prNumber: row.prNumber,
+      ...(row.repo ? { repo: row.repo } : {}),
+      timestamp: row.timestamp,
+      ...(evaluation ? { evaluation } : {}),
+    };
   }
-  try {
-    return JSON.parse(readFileSync(STATE_FILE, "utf-8")) as CrWatchState;
-  } catch {
-    return { ...DEFAULT_STATE };
+
+  const jobRows = db.select().from(schema.fixJobs).all();
+  const fixJobs: FixJobRecord[] = jobRows.map((r) => ({
+    commentId: r.commentId,
+    repo: r.repo,
+    prNumber: r.prNumber,
+    branch: r.branch,
+    path: r.path,
+    worktreePath: r.worktreePath,
+    startedAt: r.startedAt,
+  }));
+
+  const state: CrWatchState = { lastPoll, comments };
+  if (fixJobs.length > 0) {
+    state.fixJobs = fixJobs;
   }
+  return state;
 }
 
 export function saveState(state: CrWatchState): void {
-  mkdirSync(STATE_DIR, { recursive: true });
-  writeFileSync(STATE_TMP, JSON.stringify(state, null, 2));
-  renameSync(STATE_TMP, STATE_FILE);
+  writeStateToDb(getRawSqlite(), state);
 }
 
 function commentKey(commentId: number, repo?: string): string {
@@ -45,6 +66,7 @@ export function markComment(
     status,
     prNumber,
     timestamp: new Date().toISOString(),
+    ...(repo ? { repo } : {}),
   };
   return state;
 }
@@ -63,6 +85,7 @@ export function markCommentWithEvaluation(
     prNumber,
     timestamp: new Date().toISOString(),
     evaluation,
+    ...(repo ? { repo } : {}),
   };
   return state;
 }

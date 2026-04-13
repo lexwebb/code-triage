@@ -17,6 +17,7 @@ The CLI embeds an HTTP server (default port **3100**, configurable). All routes 
 | `GET` | `/api/pulls/:number/comments` | Review comments with `isResolved`, merged `evaluation` and `crStatus` from `state.json`. Requires `?repo=`. |
 | `GET` | `/api/pulls/:number/files/*path` | File content at `path` on the PR head ref. Requires `?repo=`. |
 | `GET` | `/api/state` | Full `CrWatchState` (comments map, fix job records, `lastPoll`). |
+| `GET` | `/api/health` | Readiness snapshot: `status`, `uptimeMs`, `repos`, poll timers, `lastPollError` (if the last full poll run failed), GitHub rate-limit hint, `fixJobsRunning`, and `persistedLastPoll` (ISO from SQLite). Does **not** consume the one-shot test-notification flag (unlike `/api/poll-status`). |
 | `GET` | `/api/poll-status` | Server poll timer state, in-memory fix-job statuses, test-notification flag, rate-limit hint. |
 | `GET` | `/api/version` | Short SHAs and “commits behind `origin/main`” (best-effort; cached ~10 min). |
 | `GET` | `/api/fix-jobs/recover` | Lists persisted fix jobs from state; includes whether a worktree diff exists; prunes dead entries. |

@@ -181,6 +181,22 @@ export function startDemoServer(port: number): void {
     json(res, { lastPoll: new Date().toISOString(), comments: {} });
   });
 
+  addRoute("GET", "/api/health", (_req, res) => {
+    json(res, {
+      status: "ok",
+      uptimeMs: 60_000,
+      repos: DEMO_REPOS.length,
+      polling: false,
+      lastPollWallClockMs: Date.now() - 30_000,
+      nextPoll: Date.now() + 30_000,
+      intervalMs: 60_000,
+      lastPollError: null,
+      rateLimit: { limited: false, resetAt: null },
+      fixJobsRunning: 0,
+      persistedLastPoll: new Date().toISOString(),
+    });
+  });
+
   addRoute("GET", "/api/poll-status", (_req, res) => {
     json(res, {
       lastPoll: Date.now() - 30000,

@@ -13,7 +13,7 @@ Longer explanations live under [`docs/`](./docs/README.md). Use them when you ne
 | [`docs/architecture.md`](./docs/architecture.md) | System diagram, data flow, how CLI / poller / API / web fit together, GitHub vs Claude boundaries |
 | [`docs/features-and-rationale.md`](./docs/features-and-rationale.md) | What a feature does and *why* (e.g. authored PRs vs review-requested list, worktrees, bot filtering) |
 | [`docs/http-api.md`](./docs/http-api.md) | Adding or changing REST routes, request/response shapes, error codes |
-| [`docs/config-and-state.md`](./docs/config-and-state.md) | `config.json` / `state.json`, comment keys, fix jobs, `.cr-worktrees/` behavior |
+| [`docs/config-and-state.md`](./docs/config-and-state.md) | `config.json` / `state.sqlite`, comment keys, fix jobs, `.cr-worktrees/` behavior |
 
 [`docs/README.md`](./docs/README.md) is the index. [`docs/superpowers/`](./docs/superpowers/) holds dated design notes; prefer the guides above for current behavior.
 
@@ -23,7 +23,7 @@ Longer explanations live under [`docs/`](./docs/README.md). Use them when you ne
 - **Web Frontend** (`web/`): React 19, TypeScript, Vite, Tailwind CSS v4. Yarn workspace (`code-triage-web`).
 - **GitHub API**: Direct `fetch` calls using a token from `gh auth token`. No `gh` CLI for API calls (too slow).
 - **Claude CLI**: Used for comment evaluation (`claude -p`) and code fixes (`claude -p --dangerously-skip-permissions`).
-- **State**: Persisted to `~/.code-triage/state.json`. Config at `~/.code-triage/config.json`.
+- **State**: Persisted to `~/.code-triage/state.sqlite` (Drizzle ORM + better-sqlite3). Legacy `state.json` is migrated once on first DB creation. Config at `~/.code-triage/config.json`.
 
 ## Build & Run
 
@@ -48,6 +48,7 @@ yarn dev                  # Runs tsc watch + CLI auto-restart + Vite HMR concurr
 - `src/discovery.ts` — Scans directories for GitHub repos
 - `src/exec.ts` — Async GitHub API helpers (`ghAsync`, `ghGraphQL`, `ghPost`)
 - `src/state.ts` — State persistence with repo-prefixed comment keys
+- `src/db/schema.ts`, `src/db/client.ts` — SQLite schema and connection
 - `src/config.ts` — User config (root dir, port, interval)
 - `src/worktree.ts` — Git worktree management for fixes
 - `src/terminal.tsx` — Ink-based terminal UI
@@ -59,7 +60,7 @@ yarn dev                  # Runs tsc watch + CLI auto-restart + Vite HMR concurr
 
 - ESM modules — imports end with `.js` extension (even for `.ts` files)
 - TSX for ink components (`terminal.tsx`), TS for everything else
-- Zero runtime dependencies for the CLI except `ink` and `react`
+- CLI runtime deps: `ink`, `react`, `drizzle-orm`, `better-sqlite3` (see `package.json`)
 - All GitHub API calls go through `src/exec.ts` helpers (never `execFileSync` for API calls)
 - Route handlers in `api.ts` are all `async` to avoid blocking the event loop
 - State comment keys are prefixed with repo: `owner/repo:commentId`
@@ -68,15 +69,17 @@ yarn dev                  # Runs tsc watch + CLI auto-restart + Vite HMR concurr
 
 ## Testing
 
-No test suite yet. To verify changes:
 ```bash
+yarn test                 # Vitest — `exec`, poller filters, `parseEvaluation`, SQLite state
 yarn build:all            # Must compile cleanly
 yarn start                # Smoke test — should discover repos and start server
 ```
 
+Unit tests set `CODE_TRIAGE_STATE_DIR` to a temp directory so `state.sqlite` is isolated from `~/.code-triage`.
+
 ## Common Tasks
 
-- **Adding an API endpoint**: Add route in `src/api.ts` inside `registerRoutes()`. Use `ghAsync`/`ghPost` for GitHub calls. All handlers must be `async`.
+- **Adding an API endpoint**: Add route in `src/api.ts` inside `registerRoutes()`. Use `ghAsync`/`ghPost` for GitHub calls. All handlers must be `async`. Readiness: `GET /api/health`.
 - **Adding a web component**: Create in `web/src/components/`. Import in `App.tsx`.
-- **Adding a CLI flag**: Add to `parseArgs` options in `src/cli.ts`. Override config values below.
+- **Adding a CLI flag**: Add to `parseArgs` options in `src/cli.ts`. Override config values below. Evaluations: `--eval-concurrency` / `evalConcurrency` in config (see `analyzeComments`).
 - **Modifying state shape**: Update `src/types.ts`, then `src/state.ts` helpers.

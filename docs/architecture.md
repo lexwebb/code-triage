@@ -14,7 +14,7 @@ flowchart LR
   end
   GH[GitHub REST + GraphQL]
   Claude[claude CLI]
-  Disk["~/.code-triage/*.json"]
+  Disk["~/.code-triage/*.sqlite + config.json"]
   Browser[Web UI]
 
   Poll --> GH
@@ -64,7 +64,7 @@ flowchart LR
 - **Route table**: method + path patterns with `:params` and `*path` splats; POST bodies parsed once into `req.__body`.
 - **Static files**: in production, serves `web/dist` with SPA fallback to `index.html` for client-side routes.
 - **CORS**: permissive (`*`) for local development and simple tooling.
-- **Poll status**: in-memory `pollState` plus fix-job status map; merged into `GET /api/poll-status` with rate-limit hints from `exec.ts`.
+- **Poll status**: in-memory `pollState` plus fix-job status map; merged into `GET /api/poll-status` with rate-limit hints from `exec.ts`. **`GET /api/health`** exposes a readiness snapshot (including `lastPollError` and `persistedLastPoll`) without consuming the one-shot test-notification flag.
 
 ### GitHub access (`src/exec.ts`)
 
@@ -100,7 +100,7 @@ flowchart LR
 |--------|----------|
 | GitHub I/O | `exec.ts`, `poller.ts`, `api.ts`, parts of `actioner.ts` |
 | Claude I/O | `actioner.ts` only |
-| Persistence | `state.ts`, `config.ts` |
+| Persistence | `state.ts`, `db/schema.ts`, `db/client.ts`, `config.ts` |
 | Worktrees | `worktree.ts` |
 | HTTP routing | `server.ts`, `api.ts` |
 

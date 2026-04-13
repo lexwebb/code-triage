@@ -77,7 +77,16 @@ export function getRepos(): RepoInfo[] {
   return currentRepos;
 }
 
-const pollState = { lastPoll: 0, nextPoll: 0, intervalMs: 0, polling: false };
+const serverStartedAt = Date.now();
+
+const pollState = {
+  lastPoll: 0,
+  nextPoll: 0,
+  intervalMs: 0,
+  polling: false,
+  /** Last top-level poll failure (outer catch in `cli.ts`); cleared on success. */
+  lastPollError: null as string | null,
+};
 let testNotificationPending = false;
 
 export function triggerTestNotification(): void {
@@ -92,7 +101,13 @@ export function consumeTestNotification(): boolean {
   return false;
 }
 
-export function updatePollState(state: { lastPoll?: number; nextPoll?: number; intervalMs?: number; polling?: boolean }): void {
+export function updatePollState(state: {
+  lastPoll?: number;
+  nextPoll?: number;
+  intervalMs?: number;
+  polling?: boolean;
+  lastPollError?: string | null;
+}): void {
   Object.assign(pollState, state);
 }
 
@@ -133,13 +148,44 @@ export function clearFixJobStatus(commentId: number): void {
   fixJobStatuses.delete(commentId);
 }
 
-export function getPollState() {
+export interface HealthPayload {
+  status: "ok";
+  uptimeMs: number;
+  repos: number;
+  polling: boolean;
+  lastPollWallClockMs: number;
+  nextPoll: number;
+  intervalMs: number;
+  lastPollError: string | null;
+  rateLimit: { limited: boolean; resetAt: number | null };
+  fixJobsRunning: number;
+}
+
+export function getPollState(options?: { consumeTestNotification?: boolean }) {
+  const consume = options?.consumeTestNotification !== false;
   return {
     ...pollState,
     fixJobs: Array.from(fixJobStatuses.values()),
-    testNotification: consumeTestNotification(),
+    testNotification: consume ? consumeTestNotification() : false,
     rateLimited: getRateLimitState().limited,
     rateLimitResetAt: getRateLimitState().resetAt,
+  };
+}
+
+/** Snapshot for `GET /api/health` — does not consume the one-shot test-notification flag. */
+export function getHealthPayload(): HealthPayload {
+  const ps = getPollState({ consumeTestNotification: false });
+  return {
+    status: "ok",
+    uptimeMs: Date.now() - serverStartedAt,
+    repos: getRepos().length,
+    polling: ps.polling,
+    lastPollWallClockMs: ps.lastPoll,
+    nextPoll: ps.nextPoll,
+    intervalMs: ps.intervalMs,
+    lastPollError: pollState.lastPollError,
+    rateLimit: { limited: ps.rateLimited, resetAt: ps.rateLimitResetAt },
+    fixJobsRunning: ps.fixJobs.filter((j) => j.status === "running").length,
   };
 }
 

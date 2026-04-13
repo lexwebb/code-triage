@@ -10,6 +10,7 @@ This folder describes how **Code Triage** is put together, what the main feature
 | [Features and rationale](./features-and-rationale.md) | Product capabilities and the problems they solve |
 | [HTTP API](./http-api.md) | REST endpoints the web UI and tools use |
 | [Config, state, and worktrees](./config-and-state.md) | `~/.code-triage` files, comment keys, fix jobs, `.cr-worktrees` |
+| [Implementation plan](./implementation-plan.md) | Prioritized backlog of enhancements (solo, local-first) |
 
 ## Internal design notes
 

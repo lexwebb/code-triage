@@ -9,6 +9,8 @@ export interface Config {
   root: string;
   port: number;
   interval: number; // minutes
+  /** Max concurrent `claude -p` evaluation processes during a poll (default 2, clamped 1–8). */
+  evalConcurrency?: number;
   ignoredBots?: string[]; // additional bot logins to ignore during polling
   accounts?: Array<{ name: string; token: string; orgs: string[] }>; // multi-account support
 }
@@ -17,6 +19,7 @@ const DEFAULTS: Config = {
   root: "~/src",
   port: 3100,
   interval: 1,
+  evalConcurrency: 2,
 };
 
 export function loadConfig(): Config {

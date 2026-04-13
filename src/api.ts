@@ -1,4 +1,4 @@
-import { addRoute, json, getRepos, getBody, getPollState, setFixJobStatus, clearFixJobStatus, getActiveFixForBranch, getActiveFixForPR } from "./server.js";
+import { addRoute, json, getRepos, getBody, getPollState, getHealthPayload, setFixJobStatus, clearFixJobStatus, getActiveFixForBranch, getActiveFixForPR } from "./server.js";
 import { loadState, markComment, markCommentWithEvaluation, saveState, addFixJob as addFixJobState, removeFixJob as removeFixJobState, getFixJobs } from "./state.js";
 import { postReply, resolveThread, applyFixWithClaude, evaluateComment } from "./actioner.js";
 import { createWorktree, getWorktreePath, getDiffInWorktree, removeWorktree, commitAndPushWorktree } from "./worktree.js";
@@ -376,6 +376,14 @@ export function registerRoutes(): void {
   // GET /api/state
   addRoute("GET", "/api/state", (_req, res) => {
     json(res, loadState());
+  });
+
+  // GET /api/health — readiness snapshot (does not consume test-notification flag)
+  addRoute("GET", "/api/health", (_req, res) => {
+    json(res, {
+      ...getHealthPayload(),
+      persistedLastPoll: loadState().lastPoll,
+    });
   });
 
   // GET /api/poll-status

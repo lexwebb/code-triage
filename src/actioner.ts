@@ -2,7 +2,18 @@ import { spawn, type ChildProcess } from "child_process";
 import { markComment, markCommentWithEvaluation, saveState } from "./state.js";
 import { ghPost, ghGraphQL } from "./exec.js";
 import { log } from "./logger.js";
+import { runWithConcurrency } from "./run-with-concurrency.js";
 import type { CrComment, CrWatchState, Evaluation, PrInfo, SpawnOptions } from "./types.js";
+
+const EVAL_CONCURRENCY_MIN = 1;
+const EVAL_CONCURRENCY_MAX = 8;
+
+export function clampEvalConcurrency(n: number): number {
+  if (!Number.isFinite(n)) {
+    return 2;
+  }
+  return Math.min(EVAL_CONCURRENCY_MAX, Math.max(EVAL_CONCURRENCY_MIN, Math.floor(n)));
+}
 
 // Track all active child processes so we can kill them on shutdown
 const activeChildren = new Set<ChildProcess>();
@@ -135,7 +146,8 @@ function validateEvaluation(obj: unknown): Evaluation | null {
   };
 }
 
-function parseEvaluation(raw: string): Evaluation {
+/** Exported for unit tests; normal path is `evaluateComment`. */
+export function parseEvaluation(raw: string): Evaluation {
   // Try direct parse + validate
   try {
     const result = validateEvaluation(JSON.parse(raw));
@@ -272,6 +284,7 @@ export async function analyzeComments(
   state: CrWatchState,
   repoPath: string,
   dryRun: boolean,
+  evalConcurrency = 2,
 ): Promise<void> {
   const byPr: Record<number, CrComment[]> = {};
   for (const c of comments) {
@@ -279,34 +292,39 @@ export async function analyzeComments(
     byPr[c.prNumber].push(c);
   }
 
+  const tasks: Array<{ comment: CrComment; prNumber: number }> = [];
   for (const [prNum, prComments] of Object.entries(byPr)) {
     const prNumber = Number(prNum);
     const pr = pullsByNumber[prNumber];
     log.info(`Analyzing PR #${prNum}: ${pr?.title || "Unknown"}`);
-
     for (const comment of prComments) {
-      log.info(`Evaluating: ${comment.path}:${comment.line}`);
-
-      if (dryRun) {
-        log.info(`[dry-run] Would evaluate comment ${comment.id} with Claude.`);
-        markComment(state, comment.id, "pending", prNumber, repoPath);
-        saveState(state);
-        continue;
-      }
-
-      let evaluation: Evaluation;
-      try {
-        evaluation = await evaluateComment(comment);
-      } catch (err) {
-        log.error(`Error evaluating comment ${comment.id}: ${(err as Error).message}`);
-        markComment(state, comment.id, "pending", prNumber, repoPath);
-        saveState(state);
-        continue;
-      }
-
-      log.info(`Result: ${evaluation.action} — ${evaluation.summary}`);
-      markCommentWithEvaluation(state, comment.id, "pending", prNumber, evaluation, repoPath);
-      saveState(state);
+      tasks.push({ comment, prNumber });
     }
   }
+
+  if (dryRun) {
+    for (const { comment, prNumber } of tasks) {
+      log.info(`[dry-run] Would evaluate comment ${comment.id} with Claude.`);
+      markComment(state, comment.id, "pending", prNumber, repoPath);
+      saveState(state);
+    }
+    return;
+  }
+
+  const cap = clampEvalConcurrency(evalConcurrency);
+  await runWithConcurrency(tasks, cap, async ({ comment, prNumber }) => {
+    log.info(`Evaluating: ${comment.path}:${comment.line}`);
+    let evaluation: Evaluation;
+    try {
+      evaluation = await evaluateComment(comment);
+    } catch (err) {
+      log.error(`Error evaluating comment ${comment.id}: ${(err as Error).message}`);
+      markComment(state, comment.id, "pending", prNumber, repoPath);
+      saveState(state);
+      return;
+    }
+    log.info(`Result: ${evaluation.action} — ${evaluation.summary}`);
+    markCommentWithEvaluation(state, comment.id, "pending", prNumber, evaluation, repoPath);
+    saveState(state);
+  });
 }

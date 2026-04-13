@@ -88,6 +88,23 @@ const IGNORED_BOTS = new Set([
   "gitpod-io[bot]", "stale[bot]", "linear[bot]",
 ]);
 
+/** Built-in ignored bots plus optional config entries (for tests and `fetchNewComments`). */
+export function buildIgnoredBotSet(configIgnored?: string[]): Set<string> {
+  return new Set([...IGNORED_BOTS, ...(configIgnored ?? [])]);
+}
+
+/** Pure filter: new top-level review comments worth triaging. */
+export function filterCommentsForPoll<T extends { id: number; user: { login: string } }>(
+  comments: T[],
+  resolvedIds: Set<number>,
+  ignoredBots: Set<string>,
+  isNewComment: (id: number) => boolean,
+): T[] {
+  return comments.filter(
+    (c) => !ignoredBots.has(c.user.login) && isNewComment(c.id) && !resolvedIds.has(c.id),
+  );
+}
+
 export async function fetchNewComments(
   repo: string | undefined,
   isNewComment: (id: number) => boolean,
@@ -119,10 +136,8 @@ export async function fetchNewComments(
     ]);
 
     const config = loadConfig();
-    const ignoredBots = new Set([...IGNORED_BOTS, ...(config.ignoredBots ?? [])]);
-    const relevantComments = comments.filter(
-      (c) => !ignoredBots.has(c.user.login) && isNewComment(c.id) && !resolvedIds.has(c.id),
-    );
+    const ignoredBots = buildIgnoredBotSet(config.ignoredBots);
+    const relevantComments = filterCommentsForPoll(comments, resolvedIds, ignoredBots, isNewComment);
 
     for (const comment of relevantComments) {
       allNewComments.push({

@@ -4,7 +4,7 @@ import { execSync } from "child_process";
 import { loadState, saveState, isNewComment, getCommentsByStatus } from "./state.js";
 import { fetchNewComments } from "./poller.js";
 import { notifyNewComments } from "./notifier.js";
-import { analyzeComments, killAllChildren } from "./actioner.js";
+import { analyzeComments, clampEvalConcurrency, killAllChildren } from "./actioner.js";
 import { cleanupAllWorktrees, pruneOrphanedWorktrees } from "./worktree.js";
 import { setTokenResolver } from "./exec.js";
 import {
@@ -32,6 +32,7 @@ const { values: flags } = parseArgs({
     config: { type: "boolean", default: false },
     open: { type: "boolean", default: false },
     demo: { type: "boolean", default: false },
+    "eval-concurrency": { type: "string" },
   },
 });
 
@@ -129,7 +130,13 @@ async function runSetup(existing: Config): Promise<Config> {
 
   rl.close();
 
-  const config: Config = { root, port, interval, ...(accounts.length ? { accounts } : {}) };
+  const config: Config = {
+    ...existing,
+    root,
+    port,
+    interval,
+    ...(accounts.length ? { accounts } : {}),
+  };
   saveConfig(config);
   console.log("\n  Config saved to ~/.code-triage/config.json\n");
   return config;
@@ -164,6 +171,9 @@ const root = flags.root || config.root;
 const port = flags.port ? parseInt(flags.port, 10) : config.port;
 const intervalMs = (flags.interval ? parseInt(flags.interval, 10) : config.interval) * 60 * 1000;
 const dryRun = flags["dry-run"]!;
+const evalConcurrency = clampEvalConcurrency(
+  flags["eval-concurrency"] ? parseInt(flags["eval-concurrency"]!, 10) : (config.evalConcurrency ?? 2),
+);
 
 // Resolve repos: single repo mode or multi-repo discovery
 let repos: RepoInfo[];
@@ -200,6 +210,7 @@ for (const r of repos) {
 }
 console.log(`  Interval: ${intervalMs / 60000}m`);
 console.log(`  Dry run: ${dryRun}`);
+console.log(`  Eval concurrency: ${evalConcurrency}`);
 console.log(`  WebUI: http://localhost:${port}\n`);
 
 startServer(port, repos);
@@ -249,7 +260,7 @@ async function poll(): Promise<void> {
 
         if (comments.length > 0) {
           notifyNewComments(comments, pullsByNumber);
-          await analyzeComments(comments, pullsByNumber, state, repoInfo.repo, dryRun);
+          await analyzeComments(comments, pullsByNumber, state, repoInfo.repo, dryRun, evalConcurrency);
         }
       } catch (err) {
         console.error(`\n  Error polling ${repoInfo.repo}: ${(err as Error).message}`);
@@ -261,11 +272,12 @@ async function poll(): Promise<void> {
 
     const now = new Date().toLocaleTimeString();
     setStatus(`[${now}] Analyzed ${repos.length} repo(s).`);
-    updatePollState({ lastPoll: Date.now(), polling: false });
+    updatePollState({ lastPoll: Date.now(), polling: false, lastPollError: null });
   } catch (err) {
-    console.error(`\nPoll error: ${(err as Error).message}`);
-    setStatus(`Error: ${(err as Error).message}`);
-    updatePollState({ polling: false });
+    const msg = (err as Error).message;
+    console.error(`\nPoll error: ${msg}`);
+    setStatus(`Error: ${msg}`);
+    updatePollState({ polling: false, lastPollError: msg });
   }
 
   running = false;

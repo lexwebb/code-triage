@@ -9,16 +9,23 @@ Created or updated by first-run setup or `code-triage --config`.
 | `root` | string | `~/src` | Directory scanned for GitHub clones (unless `--repo`). |
 | `port` | number | `3100` | HTTP server port. |
 | `interval` | number | `1` | Poll interval in **minutes**. |
+| `evalConcurrency` | number | `2` | Max concurrent Claude evaluation processes (`claude -p`) per poll batch; clamped **1–8**. |
 | `ignoredBots` | string[] | — | Extra GitHub logins treated like built-in ignored bots in `poller.ts`. |
 | `accounts` | array | — | Optional multi-account PATs: `{ name, token, orgs: string[] }`. Repo **owner** matched against `orgs` selects `token`; otherwise `gh auth token` is used. |
 
-CLI flags override config: `--root`, `--port`, `--interval`, `--repo`, `--dry-run`.
+CLI flags override config: `--root`, `--port`, `--interval`, `--repo`, `--dry-run`, `--eval-concurrency`.
 
-## State (`~/.code-triage/state.json`)
+## State (`~/.code-triage/state.sqlite`)
 
-Atomic write: JSON written to `state.json.tmp` then renamed to `state.json`.
+SQLite (WAL mode) via **Drizzle ORM** and **better-sqlite3**. Schema lives in `src/db/schema.ts`; reads/writes go through `src/state.ts` (same `CrWatchState` shape as before).
 
-### Top-level shape
+**Migration:** On first creation of `state.sqlite`, if `state.json` is present it is imported into the database and then renamed to `state.json.migrated`. Corrupt JSON is left in place.
+
+**Tests:** Set environment variable `CODE_TRIAGE_STATE_DIR` to a temporary directory so Vitest does not touch your real `~/.code-triage` database (see `src/state.test.ts`).
+
+**Writes:** Each `saveState` runs a transaction that replaces all comment rows and fix-job rows and updates `lastPoll` (full snapshot, matching the old JSON file semantics).
+
+### Top-level shape (in-memory / API)
 
 - `lastPoll` — ISO timestamp of last successful poll completion (string or `null`).
 - `comments` — map of comment records (see keys below).
@@ -64,4 +71,4 @@ If `DEBUG=true` or `--debug` is passed, `src/logger.js` appends to `~/.code-tria
 
 ## Clear state
 
-- CLI hotkey **`c`** or manual edit: clearing state drops all comment records and `lastPoll`; fix job list should be reconsidered if you clear while fixes run.
+- CLI hotkey **`c`**: clearing state drops all comment records, fix jobs, and `lastPoll`. Avoid clearing while a fix is running unless you intend to abandon recovery metadata.
