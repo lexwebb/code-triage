@@ -32,6 +32,7 @@ export default function App() {
   const [loadingPR, setLoadingPR] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [filesExpanded, setFilesExpanded] = useState(false);
 
   // Sync URL when state changes
   useEffect(() => {
@@ -144,6 +145,16 @@ export default function App() {
     setSelectedPR({ number, repo });
   }
 
+  async function reloadComments() {
+    if (!selectedPR) return;
+    try {
+      const comments = await api.getPullComments(selectedPR.number, selectedPR.repo);
+      setPrComments(comments);
+    } catch (err) {
+      console.error("Failed to reload comments:", err);
+    }
+  }
+
   function handleSelectRepo(repo: string | null) {
     setSelectedRepo(repo);
     setSelectedPR(null);
@@ -203,27 +214,44 @@ export default function App() {
             <PRDetail pr={prDetail} />
             <CommentThreads
               comments={prComments}
-              onSelectFile={setSelectedFile}
+              onSelectFile={(f) => { setFilesExpanded(true); setSelectedFile(f); }}
+              repo={selectedPR!.repo}
+              prNumber={selectedPR!.number}
+              onCommentAction={reloadComments}
             />
-            <FileList
-              files={prFiles}
-              selectedFile={selectedFile}
-              onSelectFile={setSelectedFile}
-              comments={prComments}
-            />
-            <div className="flex-1 overflow-y-auto">
-              {selectedFile ? (
-                (() => {
-                  const file = prFiles.find((f) => f.filename === selectedFile);
-                  const fileComments = prComments.filter((c) => c.path === selectedFile);
-                  return file ? (
-                    <DiffView patch={file.patch} filename={file.filename} comments={fileComments} />
-                  ) : null;
-                })()
-              ) : (
-                <div className="text-gray-500 text-center mt-12">Select a file to view its diff</div>
-              )}
+            {/* Collapsible files section */}
+            <div className="border-t border-gray-800 shrink-0">
+              <button
+                onClick={() => setFilesExpanded(!filesExpanded)}
+                className="w-full px-6 py-2 flex items-center justify-between text-xs text-gray-500 uppercase tracking-wide hover:bg-gray-800/30"
+              >
+                <span>Files Changed ({prFiles.length})</span>
+                <span className="text-gray-600">{filesExpanded ? "▼" : "▶"}</span>
+              </button>
             </div>
+            {filesExpanded && (
+              <>
+                <FileList
+                  files={prFiles}
+                  selectedFile={selectedFile}
+                  onSelectFile={setSelectedFile}
+                  comments={prComments}
+                />
+                <div className="flex-1 overflow-y-auto">
+                  {selectedFile ? (
+                    (() => {
+                      const file = prFiles.find((f) => f.filename === selectedFile);
+                      const fileComments = prComments.filter((c) => c.path === selectedFile);
+                      return file ? (
+                        <DiffView patch={file.patch} filename={file.filename} comments={fileComments} />
+                      ) : null;
+                    })()
+                  ) : (
+                    <div className="text-gray-500 text-center mt-12">Select a file to view its diff</div>
+                  )}
+                </div>
+              </>
+            )}
           </>
         ) : (
           <div className="flex-1 flex items-center justify-center text-gray-500">
