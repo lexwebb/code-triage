@@ -66,6 +66,15 @@ export function getRepos(): RepoInfo[] {
   return currentRepos;
 }
 
+function readBody(req: IncomingMessage): Promise<string> {
+  return new Promise((resolve, reject) => {
+    let data = "";
+    req.on("data", (chunk: Buffer) => { data += chunk; });
+    req.on("end", () => resolve(data));
+    req.on("error", reject);
+  });
+}
+
 export function startServer(port: number, repos: RepoInfo[]): void {
   currentRepos = repos;
   registerRoutes();
@@ -80,7 +89,7 @@ export function startServer(port: number, repos: RepoInfo[]): void {
     if (req.method === "OPTIONS") {
       res.writeHead(204, {
         "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "GET, OPTIONS",
+        "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
         "Access-Control-Allow-Headers": "Content-Type",
       });
       res.end();
@@ -97,6 +106,10 @@ export function startServer(port: number, repos: RepoInfo[]): void {
         params[name] = decodeURIComponent(match[i + 1]);
       });
       try {
+        if (req.method === "POST") {
+          const bodyStr = await readBody(req);
+          (req as any).__body = bodyStr ? JSON.parse(bodyStr) : {};
+        }
         await route.handler(req, res, params, query);
       } catch (err) {
         json(res, { error: (err as Error).message }, 500);
@@ -121,6 +134,10 @@ export function startServer(port: number, repos: RepoInfo[]): void {
   server.listen(port, () => {
     console.log(`  WebUI: http://localhost:${port}\n`);
   });
+}
+
+export function getBody<T>(req: IncomingMessage): T {
+  return (req as any).__body as T;
 }
 
 export { addRoute, json };

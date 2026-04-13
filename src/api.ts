@@ -1,6 +1,7 @@
 import { execFileSync } from "child_process";
-import { addRoute, json, getRepos } from "./server.js";
-import { loadState } from "./state.js";
+import { addRoute, json, getRepos, getBody } from "./server.js";
+import { loadState, markComment, saveState } from "./state.js";
+import { postReply, resolveThread } from "./actioner.js";
 
 function gh<T>(endpoint: string): T {
   const result = execFileSync("gh", ["api", endpoint, "--paginate"], {
@@ -232,18 +233,26 @@ export function registerRoutes(): void {
     // Fetch resolved thread status via GraphQL
     const resolvedIds = getResolvedCommentIds(repo, prNumber);
 
-    json(res, comments.map((c) => ({
-      id: c.id,
-      author: c.user.login,
-      authorAvatar: c.user.avatar_url,
-      path: c.path,
-      line: c.line || c.original_line || 0,
-      diffHunk: c.diff_hunk,
-      body: c.body,
-      createdAt: c.created_at,
-      inReplyToId: c.in_reply_to_id ?? null,
-      isResolved: resolvedIds.has(c.id),
-    })));
+    const state = loadState();
+
+    json(res, comments.map((c) => {
+      const stateKey = `${repo}:${c.id}`;
+      const record = state.comments[stateKey];
+      return {
+        id: c.id,
+        author: c.user.login,
+        authorAvatar: c.user.avatar_url,
+        path: c.path,
+        line: c.line || c.original_line || 0,
+        diffHunk: c.diff_hunk,
+        body: c.body,
+        createdAt: c.created_at,
+        inReplyToId: c.in_reply_to_id ?? null,
+        isResolved: resolvedIds.has(c.id),
+        evaluation: record?.evaluation ?? null,
+        crStatus: record?.status ?? null,
+      };
+    }));
   });
 
   // GET /api/pulls/:number/files/*path?repo=owner/repo (full file content)
@@ -269,5 +278,46 @@ export function registerRoutes(): void {
   // GET /api/state
   addRoute("GET", "/api/state", (_req, res) => {
     json(res, loadState());
+  });
+
+  // POST /api/actions/reply
+  addRoute("POST", "/api/actions/reply", async (req, res) => {
+    const body = getBody<{ repo: string; commentId: number; prNumber: number }>(req);
+    const state = loadState();
+    const key = `${body.repo}:${body.commentId}`;
+    const record = state.comments[key];
+
+    if (!record?.evaluation?.reply) {
+      json(res, { error: "No reply text in evaluation" }, 400);
+      return;
+    }
+
+    await postReply(body.repo, body.prNumber, body.commentId, record.evaluation.reply);
+    await resolveThread(body.repo, body.commentId, body.prNumber, undefined);
+    markComment(state, body.commentId, "replied", body.prNumber, body.repo);
+    saveState(state);
+    json(res, { success: true, status: "replied" });
+  });
+
+  // POST /api/actions/resolve
+  addRoute("POST", "/api/actions/resolve", async (req, res) => {
+    const body = getBody<{ repo: string; commentId: number; prNumber: number }>(req);
+    const state = loadState();
+    const key = `${body.repo}:${body.commentId}`;
+    const record = state.comments[key];
+
+    await resolveThread(body.repo, body.commentId, body.prNumber, record?.evaluation?.reply);
+    markComment(state, body.commentId, "replied", body.prNumber, body.repo);
+    saveState(state);
+    json(res, { success: true, status: "replied" });
+  });
+
+  // POST /api/actions/dismiss
+  addRoute("POST", "/api/actions/dismiss", async (req, res) => {
+    const body = getBody<{ repo: string; commentId: number; prNumber: number }>(req);
+    const state = loadState();
+    markComment(state, body.commentId, "dismissed", body.prNumber, body.repo);
+    saveState(state);
+    json(res, { success: true, status: "dismissed" });
   });
 }
