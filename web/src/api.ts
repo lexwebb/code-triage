@@ -75,7 +75,9 @@ export const api = {
     postJSON<{ success: boolean }>("/api/actions/fix-apply", { repo, commentId, prNumber, branch }),
   fixDiscard: (branch: string, commentId?: number) =>
     postJSON<{ success: boolean }>("/api/actions/fix-discard", { branch, commentId }),
-  submitReview: (repo: string, prNumber: number, event: "APPROVE" | "REQUEST_CHANGES", body?: string) =>
+  submitReview: (repo: string, prNumber: number, event: "APPROVE" | "REQUEST_CHANGES" | "COMMENT", body?: string) =>
     postJSON<{ success: boolean }>("/api/actions/review", { repo, prNumber, event, body }),
+  createComment: (repo: string, prNumber: number, commitId: string, path: string, line: number, side: "LEFT" | "RIGHT", body: string) =>
+    postJSON<{ success: boolean }>("/api/actions/comment", { repo, prNumber, commitId, path, line, side, body }),
   getVersion: () => fetchJSON<{ localSha: string; remoteSha: string; behind: number }>("/api/version"),
 };

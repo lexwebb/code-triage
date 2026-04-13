@@ -1,13 +1,18 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import hljs from "highlight.js";
 import "highlight.js/styles/github-dark.min.css";
 import type { ReviewComment } from "../types";
+import { api } from "../api";
 import Comment from "./Comment";
 
 interface DiffViewProps {
   patch: string;
   filename: string;
   comments: ReviewComment[];
+  repo: string;
+  prNumber: number;
+  commitId: string;
+  onCommentCreated?: () => void;
 }
 
 interface DiffLine {
@@ -59,10 +64,61 @@ function getLanguage(filename: string): string | undefined {
   return ext ? map[ext] : undefined;
 }
 
-export default function DiffView({ patch, filename, comments }: DiffViewProps) {
+function InlineCommentBox({ onSubmit, onCancel, submitting }: {
+  onSubmit: (body: string) => void;
+  onCancel: () => void;
+  submitting: boolean;
+}) {
+  const [text, setText] = useState("");
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  useEffect(() => {
+    textareaRef.current?.focus();
+  }, []);
+
+  return (
+    <div className="my-2 ml-8 border border-blue-500/30 rounded-lg bg-gray-900 overflow-hidden">
+      <textarea
+        ref={textareaRef}
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        placeholder="Leave a comment..."
+        className="w-full bg-transparent text-xs text-gray-300 p-3 resize-none focus:outline-none min-h-[80px]"
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && text.trim()) {
+            onSubmit(text.trim());
+          }
+          if (e.key === "Escape") onCancel();
+        }}
+      />
+      <div className="flex items-center justify-between px-3 py-2 border-t border-gray-800 bg-gray-800/30">
+        <span className="text-xs text-gray-600">Cmd+Enter to submit, Esc to cancel</span>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={onCancel}
+            className="text-xs px-3 py-1 text-gray-400 hover:text-gray-300"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={() => text.trim() && onSubmit(text.trim())}
+            disabled={!text.trim() || submitting}
+            className="text-xs px-3 py-1 bg-blue-600 hover:bg-blue-500 disabled:bg-blue-800 disabled:text-gray-400 text-white rounded transition-colors"
+          >
+            {submitting ? "Posting..." : "Comment"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export default function DiffView({ patch, filename, comments, repo, prNumber, commitId, onCommentCreated }: DiffViewProps) {
   const codeRef = useRef<HTMLTableElement>(null);
   const diffLines = parsePatch(patch);
   const language = getLanguage(filename);
+  const [commentingLine, setCommentingLine] = useState<{ line: number; side: "LEFT" | "RIGHT" } | null>(null);
+  const [submitting, setSubmitting] = useState(false);
 
   const commentsByLine: Record<number, ReviewComment[]> = {};
   for (const c of comments) {
@@ -77,6 +133,20 @@ export default function DiffView({ patch, filename, comments }: DiffViewProps) {
       });
     }
   }, [patch, filename]);
+
+  async function handleSubmitComment(body: string) {
+    if (!commentingLine) return;
+    setSubmitting(true);
+    try {
+      await api.createComment(repo, prNumber, commitId, filename, commentingLine.line, commentingLine.side, body);
+      setCommentingLine(null);
+      onCommentCreated?.();
+    } catch (err) {
+      console.error("Failed to create comment:", err);
+    } finally {
+      setSubmitting(false);
+    }
+  }
 
   if (!patch) {
     return <div className="text-gray-500 text-sm p-4">No diff available for this file.</div>;
@@ -115,17 +185,30 @@ export default function DiffView({ patch, filename, comments }: DiffViewProps) {
                   : "text-gray-300";
 
             const prefix = line.type === "add" ? "+" : line.type === "remove" ? "-" : " ";
-
             const lineNum = line.newLine ?? line.oldLine ?? 0;
             const lineComments = lineNum ? commentsByLine[lineNum] || [] : [];
+            const side = line.type === "remove" ? "LEFT" as const : "RIGHT" as const;
+            const isCommenting = commentingLine?.line === lineNum && commentingLine?.side === side;
 
             return (
-              <tr key={i} className={bgClass}>
-                <td className="w-12 text-right pr-2 text-gray-600 select-none align-top">
+              <tr key={i} className={`${bgClass} group`}>
+                <td
+                  className="w-12 text-right pr-2 text-gray-600 select-none align-top cursor-pointer hover:text-blue-400 relative"
+                  onClick={() => line.oldLine ? setCommentingLine({ line: line.oldLine, side: "LEFT" }) : undefined}
+                >
                   {line.oldLine ?? ""}
+                  {line.oldLine && (
+                    <span className="absolute left-0 top-0 opacity-0 group-hover:opacity-100 text-blue-400 text-xs">+</span>
+                  )}
                 </td>
-                <td className="w-12 text-right pr-2 text-gray-600 select-none align-top">
+                <td
+                  className="w-12 text-right pr-2 text-gray-600 select-none align-top cursor-pointer hover:text-blue-400 relative"
+                  onClick={() => line.newLine ? setCommentingLine({ line: line.newLine, side: "RIGHT" }) : undefined}
+                >
                   {line.newLine ?? ""}
+                  {line.newLine && (
+                    <span className="absolute left-0 top-0 opacity-0 group-hover:opacity-100 text-blue-400 text-xs">+</span>
+                  )}
                 </td>
                 <td className={`pl-4 pr-4 whitespace-pre ${textClass}`}>
                   <span className="select-none text-gray-600 mr-2">{prefix}</span>
@@ -135,6 +218,13 @@ export default function DiffView({ patch, filename, comments }: DiffViewProps) {
                   {lineComments.map((comment) => (
                     <Comment key={comment.id} comment={comment} />
                   ))}
+                  {isCommenting && (
+                    <InlineCommentBox
+                      onSubmit={handleSubmitComment}
+                      onCancel={() => setCommentingLine(null)}
+                      submitting={submitting}
+                    />
+                  )}
                 </td>
               </tr>
             );

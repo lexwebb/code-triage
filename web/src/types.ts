@@ -34,6 +34,7 @@ export interface Reviewer {
 
 export interface PullRequestDetail extends PullRequest {
   body: string;
+  headSha: string;
   additions: number;
   deletions: number;
   changedFiles: number;

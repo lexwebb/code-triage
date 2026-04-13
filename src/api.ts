@@ -233,7 +233,7 @@ export function registerRoutes(): void {
       title: string;
       body: string;
       user: { login: string; avatar_url: string };
-      head: { ref: string };
+      head: { ref: string; sha: string };
       base: { ref: string };
       html_url: string;
       created_at: string;
@@ -276,6 +276,7 @@ export function registerRoutes(): void {
       author: pr.user.login,
       authorAvatar: pr.user.avatar_url,
       branch: pr.head.ref,
+      headSha: pr.head.sha,
       baseBranch: pr.base.ref,
       url: pr.html_url,
       createdAt: pr.created_at,
@@ -611,7 +612,7 @@ export function registerRoutes(): void {
 
   // POST /api/actions/review — submit a PR review (approve or request changes)
   addRoute("POST", "/api/actions/review", async (req, res) => {
-    const body = getBody<{ repo: string; prNumber: number; event: "APPROVE" | "REQUEST_CHANGES"; body?: string }>(req);
+    const body = getBody<{ repo: string; prNumber: number; event: "APPROVE" | "REQUEST_CHANGES" | "COMMENT"; body?: string }>(req);
     try {
       await ghPost(`/repos/${body.repo}/pulls/${body.prNumber}/reviews`, {
         event: body.event,
@@ -620,6 +621,31 @@ export function registerRoutes(): void {
       json(res, { success: true });
     } catch (err) {
       json(res, { error: `Review failed: ${(err as Error).message}` }, 500);
+    }
+  });
+
+  // POST /api/actions/comment — create a review comment on a specific line
+  addRoute("POST", "/api/actions/comment", async (req, res) => {
+    const body = getBody<{
+      repo: string;
+      prNumber: number;
+      commitId: string;
+      path: string;
+      line: number;
+      side: "LEFT" | "RIGHT";
+      body: string;
+    }>(req);
+    try {
+      await ghPost(`/repos/${body.repo}/pulls/${body.prNumber}/comments`, {
+        body: body.body,
+        commit_id: body.commitId,
+        path: body.path,
+        line: body.line,
+        side: body.side,
+      });
+      json(res, { success: true });
+    } catch (err) {
+      json(res, { error: `Comment failed: ${(err as Error).message}` }, 500);
     }
   });
 }

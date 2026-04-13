@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
 import type { PullRequestDetail, Reviewer } from "../types";
 import { api } from "../api";
 import { isPRMuted, mutePR, unmutePR } from "../useNotifications";
@@ -49,12 +49,21 @@ export default function PRDetail({ pr, currentUser, onReviewSubmitted }: PRDetai
   const [submitting, setSubmitting] = useState(false);
   const [reviewError, setReviewError] = useState<string | null>(null);
   const [muted, setMuted] = useState(() => isPRMuted(pr.repo, pr.number));
+  const [showRequestChanges, setShowRequestChanges] = useState(false);
+  const [requestBody, setRequestBody] = useState("");
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  async function handleReview(event: "APPROVE" | "REQUEST_CHANGES") {
+  useEffect(() => {
+    if (showRequestChanges) textareaRef.current?.focus();
+  }, [showRequestChanges]);
+
+  async function handleReview(event: "APPROVE" | "REQUEST_CHANGES" | "COMMENT", body?: string) {
     setSubmitting(true);
     setReviewError(null);
     try {
-      await api.submitReview(pr.repo, pr.number, event);
+      await api.submitReview(pr.repo, pr.number, event, body);
+      setShowRequestChanges(false);
+      setRequestBody("");
       onReviewSubmitted?.();
     } catch (err) {
       setReviewError((err as Error).message);
@@ -91,9 +100,12 @@ export default function PRDetail({ pr, currentUser, onReviewSubmitted }: PRDetai
                 {submitting ? "..." : "Approve"}
               </button>
               <button
-                onClick={() => handleReview("REQUEST_CHANGES")}
-                disabled={submitting}
-                className="text-xs px-3 py-1.5 bg-red-600/80 hover:bg-red-500/80 disabled:bg-red-800/50 disabled:text-gray-400 text-white rounded transition-colors"
+                onClick={() => setShowRequestChanges(!showRequestChanges)}
+                className={`text-xs px-3 py-1.5 rounded transition-colors ${
+                  showRequestChanges
+                    ? "bg-red-500 text-white"
+                    : "bg-red-600/80 hover:bg-red-500/80 text-white"
+                }`}
               >
                 Request Changes
               </button>
@@ -121,6 +133,43 @@ export default function PRDetail({ pr, currentUser, onReviewSubmitted }: PRDetai
           </a>
         </div>
       </div>
+
+      {/* Request changes form */}
+      {showRequestChanges && (
+        <div className="mt-3 border border-red-500/30 rounded-lg overflow-hidden">
+          <textarea
+            ref={textareaRef}
+            value={requestBody}
+            onChange={(e) => setRequestBody(e.target.value)}
+            placeholder="Describe the changes you're requesting..."
+            className="w-full bg-gray-800/50 text-sm text-gray-300 p-3 resize-none focus:outline-none min-h-[80px]"
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+                handleReview("REQUEST_CHANGES", requestBody);
+              }
+              if (e.key === "Escape") setShowRequestChanges(false);
+            }}
+          />
+          <div className="flex items-center justify-between px-3 py-2 border-t border-gray-800 bg-gray-800/30">
+            <span className="text-xs text-gray-600">Cmd+Enter to submit</span>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setShowRequestChanges(false)}
+                className="text-xs px-3 py-1 text-gray-400 hover:text-gray-300"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => handleReview("REQUEST_CHANGES", requestBody)}
+                disabled={submitting}
+                className="text-xs px-3 py-1 bg-red-600 hover:bg-red-500 disabled:bg-red-800 disabled:text-gray-400 text-white rounded transition-colors"
+              >
+                {submitting ? "Submitting..." : "Submit Review"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Reviewers */}
       {pr.reviewers && pr.reviewers.length > 0 && (

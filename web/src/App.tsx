@@ -531,7 +531,15 @@ export default function App() {
                         const file = prFiles.find((f) => f.filename === selectedFile);
                         const fileComments = prComments.filter((c) => c.path === selectedFile);
                         return file ? (
-                          <DiffView patch={file.patch} filename={file.filename} comments={fileComments} />
+                          <DiffView
+                            patch={file.patch}
+                            filename={file.filename}
+                            comments={fileComments}
+                            repo={selectedPR!.repo}
+                            prNumber={selectedPR!.number}
+                            commitId={prDetail.headSha}
+                            onCommentCreated={reloadComments}
+                          />
                         ) : null;
                       })()
                     ) : (
