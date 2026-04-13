@@ -30,9 +30,9 @@ jobs:
         run: yarn build:all
 
       - name: Set version from release tag
-        # Strips leading 'v' so 'v1.2.3' becomes '1.2.3'
-        # --allow-same-version handles the case where the release script already bumped package.json
-        run: npm version --no-git-tag-version --allow-same-version "${GITHUB_REF_NAME#v}"
+        # Strips leading 'v' so 'v1.2.3' becomes '1.2.3'. Uses pkg set (not npm version) so the step
+        # succeeds when release.mjs already committed that version on the tagged commit.
+        run: npm pkg set "version=${GITHUB_REF_NAME#v}"
 
       - name: Remove private flag for publishing
         # Yarn workspaces require private:true, but npm publish requires it absent
