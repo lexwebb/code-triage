@@ -12,7 +12,7 @@ function prKey(pr: PullRequest): string {
 }
 
 function StatusIcon({ pr }: { pr: PullRequest }) {
-  const mergeReady = pr.checksStatus === "success" && pr.openComments === 0;
+  const mergeReady = pr.checksStatus === "success" && pr.openComments === 0 && pr.hasHumanApproval;
   const failed = pr.checksStatus === "failure";
 
   if (mergeReady) {
@@ -48,7 +48,7 @@ export default function PRList({ pulls, selectedPR, onSelectPR, showRepo }: PRLi
       {pulls.map((pr) => {
         const key = prKey(pr);
         const isSelected = selectedPR?.number === pr.number && selectedPR?.repo === pr.repo;
-        const mergeReady = pr.checksStatus === "success" && pr.openComments === 0;
+        const mergeReady = pr.checksStatus === "success" && pr.openComments === 0 && pr.hasHumanApproval;
         const failed = pr.checksStatus === "failure";
 
         let bgClass = "";

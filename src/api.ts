@@ -104,6 +104,17 @@ async function getOpenCommentCount(repoPath: string, prNumber: number): Promise<
   }
 }
 
+async function hasHumanApproval(repoPath: string, prNumber: number): Promise<boolean> {
+  try {
+    interface GhReview { user: { login: string; type: string }; state: string; }
+    const reviews = await ghAsync<GhReview[]>(`/repos/${repoPath}/pulls/${prNumber}/reviews`);
+    // A human approval is one where user.type is "User" (not "Bot") and state is APPROVED
+    return reviews.some((r) => r.state === "APPROVED" && !r.user.login.includes("[bot]"));
+  } catch {
+    return false;
+  }
+}
+
 export function registerRoutes(): void {
 
   // GET /api/user
@@ -133,9 +144,10 @@ export function registerRoutes(): void {
         const myPulls = pulls.filter((pr) => pr.user.login === username);
 
         for (const pr of myPulls) {
-          const [checksStatus, openComments] = await Promise.all([
+          const [checksStatus, openComments, approved] = await Promise.all([
             getPrStatus(repoInfo.repo, pr.head.sha),
             getOpenCommentCount(repoInfo.repo, pr.number),
+            hasHumanApproval(repoInfo.repo, pr.number),
           ]);
           allPulls.push({
             number: pr.number,
@@ -151,6 +163,7 @@ export function registerRoutes(): void {
             repo: repoInfo.repo,
             checksStatus,
             openComments,
+            hasHumanApproval: approved,
           });
         }
       } catch {
@@ -180,9 +193,10 @@ export function registerRoutes(): void {
         );
 
         for (const pr of needsReview) {
-          const [checksStatus, openComments] = await Promise.all([
+          const [checksStatus, openComments, approved] = await Promise.all([
             getPrStatus(repoInfo.repo, pr.head.sha),
             getOpenCommentCount(repoInfo.repo, pr.number),
+            hasHumanApproval(repoInfo.repo, pr.number),
           ]);
           reviewPulls.push({
             number: pr.number,
@@ -198,6 +212,7 @@ export function registerRoutes(): void {
             repo: repoInfo.repo,
             checksStatus,
             openComments,
+            hasHumanApproval: approved,
           });
         }
       } catch {

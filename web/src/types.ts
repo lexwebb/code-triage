@@ -23,6 +23,7 @@ export interface PullRequest {
   repo: string;
   checksStatus: "success" | "failure" | "pending";
   openComments: number;
+  hasHumanApproval: boolean;
 }
 
 export interface Reviewer {
