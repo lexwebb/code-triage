@@ -8,6 +8,7 @@ import PRDetail from "./components/PRDetail";
 import FileList from "./components/FileList";
 import DiffView from "./components/DiffView";
 import CommentThreads from "./components/CommentThreads";
+import PROverview from "./components/PROverview";
 import { useNotifications, requestNotificationPermission, isPRMuted } from "./useNotifications";
 import FixJobsBanner from "./components/FixJobsBanner";
 import type { FixJobStatus } from "./api";
@@ -80,7 +81,7 @@ export default function App() {
   const [loadingPR, setLoadingPR] = useState(false);
   const [loading, setLoading] = useState(() => !loadCache(CACHE_KEY_PULLS));
   const [error, setError] = useState<string | null>(null);
-  const [filesExpanded, setFilesExpanded] = useState(false);
+  const [activeTab, setActiveTab] = useState<"overview" | "threads" | "files">("threads");
   const [fixJobs, setFixJobs] = useState<FixJobStatus[]>([]);
   const [refreshing, setRefreshing] = useState(false);
   const [countdown, setCountdown] = useState(0);
@@ -477,27 +478,46 @@ export default function App() {
                   setPrDetail(detail);
                 } catch {}
               }} />
-              <CommentThreads
-                comments={prComments}
-                onSelectFile={(f) => { setFilesExpanded(true); setSelectedFile(f); }}
-                repo={selectedPR!.repo}
-                prNumber={selectedPR!.number}
-                branch={prDetail.branch}
-                fixJobs={fixJobs}
-                onCommentAction={reloadComments}
-                onFixStarted={(job) => setFixJobs((prev) => [...prev.filter((j) => j.commentId !== job.commentId), job])}
-              />
-              {/* Collapsible files section */}
-              <div className="border-t border-gray-800 shrink-0">
-                <button
-                  onClick={() => setFilesExpanded(!filesExpanded)}
-                  className="w-full px-6 py-2 flex items-center justify-between text-xs text-gray-500 uppercase tracking-wide hover:bg-gray-800/30"
-                >
-                  <span>Files Changed ({prFiles.length})</span>
-                  <span className="text-gray-600">{filesExpanded ? "▼" : "▶"}</span>
-                </button>
+              {/* Tab bar */}
+              <div className="flex border-b border-gray-800 shrink-0">
+                {([
+                  { id: "overview" as const, label: "Overview" },
+                  { id: "threads" as const, label: `Review (${prComments.filter((c) => c.inReplyToId === null).length})` },
+                  { id: "files" as const, label: `Files (${prFiles.length})` },
+                ]).map((tab) => (
+                  <button
+                    key={tab.id}
+                    onClick={() => setActiveTab(tab.id)}
+                    className={`px-5 py-2 text-sm transition-colors ${
+                      activeTab === tab.id
+                        ? "text-white border-b-2 border-blue-500 -mb-px"
+                        : "text-gray-500 hover:text-gray-300"
+                    }`}
+                  >
+                    {tab.label}
+                  </button>
+                ))}
               </div>
-              {filesExpanded && (
+
+              {/* Tab content */}
+              {activeTab === "overview" && (
+                <PROverview pr={prDetail} />
+              )}
+
+              {activeTab === "threads" && (
+                <CommentThreads
+                  comments={prComments}
+                  onSelectFile={(f) => { setActiveTab("files"); setSelectedFile(f); }}
+                  repo={selectedPR!.repo}
+                  prNumber={selectedPR!.number}
+                  branch={prDetail.branch}
+                  fixJobs={fixJobs}
+                  onCommentAction={reloadComments}
+                  onFixStarted={(job) => setFixJobs((prev) => [...prev.filter((j) => j.commentId !== job.commentId), job])}
+                />
+              )}
+
+              {activeTab === "files" && (
                 <>
                   <FileList
                     files={prFiles}
