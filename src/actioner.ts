@@ -235,7 +235,7 @@ ${comment.diffHunk}
 
 Make the changes directly. Do not explain, just fix the code.`;
 
-  const output = await spawnTracked("claude", ["-p", fixPrompt], {
+  const output = await spawnTracked("claude", ["-p", fixPrompt, "--dangerously-skip-permissions"], {
     cwd: worktreePath,
     stdio: ["pipe", "pipe", "pipe"],
     stderrToConsole: true,
