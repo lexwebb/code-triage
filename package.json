@@ -29,7 +29,7 @@
     "lint": "eslint src web/src",
     "lint:fix": "eslint src web/src --fix",
     "prepare": "git config core.hooksPath .githooks",
-    "prepublishOnly": "yarn build:all",
+    "prepublishOnly": "tsc && npm run build --prefix web",
     "release": "node scripts/release.mjs",
     "release:patch": "node scripts/release.mjs patch",
     "release:minor": "node scripts/release.mjs minor",
