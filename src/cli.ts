@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { parseArgs } from "util";
+import { execSync } from "child_process";
 import { loadState, saveState, isNewComment, getCommentsByStatus } from "./state.js";
 import { fetchNewComments } from "./poller.js";
 import { notifyNewComments } from "./notifier.js";
@@ -12,20 +13,24 @@ import {
   clearCountdown,
   setStatus,
   setProcessing,
+  prompt,
   cleanup as cleanupTerminal,
 } from "./terminal.js";
 import { startServer, updateRepos, updatePollState } from "./server.js";
 import { discoverRepos, type RepoInfo } from "./discovery.js";
+import { loadConfig, saveConfig, configExists, type Config } from "./config.js";
 
 const { values: flags } = parseArgs({
   options: {
-    interval: { type: "string", default: "1" },
+    interval: { type: "string" },
     repo: { type: "string" },
-    root: { type: "string", default: "~/src" },
+    root: { type: "string" },
     cleanup: { type: "boolean", default: false },
     "dry-run": { type: "boolean", default: false },
     status: { type: "boolean", default: false },
-    port: { type: "string", default: "3100" },
+    port: { type: "string" },
+    config: { type: "boolean", default: false },
+    open: { type: "boolean", default: false },
   },
 });
 
@@ -56,7 +61,36 @@ if (flags.status) {
   process.exit(0);
 }
 
-const intervalMs = parseInt(flags.interval!, 10) * 60 * 1000;
+// First-run setup or --config flag
+async function runSetup(existing: Config): Promise<Config> {
+  console.log("\n  Code Triage Setup\n");
+
+  const rootAnswer = await prompt(`  Repos directory [${existing.root}]: `);
+  const root = rootAnswer.trim() || existing.root;
+
+  const portAnswer = await prompt(`  Web UI port [${existing.port}]: `);
+  const port = portAnswer.trim() ? parseInt(portAnswer.trim(), 10) : existing.port;
+
+  const intervalAnswer = await prompt(`  Poll interval in minutes [${existing.interval}]: `);
+  const interval = intervalAnswer.trim() ? parseInt(intervalAnswer.trim(), 10) : existing.interval;
+
+  const config: Config = { root, port, interval };
+  saveConfig(config);
+  console.log("\n  Config saved to ~/.code-triage/config.json\n");
+  return config;
+}
+
+let config = loadConfig();
+
+// Run setup if --config flag or first run
+if (flags.config || !configExists()) {
+  config = await runSetup(config);
+}
+
+// CLI flags override config
+const root = flags.root || config.root;
+const port = flags.port ? parseInt(flags.port, 10) : config.port;
+const intervalMs = (flags.interval ? parseInt(flags.interval, 10) : config.interval) * 60 * 1000;
 const dryRun = flags["dry-run"]!;
 
 // Resolve repos: single repo mode or multi-repo discovery
@@ -64,12 +98,27 @@ let repos: RepoInfo[];
 if (flags.repo) {
   repos = [{ repo: flags.repo, localPath: "" }];
 } else {
-  console.log(`Discovering repos in ${flags.root}...`);
-  repos = discoverRepos(flags.root!);
+  console.log(`Discovering repos in ${root}...`);
+  repos = discoverRepos(root);
   if (repos.length === 0) {
-    console.error("No GitHub repos found. Use --root to specify a different directory, or --repo for a single repo.");
+    console.error("No GitHub repos found. Use --root to specify a different directory, or --config to reconfigure.");
     process.exit(1);
   }
+}
+
+function openBrowser(): void {
+  const url = `http://localhost:${port}`;
+  try {
+    execSync(`open "${url}"`, { stdio: "pipe" });
+    console.log(`\n  Opened ${url} in browser.\n`);
+  } catch {
+    console.log(`\n  Open ${url} in your browser.\n`);
+  }
+}
+
+// --open flag: just open browser and continue
+if (flags.open) {
+  openBrowser();
 }
 
 console.log(`code-triage started`);
@@ -77,10 +126,11 @@ console.log(`  Repos: ${repos.length}`);
 for (const r of repos) {
   console.log(`    ${r.repo}`);
 }
-console.log(`  Interval: ${flags.interval}m`);
-console.log(`  Dry run: ${dryRun}\n`);
+console.log(`  Interval: ${intervalMs / 60000}m`);
+console.log(`  Dry run: ${dryRun}`);
+console.log(`  WebUI: http://localhost:${port}\n`);
 
-startServer(parseInt(flags.port!, 10), repos);
+startServer(port, repos);
 
 let running = false;
 let shuttingDown = false;
@@ -180,7 +230,7 @@ function rediscover(): void {
     return;
   }
   console.log("\n  Re-discovering repos...");
-  repos = discoverRepos(flags.root!);
+  repos = discoverRepos(root);
   console.log(`  Found ${repos.length} repo(s).`);
   for (const r of repos) {
     console.log(`    ${r.repo}`);
@@ -221,6 +271,7 @@ process.on("SIGTERM", shutdown);
 // Register hotkeys
 registerHotkeys([
   { key: "r", label: "Refresh", handler: () => { poll(); } },
+  { key: "o", label: "Open UI", handler: openBrowser },
   { key: "d", label: "Discover", handler: rediscover },
   { key: "c", label: "Clear state", handler: clearState },
   { key: "s", label: "Status", handler: () => { printStatus(); } },
