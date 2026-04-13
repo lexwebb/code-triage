@@ -99,22 +99,17 @@ function StatusBar() {
   return (
     <Box flexDirection="column" width={cols}>
       <Box>
-        <Text wrap="truncate">
+        <Text wrap="wrap">
           {"  "}{statusMessage}
           {countdown ? <Text dimColor>{"  "}Next poll in {countdown}</Text> : null}
         </Text>
       </Box>
-      <Box>
-        <Text wrap="truncate">
-          {"  "}
-          {hotkeys.map((h, i) => (
-            <React.Fragment key={h.key}>
-              {i > 0 ? "   " : ""}
-              <Text bold>[{h.key}]</Text>
-              {" "}{h.label}
-            </React.Fragment>
-          ))}
-        </Text>
+      <Box flexWrap="wrap" paddingLeft={2}>
+        {hotkeys.map((h) => (
+          <Box key={h.key} marginRight={2}>
+            <Text><Text bold>[{h.key}]</Text> {h.label}</Text>
+          </Box>
+        ))}
       </Box>
     </Box>
   );
