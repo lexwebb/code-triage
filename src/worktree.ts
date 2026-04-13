@@ -21,8 +21,8 @@ export function createWorktree(branch: string, repoDir?: string): string {
   const worktreePath = getWorktreePath(branch, repoDir);
 
   if (existsSync(worktreePath)) {
-    console.log(`  Worktree already exists: ${worktreePath}`);
-    return worktreePath;
+    console.log(`  Cleaning up stale worktree: ${worktreePath}`);
+    removeWorktree(branch);
   }
 
   console.log(`  Creating worktree for branch: ${branch}`);

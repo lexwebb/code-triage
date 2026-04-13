@@ -1,7 +1,7 @@
 import { addRoute, json, getRepos, getBody, getPollState } from "./server.js";
 import { loadState, markComment, saveState } from "./state.js";
 import { postReply, resolveThread, applyFixWithClaude } from "./actioner.js";
-import { createWorktree, getDiffInWorktree, removeWorktree, commitAndPushWorktree } from "./worktree.js";
+import { createWorktree, getWorktreePath, getDiffInWorktree, removeWorktree, commitAndPushWorktree } from "./worktree.js";
 import { ghAsync, ghGraphQL, ghPost } from "./exec.js";
 
 async function getResolvedCommentIds(repoPath: string, prNumber: number): Promise<Set<number>> {
@@ -453,7 +453,7 @@ export function registerRoutes(): void {
     }
 
     try {
-      const worktreePath = createWorktree(body.branch, repoInfo.localPath);
+      const worktreePath = getWorktreePath(body.branch, repoInfo.localPath);
       const commitMsg = `fix: apply CodeRabbit suggestion for PR #${body.prNumber}`;
       commitAndPushWorktree(worktreePath, commitMsg);
       removeWorktree(body.branch);
