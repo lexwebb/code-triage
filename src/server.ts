@@ -1,4 +1,5 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "http";
+import { registerRoutes } from "./api.js";
 import { readFileSync, existsSync } from "fs";
 import { join, extname } from "path";
 import { fileURLToPath } from "url";
@@ -54,7 +55,8 @@ function serveStatic(res: ServerResponse, filePath: string): boolean {
   return true;
 }
 
-export function startServer(port: number): void {
+export function startServer(port: number, repo: string): void {
+  registerRoutes(repo);
   const webDist = join(__dirname, "..", "web", "dist");
 
   const server = createServer(async (req, res) => {

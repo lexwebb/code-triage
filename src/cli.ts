@@ -63,7 +63,7 @@ console.log(`  Repo: ${repoPath}`);
 console.log(`  Interval: ${flags.interval}m`);
 console.log(`  Dry run: ${dryRun}\n`);
 
-startServer(parseInt(flags.port!, 10));
+startServer(parseInt(flags.port!, 10), repoPath);
 
 let running = false;
 let shuttingDown = false;
