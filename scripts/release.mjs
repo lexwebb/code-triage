@@ -49,6 +49,8 @@ function spawnAsync(cmd, args, opts = {}) {
     child.stderr?.on("data", (d) => { err += d; process.stderr.write(d); });
     child.on("close", (code) => code === 0 ? resolve(out) : reject(new Error(`${cmd} exited ${code}: ${err.slice(0, 300)}`)));
     child.on("error", reject);
+    // Close stdin immediately so claude doesn't wait for input
+    child.stdin?.end();
   });
 }
 
