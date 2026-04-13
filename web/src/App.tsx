@@ -1,8 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo } from "react";
 import { api } from "./api";
 import type { PullRequest, PullRequestDetail, PullFile, ReviewComment, RepoInfo } from "./types";
 import { parseRoute, pushRoute, type RouteState } from "./router";
-import RepoSelector from "./components/RepoSelector";
+import RepoFilter from "./components/RepoSelector";
 import PRList from "./components/PRList";
 import PRDetail from "./components/PRDetail";
 import FileList from "./components/FileList";
@@ -19,8 +19,8 @@ export default function App() {
   // Initialize state from URL
   const initial = parseRoute();
 
-  const [repos, setRepos] = useState<RepoInfo[]>([]);
-  const [selectedRepo, setSelectedRepo] = useState<string | null>(initial.repo);
+  const [_repos, setRepos] = useState<RepoInfo[]>([]);
+  const [repoFilter, setRepoFilter] = useState("");
   const [pulls, setPulls] = useState<PullRequest[]>([]);
   const [reviewPulls, setReviewPulls] = useState<PullRequest[]>([]);
   const [selectedPR, setSelectedPR] = useState<SelectedPR | null>(
@@ -36,21 +36,33 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [filesExpanded, setFilesExpanded] = useState(false);
 
+  // Client-side filtered PR lists
+  const filteredPulls = useMemo(() => {
+    if (!repoFilter) return pulls;
+    const lower = repoFilter.toLowerCase();
+    return pulls.filter((pr) => pr.repo.toLowerCase().includes(lower) || pr.title.toLowerCase().includes(lower));
+  }, [pulls, repoFilter]);
+
+  const filteredReviewPulls = useMemo(() => {
+    if (!repoFilter) return reviewPulls;
+    const lower = repoFilter.toLowerCase();
+    return reviewPulls.filter((pr) => pr.repo.toLowerCase().includes(lower) || pr.title.toLowerCase().includes(lower));
+  }, [reviewPulls, repoFilter]);
+
   // Sync URL when state changes
   useEffect(() => {
     const state: RouteState = {
-      repo: selectedPR?.repo ?? selectedRepo,
+      repo: selectedPR?.repo ?? null,
       prNumber: selectedPR?.number ?? null,
       file: selectedFile,
     };
     pushRoute(state);
-  }, [selectedRepo, selectedPR?.number, selectedPR?.repo, selectedFile]);
+  }, [selectedPR?.number, selectedPR?.repo, selectedFile]);
 
   // Handle browser back/forward
   useEffect(() => {
     function onPopState() {
       const route = parseRoute();
-      setSelectedRepo(route.repo);
       if (route.repo && route.prNumber) {
         setSelectedPR({ repo: route.repo, number: route.prNumber });
       } else {
@@ -70,7 +82,7 @@ export default function App() {
     api.getRepos().then(setRepos).catch(() => {});
   }, []);
 
-  // Load pulls when selectedRepo changes
+  // Always load ALL pulls on mount (no repo filter on API)
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
@@ -78,8 +90,8 @@ export default function App() {
     async function load() {
       try {
         const [pullData, reviewData] = await Promise.all([
-          api.getPulls(selectedRepo ?? undefined),
-          api.getReviewRequested(selectedRepo ?? undefined),
+          api.getPulls(),
+          api.getReviewRequested(),
         ]);
         if (cancelled) return;
         setPulls(pullData);
@@ -110,7 +122,7 @@ export default function App() {
     }
     load();
     return () => { cancelled = true; };
-  }, [selectedRepo]);
+  }, []);
 
   // Load PR detail when selectedPR changes
   useEffect(() => {
@@ -129,7 +141,6 @@ export default function App() {
         setPrDetail(detail);
         setPrFiles(files);
         setPrComments(comments);
-        // Only auto-select file if URL didn't specify one
         if (!selectedFile) {
           const fileWithComments = files.find((f) =>
             comments.some((c) => c.path === f.filename)
@@ -162,16 +173,7 @@ export default function App() {
   }
 
   // Web notifications for new review requests and pending comments
-  useNotifications(pulls, reviewPulls, handleSelectPR);
-
-  function handleSelectRepo(repo: string | null) {
-    setSelectedRepo(repo);
-    setSelectedPR(null);
-    setPrDetail(null);
-    setPrFiles([]);
-    setPrComments([]);
-    setSelectedFile(null);
-  }
+  useNotifications(pulls, reviewPulls, handleSelectPR, reloadComments);
 
   if (loading) {
     return (
@@ -196,33 +198,32 @@ export default function App() {
         <div className="px-4 py-3 border-b border-gray-800">
           <h1 className="text-sm font-semibold text-white">cr-watch</h1>
         </div>
-        <RepoSelector
-          repos={repos}
-          selectedRepo={selectedRepo}
-          onSelectRepo={handleSelectRepo}
+        <RepoFilter
+          filter={repoFilter}
+          onFilterChange={setRepoFilter}
         />
         <div className="overflow-y-auto flex-1">
           <div className="px-4 py-1.5 text-xs text-gray-500 uppercase tracking-wide border-b border-gray-800">
             My Pull Requests
           </div>
           <PRList
-            pulls={pulls}
+            pulls={filteredPulls}
             selectedPR={selectedPR}
             onSelectPR={handleSelectPR}
             commentCounts={commentCounts}
-            showRepo={!selectedRepo}
+            showRepo
           />
-          {reviewPulls.length > 0 && (
+          {filteredReviewPulls.length > 0 && (
             <>
               <div className="px-4 py-1.5 text-xs text-gray-500 uppercase tracking-wide border-y border-gray-800 bg-gray-900/30">
-                Needs My Review ({reviewPulls.length})
+                Needs My Review ({filteredReviewPulls.length})
               </div>
               <PRList
-                pulls={reviewPulls}
+                pulls={filteredReviewPulls}
                 selectedPR={selectedPR}
                 onSelectPR={handleSelectPR}
                 commentCounts={{}}
-                showRepo={!selectedRepo}
+                showRepo
               />
             </>
           )}

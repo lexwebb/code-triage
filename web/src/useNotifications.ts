@@ -26,6 +26,7 @@ function notify(title: string, body: string, onClick?: () => void) {
 interface NotificationState {
   reviewPRKeys: Set<string>;
   pendingCommentKeys: Set<string>;
+  initialized: boolean;
 }
 
 function prKey(pr: PullRequest): string {
@@ -40,45 +41,33 @@ export function useNotifications(
   pulls: PullRequest[],
   reviewPulls: PullRequest[],
   onSelectPR: (number: number, repo: string) => void,
+  onDataChanged: () => void,
 ) {
-  const prevState = useRef<NotificationState | null>(null);
+  const prevState = useRef<NotificationState>({
+    reviewPRKeys: new Set(),
+    pendingCommentKeys: new Set(),
+    initialized: false,
+  });
 
   // Request permission on mount
   useEffect(() => {
     requestPermission();
   }, []);
 
-  // Poll for changes
+  // Track review PRs — detect new ones
   useEffect(() => {
-    // Initialize previous state on first render (don't notify for existing items)
-    if (!prevState.current) {
-      prevState.current = {
-        reviewPRKeys: new Set(reviewPulls.map(prKey)),
-        pendingCommentKeys: new Set(),
-      };
-      // Build initial pending comment keys
-      (async () => {
-        const keys = new Set<string>();
-        for (const pr of pulls) {
-          try {
-            const comments = await api.getPullComments(pr.number, pr.repo);
-            for (const c of comments) {
-              if (c.crStatus === "pending" && c.evaluation) {
-                keys.add(commentKey(c, pr.repo, pr.number));
-              }
-            }
-          } catch { /* ignore */ }
-        }
-        prevState.current!.pendingCommentKeys = keys;
-      })();
+    const currentKeys = new Set(reviewPulls.map(prKey));
+
+    if (!prevState.current.initialized) {
+      prevState.current.reviewPRKeys = currentKeys;
       return;
     }
 
-    // Check for new review PRs
-    const currentReviewKeys = new Set(reviewPulls.map(prKey));
+    let hasNew = false;
     for (const pr of reviewPulls) {
       const key = prKey(pr);
       if (!prevState.current.reviewPRKeys.has(key)) {
+        hasNew = true;
         const repoShort = pr.repo.split("/")[1] ?? pr.repo;
         notify(
           `Review requested: ${repoShort}#${pr.number}`,
@@ -87,17 +76,41 @@ export function useNotifications(
         );
       }
     }
-    prevState.current.reviewPRKeys = currentReviewKeys;
+    prevState.current.reviewPRKeys = currentKeys;
+    if (hasNew) onDataChanged();
   }, [reviewPulls]);
 
-  // Poll for new pending comments on user's PRs
+  // Initialize pending comment baseline once pulls are loaded
+  useEffect(() => {
+    if (pulls.length === 0 || prevState.current.initialized) return;
+
+    (async () => {
+      const keys = new Set<string>();
+      for (const pr of pulls) {
+        try {
+          const comments = await api.getPullComments(pr.number, pr.repo);
+          for (const c of comments) {
+            if (c.crStatus === "pending" && c.evaluation) {
+              keys.add(commentKey(c, pr.repo, pr.number));
+            }
+          }
+        } catch { /* ignore */ }
+      }
+      prevState.current.pendingCommentKeys = keys;
+      prevState.current.initialized = true;
+    })();
+  }, [pulls]);
+
+  // Poll for new pending comments
   useEffect(() => {
     if (pulls.length === 0) return;
 
     const interval = setInterval(async () => {
-      if (!prevState.current) return;
+      if (!prevState.current.initialized) return;
 
+      let hasNew = false;
       const newKeys = new Set<string>();
+
       for (const pr of pulls) {
         try {
           const comments = await api.getPullComments(pr.number, pr.repo);
@@ -107,6 +120,7 @@ export function useNotifications(
               newKeys.add(key);
 
               if (!prevState.current.pendingCommentKeys.has(key)) {
+                hasNew = true;
                 const repoShort = pr.repo.split("/")[1] ?? pr.repo;
                 const actionLabel = c.evaluation.action === "fix" ? "Needs fix" :
                   c.evaluation.action === "reply" ? "Needs reply" : "Can resolve";
@@ -120,7 +134,9 @@ export function useNotifications(
           }
         } catch { /* ignore */ }
       }
+
       prevState.current.pendingCommentKeys = newKeys;
+      if (hasNew) onDataChanged();
     }, POLL_INTERVAL);
 
     return () => clearInterval(interval);
