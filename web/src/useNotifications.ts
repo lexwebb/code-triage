@@ -3,6 +3,8 @@ import { api } from "./api";
 import type { PullRequest, ReviewComment } from "./types";
 
 const POLL_INTERVAL = 60_000; // 1 minute
+const REVIEW_REMINDER_INTERVAL = 30 * 60_000; // 30 minutes
+const MUTED_KEY = "code-triage:muted-prs";
 
 export async function requestNotificationPermission(): Promise<void> {
   if ("Notification" in window && Notification.permission === "default") {
@@ -27,6 +29,30 @@ interface NotificationState {
   reviewPRKeys: Set<string>;
   pendingCommentKeys: Set<string>;
   initialized: boolean;
+  lastReviewReminder: number;
+}
+
+export function getMutedPRs(): Set<string> {
+  try {
+    const raw = localStorage.getItem(MUTED_KEY);
+    return raw ? new Set(JSON.parse(raw) as string[]) : new Set();
+  } catch { return new Set(); }
+}
+
+export function mutePR(repo: string, number: number): void {
+  const muted = getMutedPRs();
+  muted.add(`${repo}:${number}`);
+  localStorage.setItem(MUTED_KEY, JSON.stringify([...muted]));
+}
+
+export function unmutePR(repo: string, number: number): void {
+  const muted = getMutedPRs();
+  muted.delete(`${repo}:${number}`);
+  localStorage.setItem(MUTED_KEY, JSON.stringify([...muted]));
+}
+
+export function isPRMuted(repo: string, number: number): boolean {
+  return getMutedPRs().has(`${repo}:${number}`);
 }
 
 function prKey(pr: PullRequest): string {
@@ -47,6 +73,7 @@ export function useNotifications(
     reviewPRKeys: new Set(),
     pendingCommentKeys: new Set(),
     initialized: false,
+    lastReviewReminder: Date.now(),
   });
 
   // Request permission on mount
@@ -56,6 +83,7 @@ export function useNotifications(
 
   // Track review PRs — detect new ones
   useEffect(() => {
+    const muted = getMutedPRs();
     const currentKeys = new Set(reviewPulls.map(prKey));
 
     if (!prevState.current.initialized) {
@@ -66,7 +94,7 @@ export function useNotifications(
     let hasNew = false;
     for (const pr of reviewPulls) {
       const key = prKey(pr);
-      if (!prevState.current.reviewPRKeys.has(key)) {
+      if (!prevState.current.reviewPRKeys.has(key) && !muted.has(key)) {
         hasNew = true;
         const repoShort = pr.repo.split("/")[1] ?? pr.repo;
         notify(
@@ -78,6 +106,38 @@ export function useNotifications(
     }
     prevState.current.reviewPRKeys = currentKeys;
     if (hasNew) onDataChanged();
+  }, [reviewPulls]);
+
+  // Recurring review reminder every 30 minutes for unmuted review PRs
+  useEffect(() => {
+    if (reviewPulls.length === 0) return;
+
+    const interval = setInterval(() => {
+      const now = Date.now();
+      if (now - prevState.current.lastReviewReminder < REVIEW_REMINDER_INTERVAL) return;
+      prevState.current.lastReviewReminder = now;
+
+      const muted = getMutedPRs();
+      const unmutedReviews = reviewPulls.filter((pr) => !muted.has(prKey(pr)));
+      if (unmutedReviews.length === 0) return;
+
+      if (unmutedReviews.length === 1) {
+        const pr = unmutedReviews[0];
+        const repoShort = pr.repo.split("/")[1] ?? pr.repo;
+        notify(
+          `Waiting for your review: ${repoShort}#${pr.number}`,
+          pr.title,
+          () => onSelectPR(pr.number, pr.repo),
+        );
+      } else {
+        notify(
+          `${unmutedReviews.length} PRs waiting for your review`,
+          unmutedReviews.map((pr) => `${pr.repo.split("/")[1]}#${pr.number}: ${pr.title}`).join("\n"),
+        );
+      }
+    }, 60_000); // check every minute, but only fire every 30 min
+
+    return () => clearInterval(interval);
   }, [reviewPulls]);
 
   // Initialize pending comment baseline once pulls are loaded

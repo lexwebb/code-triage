@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { PullRequestDetail, Reviewer } from "../types";
 import { api } from "../api";
+import { isPRMuted, mutePR, unmutePR } from "../useNotifications";
 
 interface PRDetailProps {
   pr: PullRequestDetail;
@@ -47,6 +48,7 @@ export default function PRDetail({ pr, currentUser, onReviewSubmitted }: PRDetai
   const isOwnPR = currentUser != null && pr.author === currentUser;
   const [submitting, setSubmitting] = useState(false);
   const [reviewError, setReviewError] = useState<string | null>(null);
+  const [muted, setMuted] = useState(() => isPRMuted(pr.repo, pr.number));
 
   async function handleReview(event: "APPROVE" | "REQUEST_CHANGES") {
     setSubmitting(true);
@@ -97,6 +99,18 @@ export default function PRDetail({ pr, currentUser, onReviewSubmitted }: PRDetai
               </button>
             </>
           )}
+          <button
+            onClick={() => {
+              if (muted) { unmutePR(pr.repo, pr.number); setMuted(false); }
+              else { mutePR(pr.repo, pr.number); setMuted(true); }
+            }}
+            className={`text-xs px-2 py-1.5 rounded transition-colors ${
+              muted ? "text-gray-600 hover:text-gray-400" : "text-yellow-500 hover:text-yellow-400"
+            }`}
+            title={muted ? "Unmute notifications for this PR" : "Mute notifications for this PR"}
+          >
+            {muted ? "🔕" : "🔔"}
+          </button>
           <a
             href={pr.url}
             target="_blank"
