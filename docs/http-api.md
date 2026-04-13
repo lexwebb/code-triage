@@ -1,0 +1,48 @@
+# HTTP API
+
+The CLI embeds an HTTP server (default port **3100**, configurable). All routes return JSON unless static files are served. `POST` bodies are JSON with `Content-Type: application/json`.
+
+**Repo scoping:** Most PR-scoped routes require `?repo=owner/name`. The repo must be in the server’s tracked list (`GET /api/repos`).
+
+## Read-only
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/user` | Authenticated GitHub user (`login`, `avatarUrl`, `url`). |
+| `GET` | `/api/repos` | Tracked repos with `repo` and `localPath` from discovery / CLI. |
+| `GET` | `/api/pulls` | Open PRs **you authored** across tracked repos; includes checks, open comment count, human approval flag. Optional `?repo=`. |
+| `GET` | `/api/pulls/review-requested` | Open PRs where **you** are in `requested_reviewers` and you are **not** the author. Optional `?repo=`. |
+| `GET` | `/api/pulls/:number` | PR detail + reviewer map with states. Requires `?repo=`. |
+| `GET` | `/api/pulls/:number/files` | List of changed files with patches. Requires `?repo=`. |
+| `GET` | `/api/pulls/:number/comments` | Review comments with `isResolved`, merged `evaluation` and `crStatus` from `state.json`. Requires `?repo=`. |
+| `GET` | `/api/pulls/:number/files/*path` | File content at `path` on the PR head ref. Requires `?repo=`. |
+| `GET` | `/api/state` | Full `CrWatchState` (comments map, fix job records, `lastPoll`). |
+| `GET` | `/api/poll-status` | Server poll timer state, in-memory fix-job statuses, test-notification flag, rate-limit hint. |
+| `GET` | `/api/version` | Short SHAs and “commits behind `origin/main`” (best-effort; cached ~10 min). |
+| `GET` | `/api/fix-jobs/recover` | Lists persisted fix jobs from state; includes whether a worktree diff exists; prunes dead entries. |
+
+## Actions (`POST`)
+
+| Path | Body (summary) | Purpose |
+|------|----------------|---------|
+| `/api/actions/reply` | `repo`, `commentId`, `prNumber` | Post `evaluation.reply`, resolve thread, mark `replied`. |
+| `/api/actions/resolve` | `repo`, `commentId`, `prNumber` | Optional reply from evaluation, resolve thread, mark `replied`. |
+| `/api/actions/dismiss` | `repo`, `commentId`, `prNumber` | Mark `dismissed` locally only. |
+| `/api/actions/batch` | `action`, `items[]` | Same as reply/resolve/dismiss for many comments. |
+| `/api/actions/re-evaluate` | `repo`, `commentId`, `prNumber` | Fetch comment from GitHub, run Claude, update evaluation. |
+| `/api/actions/fix` | `repo`, `commentId`, `prNumber`, `branch`, `comment{path,line,body,diffHunk}` | Start async worktree + Claude fix; returns immediately with `status: running`. |
+| `/api/actions/fix-apply` | `repo`, `commentId`, `prNumber`, `branch` | Commit, push, remove worktree, mark `fixed`. |
+| `/api/actions/fix-discard` | `branch`, optional `repo`, `commentId` | Remove worktree; clear fix status if `commentId` set. |
+| `/api/actions/review` | `repo`, `prNumber`, `event` (`APPROVE` \| `REQUEST_CHANGES` \| `COMMENT`), optional `body` | Submit PR review. |
+| `/api/actions/comment` | `repo`, `prNumber`, `commitId`, `path`, `line`, `side`, `body` | Create a new review line comment. |
+
+## Errors
+
+- **400** — missing/invalid body, missing `localPath` for fix, missing evaluation for reply.
+- **404** — unknown static path; API routes return JSON `{ error }`.
+- **409** — fix already running for branch or PR.
+- **500** — GitHub or Claude failures; message in JSON `error`.
+
+## CORS
+
+`Access-Control-Allow-Origin: *` with `OPTIONS` preflight support for `GET`, `POST`, and `Content-Type`.

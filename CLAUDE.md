@@ -4,6 +4,19 @@
 
 Code Triage is a PR review dashboard that monitors GitHub pull requests, analyzes review comments with Claude, and lets users act on them from a web UI. It consists of a Node.js CLI backend and a React frontend.
 
+## Documentation (`docs/`)
+
+Longer explanations live under [`docs/`](./docs/README.md). Use them when you need more than this file’s summary:
+
+| Document | When to read it |
+|----------|-----------------|
+| [`docs/architecture.md`](./docs/architecture.md) | System diagram, data flow, how CLI / poller / API / web fit together, GitHub vs Claude boundaries |
+| [`docs/features-and-rationale.md`](./docs/features-and-rationale.md) | What a feature does and *why* (e.g. authored PRs vs review-requested list, worktrees, bot filtering) |
+| [`docs/http-api.md`](./docs/http-api.md) | Adding or changing REST routes, request/response shapes, error codes |
+| [`docs/config-and-state.md`](./docs/config-and-state.md) | `config.json` / `state.json`, comment keys, fix jobs, `.cr-worktrees/` behavior |
+
+[`docs/README.md`](./docs/README.md) is the index. [`docs/superpowers/`](./docs/superpowers/) holds dated design notes; prefer the guides above for current behavior.
+
 ## Architecture
 
 - **CLI Backend** (`src/`): TypeScript, ESM modules, Node16 module resolution. Uses `ink` for terminal UI. Runs an HTTP API server on port 3100.
