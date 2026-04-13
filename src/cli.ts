@@ -19,7 +19,7 @@ import { discoverRepos, type RepoInfo } from "./discovery.js";
 
 const { values: flags } = parseArgs({
   options: {
-    interval: { type: "string", default: "5" },
+    interval: { type: "string", default: "1" },
     repo: { type: "string" },
     root: { type: "string", default: "~/src" },
     cleanup: { type: "boolean", default: false },
