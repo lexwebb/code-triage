@@ -7,7 +7,7 @@ Code Triage is a PR review dashboard that monitors GitHub pull requests, analyze
 ## Architecture
 
 - **CLI Backend** (`src/`): TypeScript, ESM modules, Node16 module resolution. Uses `ink` for terminal UI. Runs an HTTP API server on port 3100.
-- **Web Frontend** (`web/`): React 19, TypeScript, Vite, Tailwind CSS v4. Separate package with its own `package.json`.
+- **Web Frontend** (`web/`): React 19, TypeScript, Vite, Tailwind CSS v4. Yarn workspace (`code-triage-web`).
 - **GitHub API**: Direct `fetch` calls using a token from `gh auth token`. No `gh` CLI for API calls (too slow).
 - **Claude CLI**: Used for comment evaluation (`claude -p`) and code fixes (`claude -p --dangerously-skip-permissions`).
 - **State**: Persisted to `~/.code-triage/state.json`. Config at `~/.code-triage/config.json`.
@@ -15,17 +15,14 @@ Code Triage is a PR review dashboard that monitors GitHub pull requests, analyze
 ## Build & Run
 
 ```bash
-yarn install              # Install CLI dependencies
-cd web && yarn install    # Install web dependencies
-cd ..
+yarn install              # Install all dependencies (workspaces)
 yarn build:all            # Build CLI + web
 yarn start                # Run (or: node dist/cli.js)
 ```
 
 Development:
 ```bash
-yarn dev                  # CLI watch mode
-yarn dev:web              # Vite dev server with HMR on :5173
+yarn dev                  # Runs tsc watch + CLI auto-restart + Vite HMR concurrently
 ```
 
 ## Key Files

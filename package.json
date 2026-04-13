@@ -1,17 +1,22 @@
 {
   "name": "code-triage",
   "version": "0.1.0",
+  "private": true,
   "description": "Monitor CodeRabbit review comments and action them with Claude Code",
   "type": "module",
+  "workspaces": [
+    "web"
+  ],
   "bin": {
     "code-triage": "./dist/cli.js"
   },
   "scripts": {
     "build": "tsc",
-    "build:web": "cd web && yarn build",
+    "build:web": "yarn workspace code-triage-web build",
     "build:all": "yarn build && yarn build:web",
-    "dev": "tsc --watch",
-    "dev:web": "cd web && yarn dev",
+    "dev": "concurrently -n tsc,cli,web -c blue,green,magenta \"tsc --watch --preserveWatchOutput\" \"nodemon --watch dist --delay 1 dist/cli.js\" \"yarn workspace code-triage-web dev\"",
+    "dev:cli": "tsc --watch",
+    "dev:web": "yarn workspace code-triage-web dev",
     "start": "node dist/cli.js",
     "typecheck": "tsc --noEmit"
   },
@@ -29,6 +34,8 @@
   "devDependencies": {
     "@types/node": "^22.0.0",
     "@types/react": "^19.2.14",
+    "concurrently": "^9.2.1",
+    "nodemon": "^3.1.14",
     "typescript": "^5.8.0"
   }
 }

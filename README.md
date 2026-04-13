@@ -10,7 +10,6 @@ A PR review dashboard that monitors your GitHub pull requests, analyzes review c
 git clone git@github.com:lexwebb/code-triage.git
 cd code-triage
 yarn install
-cd web && yarn install && cd ..
 yarn build:all
 yarn start
 ```
@@ -43,11 +42,8 @@ yarn start -- --cleanup       # Remove all worktrees
 ## Development
 
 ```bash
-# Terminal 1: Build CLI in watch mode
+# Run everything (tsc watch + CLI with auto-restart + Vite HMR)
 yarn dev
-
-# Terminal 2: Vite dev server with hot reload
-yarn dev:web
 
 # Open http://localhost:5173 (proxies API to :3100)
 ```
