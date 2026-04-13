@@ -14,6 +14,7 @@ import {
   setProcessing,
   cleanup as cleanupTerminal,
 } from "./terminal.js";
+import { startServer } from "./server.js";
 
 const { values: flags } = parseArgs({
   options: {
@@ -22,6 +23,7 @@ const { values: flags } = parseArgs({
     cleanup: { type: "boolean", default: false },
     "dry-run": { type: "boolean", default: false },
     status: { type: "boolean", default: false },
+    port: { type: "string", default: "3100" },
   },
 });
 
@@ -60,6 +62,8 @@ console.log(`cr-watch started`);
 console.log(`  Repo: ${repoPath}`);
 console.log(`  Interval: ${flags.interval}m`);
 console.log(`  Dry run: ${dryRun}\n`);
+
+startServer(parseInt(flags.port!, 10));
 
 let running = false;
 let shuttingDown = false;
