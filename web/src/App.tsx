@@ -1,12 +1,17 @@
 import { useEffect, useState } from "react";
 import { api } from "./api";
-import type { PullRequest } from "./types";
+import type { PullRequest, PullRequestDetail, PullFile, ReviewComment } from "./types";
 import PRList from "./components/PRList";
+import PRDetail from "./components/PRDetail";
 
 export default function App() {
   const [pulls, setPulls] = useState<PullRequest[]>([]);
   const [selectedPR, setSelectedPR] = useState<number | null>(null);
   const [commentCounts, setCommentCounts] = useState<Record<number, number>>({});
+  const [prDetail, setPrDetail] = useState<PullRequestDetail | null>(null);
+  const [prFiles, setPrFiles] = useState<PullFile[]>([]);
+  const [prComments, setPrComments] = useState<ReviewComment[]>([]);
+  const [loadingPR, setLoadingPR] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -39,6 +44,32 @@ export default function App() {
     }
     load();
   }, []);
+
+  useEffect(() => {
+    if (!selectedPR) return;
+    let cancelled = false;
+
+    async function loadPR() {
+      setLoadingPR(true);
+      try {
+        const [detail, files, comments] = await Promise.all([
+          api.getPull(selectedPR!),
+          api.getPullFiles(selectedPR!),
+          api.getPullComments(selectedPR!),
+        ]);
+        if (cancelled) return;
+        setPrDetail(detail);
+        setPrFiles(files);
+        setPrComments(comments);
+      } catch (err) {
+        console.error("Failed to load PR:", err);
+      } finally {
+        if (!cancelled) setLoadingPR(false);
+      }
+    }
+    loadPR();
+    return () => { cancelled = true; };
+  }, [selectedPR]);
 
   if (loading) {
     return (
@@ -74,8 +105,23 @@ export default function App() {
       </div>
 
       {/* Main area */}
-      <div className="flex-1 flex items-center justify-center text-gray-500">
-        {selectedPR ? `PR #${selectedPR} selected` : "Select a pull request"}
+      <div className="flex-1 flex flex-col overflow-hidden">
+        {loadingPR ? (
+          <div className="flex-1 flex items-center justify-center text-gray-500">
+            Loading...
+          </div>
+        ) : prDetail ? (
+          <>
+            <PRDetail pr={prDetail} />
+            <div className="flex-1 overflow-y-auto p-6 text-gray-500">
+              {prFiles.length} file(s), {prComments.length} comment(s)
+            </div>
+          </>
+        ) : (
+          <div className="flex-1 flex items-center justify-center text-gray-500">
+            Select a pull request
+          </div>
+        )}
       </div>
     </div>
   );
