@@ -8,6 +8,7 @@ import PRDetail from "./components/PRDetail";
 import FileList from "./components/FileList";
 import DiffView from "./components/DiffView";
 import CommentThreads from "./components/CommentThreads";
+import { useNotifications } from "./useNotifications";
 
 interface SelectedPR {
   number: number;
@@ -159,6 +160,9 @@ export default function App() {
       console.error("Failed to reload comments:", err);
     }
   }
+
+  // Web notifications for new review requests and pending comments
+  useNotifications(pulls, reviewPulls, handleSelectPR);
 
   function handleSelectRepo(repo: string | null) {
     setSelectedRepo(repo);
