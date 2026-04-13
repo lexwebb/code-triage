@@ -72,8 +72,29 @@ export function updatePollState(state: { lastPoll?: number; nextPoll?: number; i
   Object.assign(pollState, state);
 }
 
+export interface FixJob {
+  commentId: number;
+  repo: string;
+  prNumber: number;
+  path: string;
+  startedAt: number;
+}
+
+const activeFixJobs = new Map<number, FixJob>();
+
+export function addFixJob(job: FixJob): void {
+  activeFixJobs.set(job.commentId, job);
+}
+
+export function removeFixJob(commentId: number): void {
+  activeFixJobs.delete(commentId);
+}
+
 export function getPollState() {
-  return pollState;
+  return {
+    ...pollState,
+    fixJobs: Array.from(activeFixJobs.values()),
+  };
 }
 
 function readBody(req: IncomingMessage): Promise<string> {

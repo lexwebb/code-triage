@@ -1,4 +1,4 @@
-import { addRoute, json, getRepos, getBody, getPollState } from "./server.js";
+import { addRoute, json, getRepos, getBody, getPollState, addFixJob, removeFixJob } from "./server.js";
 import { loadState, markComment, saveState } from "./state.js";
 import { postReply, resolveThread, applyFixWithClaude } from "./actioner.js";
 import { createWorktree, getWorktreePath, getDiffInWorktree, removeWorktree, commitAndPushWorktree } from "./worktree.js";
@@ -426,8 +426,17 @@ export function registerRoutes(): void {
       return;
     }
 
+    addFixJob({
+      commentId: body.commentId,
+      repo: body.repo,
+      prNumber: body.prNumber,
+      path: body.comment.path,
+      startedAt: Date.now(),
+    });
+
     try {
       await applyFixWithClaude(worktreePath, body.comment);
+      removeFixJob(body.commentId);
       const diff = getDiffInWorktree(worktreePath);
 
       if (!diff.trim()) {
@@ -438,6 +447,7 @@ export function registerRoutes(): void {
 
       json(res, { success: true, diff, branch: body.branch });
     } catch (err) {
+      removeFixJob(body.commentId);
       removeWorktree(body.branch);
       json(res, { error: `Fix failed: ${(err as Error).message}` }, 500);
     }
