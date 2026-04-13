@@ -18,6 +18,10 @@ interface Route {
 
 const routes: Route[] = [];
 
+function clearRoutes(): void {
+  routes.length = 0;
+}
+
 function addRoute(method: string, path: string, handler: RouteHandler): void {
   const paramNames: string[] = [];
   const pattern = path.replace(/:(\w+)/g, (_, name) => {
@@ -190,4 +194,4 @@ export function getBody<T>(req: IncomingMessage): T {
   return (req as any).__body as T;
 }
 
-export { addRoute, json };
+export { addRoute, clearRoutes, json };

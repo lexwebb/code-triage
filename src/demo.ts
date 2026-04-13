@@ -1,5 +1,4 @@
-import { startServer } from "./server.js";
-import { addRoute, json } from "./server.js";
+import { startServer, addRoute, clearRoutes, json } from "./server.js";
 import type { RepoInfo } from "./discovery.js";
 
 const DEMO_REPOS: RepoInfo[] = [
@@ -139,10 +138,11 @@ const DEMO_FIX_JOBS = [
 ];
 
 export function startDemoServer(port: number): void {
-  // Register demo routes before starting server
+  // Start server (registers real routes + static serving)
   startServer(port, DEMO_REPOS);
 
-  // Override all API routes with demo data
+  // Clear real routes and register demo data routes
+  clearRoutes();
   addRoute("GET", "/api/user", (_req, res) => {
     json(res, DEMO_USER);
   });
