@@ -1,3 +1,5 @@
 node_modules
 dist
 .cr-worktrees
+web/node_modules
+web/dist
