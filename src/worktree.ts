@@ -93,7 +93,7 @@ export function getDiffInWorktree(worktreePath: string): string {
   });
 }
 
-export function commitAndPushWorktree(worktreePath: string, message: string): void {
+export function commitAndPushWorktree(worktreePath: string, message: string, branch?: string): void {
   execFileSync("git", ["add", "-A"], {
     encoding: "utf-8",
     cwd: worktreePath,
@@ -102,7 +102,8 @@ export function commitAndPushWorktree(worktreePath: string, message: string): vo
     encoding: "utf-8",
     cwd: worktreePath,
   });
-  execFileSync("git", ["push"], {
+  const pushArgs = branch ? ["push", "origin", `HEAD:${branch}`] : ["push"];
+  execFileSync("git", pushArgs, {
     encoding: "utf-8",
     cwd: worktreePath,
   });

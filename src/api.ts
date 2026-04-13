@@ -537,7 +537,7 @@ export function registerRoutes(): void {
     try {
       const worktreePath = getWorktreePath(body.branch, repoInfo.localPath);
       const commitMsg = `fix: apply CodeRabbit suggestion for PR #${body.prNumber}`;
-      commitAndPushWorktree(worktreePath, commitMsg);
+      commitAndPushWorktree(worktreePath, commitMsg, body.branch);
       removeWorktree(body.branch, repoInfo?.localPath);
 
       const state = loadState();
