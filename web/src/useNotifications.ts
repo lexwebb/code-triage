@@ -4,9 +4,9 @@ import type { PullRequest, ReviewComment } from "./types";
 
 const POLL_INTERVAL = 60_000; // 1 minute
 
-export function requestNotificationPermission() {
+export async function requestNotificationPermission(): Promise<void> {
   if ("Notification" in window && Notification.permission === "default") {
-    Notification.requestPermission();
+    await Notification.requestPermission();
   }
 }
 

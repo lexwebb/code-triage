@@ -232,8 +232,31 @@ export default function App() {
   const seconds = Math.floor((countdown % 60000) / 1000);
   const timerText = `${minutes}:${seconds.toString().padStart(2, "0")}`;
 
+  const [notifPermission, setNotifPermission] = useState(() =>
+    "Notification" in window ? Notification.permission : "denied"
+  );
+  const showNotifBanner = notifPermission === "default";
+
   return (
-    <div className="h-screen flex bg-gray-950 text-gray-200">
+    <div className="h-screen flex flex-col bg-gray-950 text-gray-200">
+      {/* Notification permission banner */}
+      {showNotifBanner && (
+        <div className="bg-blue-600/90 px-4 py-2 flex items-center justify-between shrink-0">
+          <span className="text-sm text-white">
+            Enable notifications to get alerted when PRs need your attention.
+          </span>
+          <button
+            onClick={async () => {
+              await requestNotificationPermission();
+              setNotifPermission(Notification.permission);
+            }}
+            className="text-sm px-3 py-1 bg-white/20 hover:bg-white/30 text-white rounded transition-colors"
+          >
+            Turn on notifications
+          </button>
+        </div>
+      )}
+      <div className="flex-1 flex overflow-hidden">
       {/* Sidebar */}
       <div className="w-72 border-r border-gray-800 flex flex-col shrink-0">
         <div className="px-4 py-2 border-b border-gray-800 flex items-center justify-between">
@@ -351,6 +374,7 @@ export default function App() {
             Select a pull request
           </div>
         )}
+      </div>
       </div>
     </div>
   );
