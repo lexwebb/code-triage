@@ -9,6 +9,8 @@ export interface Config {
   root: string;
   port: number;
   interval: number; // minutes
+  ignoredBots?: string[]; // additional bot logins to ignore during polling
+  accounts?: Array<{ name: string; token: string; orgs: string[] }>; // multi-account support
 }
 
 const DEFAULTS: Config = {

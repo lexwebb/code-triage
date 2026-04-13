@@ -1,6 +1,7 @@
 import { spawn, type ChildProcess } from "child_process";
 import { markComment, markCommentWithEvaluation, saveState } from "./state.js";
 import { ghPost, ghGraphQL } from "./exec.js";
+import { log } from "./logger.js";
 import type { CrComment, CrWatchState, Evaluation, PrInfo, SpawnOptions } from "./types.js";
 
 // Track all active child processes so we can kill them on shutdown
@@ -69,7 +70,7 @@ function spawnTracked(cmd: string, args: string[], options: SpawnOptions = {}): 
   });
 }
 
-async function evaluateComment(comment: CrComment): Promise<Evaluation> {
+export async function evaluateComment(comment: CrComment): Promise<Evaluation> {
   const evalPrompt = `You are evaluating a CodeRabbit review comment on a pull request.
 
 Comment on file "${comment.path}" at line ${comment.line}:
@@ -115,10 +116,30 @@ Respond with ONLY valid JSON, no markdown fences:
   return parseEvaluation(content);
 }
 
+const VALID_ACTIONS = new Set(["reply", "fix", "resolve"]);
+
+function validateEvaluation(obj: unknown): Evaluation | null {
+  if (typeof obj !== "object" || obj === null) return null;
+  const e = obj as Record<string, unknown>;
+  if (!VALID_ACTIONS.has(e["action"] as string)) return null;
+  const action = e["action"] as Evaluation["action"];
+  const summary = typeof e["summary"] === "string" && e["summary"].trim() ? e["summary"] : "No summary provided";
+  const reply = typeof e["reply"] === "string" ? e["reply"] : undefined;
+  const fixDescription = typeof e["fixDescription"] === "string" ? e["fixDescription"] : undefined;
+  // Fill in missing fields
+  return {
+    action,
+    summary,
+    reply: action === "reply" || action === "resolve" ? (reply ?? summary) : reply,
+    fixDescription: action === "fix" ? (fixDescription ?? summary) : fixDescription,
+  };
+}
+
 function parseEvaluation(raw: string): Evaluation {
-  // Try direct parse first
+  // Try direct parse + validate
   try {
-    return JSON.parse(raw) as Evaluation;
+    const result = validateEvaluation(JSON.parse(raw));
+    if (result) return result;
   } catch {
     // ignore
   }
@@ -127,21 +148,23 @@ function parseEvaluation(raw: string): Evaluation {
   const jsonMatch = raw.match(/\{[\s\S]*?"action"\s*:\s*"(?:reply|fix|resolve)"[\s\S]*?\}/);
   if (jsonMatch) {
     try {
-      return JSON.parse(jsonMatch[0]) as Evaluation;
+      const result = validateEvaluation(JSON.parse(jsonMatch[0]));
+      if (result) return result;
     } catch {
       // ignore
     }
   }
 
-  // Last resort: try to infer action from the text
+  // Last resort: infer action from text
+  log.warn("Could not parse Claude evaluation as JSON, falling back to text inference.");
   const lower = raw.toLowerCase();
   if (lower.includes('"fix"') || lower.includes("code change")) {
-    return { action: "fix", summary: "Parsed from non-JSON response" };
+    return { action: "fix", summary: "Inferred from non-JSON response", fixDescription: raw.slice(0, 200) };
   }
   if (lower.includes('"resolve"') || lower.includes("already")) {
-    return { action: "resolve", summary: "Parsed from non-JSON response", reply: raw.slice(0, 200) };
+    return { action: "resolve", summary: "Inferred from non-JSON response", reply: raw.slice(0, 200) };
   }
-  return { action: "reply", summary: "Could not parse evaluation", reply: raw.slice(0, 200) };
+  return { action: "reply", summary: "Invalid evaluation response", reply: raw.slice(0, 200) };
 }
 
 export async function postReply(repoPath: string, prNumber: number, commentId: number, body: string): Promise<void> {
@@ -197,16 +220,16 @@ export async function resolveThread(
   );
 
   if (!thread) {
-    console.log(`  Could not find thread for comment ${commentId}, posting reply.`);
+    log.warn(`Could not find thread for comment ${commentId}, posting reply.`);
     if (replyBody) {
       await postReply(repoPath, prNumber, commentId, replyBody);
     }
-    console.log(`  Warning: thread not found — could not resolve.`);
+    log.warn(`Thread not found — could not resolve comment ${commentId}.`);
     return;
   }
 
   if (thread.isResolved) {
-    console.log("  Thread already resolved.");
+    log.info(`Thread for comment ${commentId} already resolved.`);
     return;
   }
 
@@ -259,13 +282,13 @@ export async function analyzeComments(
   for (const [prNum, prComments] of Object.entries(byPr)) {
     const prNumber = Number(prNum);
     const pr = pullsByNumber[prNumber];
-    console.log(`\nAnalyzing PR #${prNum}: ${pr?.title || "Unknown"}`);
+    log.info(`Analyzing PR #${prNum}: ${pr?.title || "Unknown"}`);
 
     for (const comment of prComments) {
-      console.log(`\n  Evaluating: ${comment.path}:${comment.line}`);
+      log.info(`Evaluating: ${comment.path}:${comment.line}`);
 
       if (dryRun) {
-        console.log(`  [dry-run] Would evaluate with Claude.`);
+        log.info(`[dry-run] Would evaluate comment ${comment.id} with Claude.`);
         markComment(state, comment.id, "pending", prNumber, repoPath);
         saveState(state);
         continue;
@@ -275,13 +298,13 @@ export async function analyzeComments(
       try {
         evaluation = await evaluateComment(comment);
       } catch (err) {
-        console.error(`  Error evaluating comment ${comment.id}: ${(err as Error).message}`);
+        log.error(`Error evaluating comment ${comment.id}: ${(err as Error).message}`);
         markComment(state, comment.id, "pending", prNumber, repoPath);
         saveState(state);
         continue;
       }
 
-      console.log(`  Result: ${evaluation.action} — ${evaluation.summary}`);
+      log.info(`Result: ${evaluation.action} — ${evaluation.summary}`);
       markCommentWithEvaluation(state, comment.id, "pending", prNumber, evaluation, repoPath);
       saveState(state);
     }

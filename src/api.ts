@@ -1,6 +1,6 @@
 import { addRoute, json, getRepos, getBody, getPollState, setFixJobStatus, clearFixJobStatus, getActiveFixForBranch, getActiveFixForPR } from "./server.js";
-import { loadState, markComment, saveState, addFixJob as addFixJobState, removeFixJob as removeFixJobState, getFixJobs } from "./state.js";
-import { postReply, resolveThread, applyFixWithClaude } from "./actioner.js";
+import { loadState, markComment, markCommentWithEvaluation, saveState, addFixJob as addFixJobState, removeFixJob as removeFixJobState, getFixJobs } from "./state.js";
+import { postReply, resolveThread, applyFixWithClaude, evaluateComment } from "./actioner.js";
 import { createWorktree, getWorktreePath, getDiffInWorktree, removeWorktree, commitAndPushWorktree } from "./worktree.js";
 import { ghAsync, ghGraphQL, ghPost } from "./exec.js";
 
@@ -449,6 +449,75 @@ export function registerRoutes(): void {
     markComment(state, body.commentId, "dismissed", body.prNumber, body.repo);
     saveState(state);
     json(res, { success: true, status: "dismissed" });
+  });
+
+  // POST /api/actions/batch — perform reply/resolve/dismiss on multiple comments
+  addRoute("POST", "/api/actions/batch", async (req, res) => {
+    const body = getBody<{ action: "reply" | "resolve" | "dismiss"; items: Array<{ repo: string; commentId: number; prNumber: number }> }>(req);
+    const state = loadState();
+    const results: Array<{ commentId: number; success: boolean; error?: string }> = [];
+
+    for (const item of body.items) {
+      try {
+        const key = `${item.repo}:${item.commentId}`;
+        const record = state.comments[key];
+
+        if (body.action === "reply") {
+          if (!record?.evaluation?.reply) throw new Error("No reply text in evaluation");
+          await postReply(item.repo, item.prNumber, item.commentId, record.evaluation.reply);
+          await resolveThread(item.repo, item.commentId, item.prNumber, undefined);
+          markComment(state, item.commentId, "replied", item.prNumber, item.repo);
+        } else if (body.action === "resolve") {
+          await resolveThread(item.repo, item.commentId, item.prNumber, record?.evaluation?.reply);
+          markComment(state, item.commentId, "replied", item.prNumber, item.repo);
+        } else {
+          markComment(state, item.commentId, "dismissed", item.prNumber, item.repo);
+        }
+        results.push({ commentId: item.commentId, success: true });
+      } catch (err) {
+        results.push({ commentId: item.commentId, success: false, error: (err as Error).message });
+      }
+    }
+
+    saveState(state);
+    json(res, { results });
+  });
+
+  // POST /api/actions/re-evaluate — re-run Claude evaluation on a comment
+  addRoute("POST", "/api/actions/re-evaluate", async (req, res) => {
+    const body = getBody<{ repo: string; commentId: number; prNumber: number }>(req);
+    const state = loadState();
+
+    // Fetch comment from GitHub to get current content
+    let ghComment: { id: number; path: string; line: number | null; original_line: number | null; diff_hunk: string; body: string; in_reply_to_id: number | null };
+    try {
+      ghComment = await ghAsync<typeof ghComment>(`/repos/${body.repo}/pulls/comments/${body.commentId}`);
+    } catch (err) {
+      json(res, { error: `Failed to fetch comment: ${(err as Error).message}` }, 500);
+      return;
+    }
+
+    const comment = {
+      id: ghComment.id,
+      prNumber: body.prNumber,
+      path: ghComment.path,
+      line: ghComment.line ?? ghComment.original_line ?? 0,
+      diffHunk: ghComment.diff_hunk,
+      body: ghComment.body,
+      inReplyToId: ghComment.in_reply_to_id,
+    };
+
+    let evaluation;
+    try {
+      evaluation = await evaluateComment(comment);
+    } catch (err) {
+      json(res, { error: `Claude evaluation failed: ${(err as Error).message}` }, 500);
+      return;
+    }
+
+    markCommentWithEvaluation(state, body.commentId, "pending", body.prNumber, evaluation, body.repo);
+    saveState(state);
+    json(res, { success: true, evaluation });
   });
 
   // POST /api/actions/fix — create worktree, run Claude, return diff

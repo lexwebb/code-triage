@@ -1,6 +1,7 @@
 import { execFileSync } from "child_process";
-import { existsSync, rmSync } from "fs";
+import { existsSync, readdirSync, rmSync } from "fs";
 import { join } from "path";
+import type { FixJobRecord } from "./types.js";
 
 const WORKTREE_DIR = ".cr-worktrees";
 
@@ -22,7 +23,7 @@ export function removeWorktree(branch: string, repoDir?: string): void {
   if (!existsSync(worktreePath)) return;
 
   const cwd = repoDir ? getRepoRoot(repoDir) : undefined;
-  console.log(`  Removing worktree: ${worktreePath}`);
+  // removing worktree silently
   try {
     execFileSync("git", ["worktree", "remove", worktreePath, "--force"], {
       encoding: "utf-8",
@@ -44,11 +45,9 @@ export function createWorktree(branch: string, repoDir?: string): string {
   const worktreePath = getWorktreePath(branch, repoDir);
 
   if (existsSync(worktreePath)) {
-    console.log(`  Cleaning up stale worktree: ${worktreePath}`);
     removeWorktree(branch, repoDir);
   }
 
-  console.log(`  Creating worktree for branch: ${branch}`);
   const cwd = repoDir ? getRepoRoot(repoDir) : undefined;
   try {
     execFileSync("git", ["worktree", "add", worktreePath, branch], {
@@ -72,18 +71,49 @@ export function cleanupAllWorktrees(): void {
   const root = getRepoRoot();
   const dir = join(root, WORKTREE_DIR);
 
-  if (!existsSync(dir)) {
-    console.log("No worktrees to clean up.");
-    return;
-  }
+  if (!existsSync(dir)) return;
 
-  console.log("Cleaning up all cr-watch worktrees...");
   rmSync(dir, { recursive: true, force: true });
   execFileSync("git", ["worktree", "prune"], {
     encoding: "utf-8",
     stdio: "pipe",
   });
-  console.log("Done.");
+}
+
+/** Remove any worktree dirs that are not referenced by an active fix job. Called at startup. */
+export function pruneOrphanedWorktrees(repoLocalPath: string, activeJobs: FixJobRecord[]): void {
+  let root: string;
+  try {
+    root = getRepoRoot(repoLocalPath);
+  } catch {
+    return;
+  }
+  const dir = join(root, WORKTREE_DIR);
+  if (!existsSync(dir)) return;
+
+  const activePaths = new Set(activeJobs.map((j) => j.worktreePath));
+  let entries: string[];
+  try {
+    entries = readdirSync(dir);
+  } catch {
+    return;
+  }
+
+  for (const entry of entries) {
+    const fullPath = join(dir, entry);
+    if (!activePaths.has(fullPath)) {
+      try {
+        rmSync(fullPath, { recursive: true, force: true });
+      } catch {
+        // ignore
+      }
+    }
+  }
+  try {
+    execFileSync("git", ["worktree", "prune"], { encoding: "utf-8", stdio: "pipe", cwd: root });
+  } catch {
+    // ignore
+  }
 }
 
 export function getDiffInWorktree(worktreePath: string): string {

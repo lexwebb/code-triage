@@ -14,24 +14,32 @@ function prKey(pr: PullRequest): string {
 function StatusIcon({ pr }: { pr: PullRequest }) {
   const mergeReady = pr.checksStatus === "success" && pr.openComments === 0 && pr.hasHumanApproval;
   const failed = pr.checksStatus === "failure";
+  const pending = pr.checksStatus === "pending";
 
-  if (mergeReady) {
-    return (
-      <span className="flex items-center gap-1 bg-green-500/15 text-green-400 text-xs px-1.5 py-0.5 rounded-full">
-        ✓
-      </span>
-    );
-  }
-
-  if (failed) {
-    return (
-      <span className="flex items-center gap-1 bg-red-500/15 text-red-400 text-xs px-1.5 py-0.5 rounded-full">
-        ✗
-      </span>
-    );
-  }
-
-  return null;
+  return (
+    <span className="flex items-center gap-1">
+      {mergeReady && (
+        <span className="bg-green-500/15 text-green-400 text-xs px-1.5 py-0.5 rounded-full" title="Ready to merge">
+          ✓ merge
+        </span>
+      )}
+      {failed && (
+        <span className="bg-red-500/15 text-red-400 text-xs px-1.5 py-0.5 rounded-full" title="CI checks failed">
+          ✗ CI
+        </span>
+      )}
+      {pending && (
+        <span className="bg-yellow-500/15 text-yellow-400 text-xs px-1.5 py-0.5 rounded-full" title="CI checks running">
+          ● CI
+        </span>
+      )}
+      {!mergeReady && pr.hasHumanApproval && (
+        <span className="bg-green-500/10 text-green-500 text-xs px-1.5 py-0.5 rounded-full" title="Approved">
+          ✓ approved
+        </span>
+      )}
+    </span>
+  );
 }
 
 export default function PRList({ pulls, selectedPR, onSelectPR, showRepo }: PRListProps) {
@@ -70,7 +78,7 @@ export default function PRList({ pulls, selectedPR, onSelectPR, showRepo }: PRLi
               <span className="text-gray-500 text-xs font-mono">#{pr.number}</span>
               <span className="flex items-center gap-1.5">
                 {pr.openComments > 0 && (
-                  <span className="bg-blue-500/20 text-blue-400 text-xs px-1.5 py-0.5 rounded-full">
+                  <span className="bg-orange-500/20 text-orange-400 text-xs px-1.5 py-0.5 rounded-full" title={`${pr.openComments} open comment${pr.openComments !== 1 ? "s" : ""}`}>
                     {pr.openComments}
                   </span>
                 )}

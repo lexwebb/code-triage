@@ -1,6 +1,7 @@
 import { execFileSync } from "child_process";
 import type { CrComment, PrInfo, PollResult } from "./types.js";
 import { ghAsync, ghGraphQL } from "./exec.js";
+import { loadConfig } from "./config.js";
 
 interface GhPull {
   number: number;
@@ -117,8 +118,10 @@ export async function fetchNewComments(
       getResolvedCommentIds(repoPath, pr.number),
     ]);
 
+    const config = loadConfig();
+    const ignoredBots = new Set([...IGNORED_BOTS, ...(config.ignoredBots ?? [])]);
     const relevantComments = comments.filter(
-      (c) => !IGNORED_BOTS.has(c.user.login) && isNewComment(c.id) && !resolvedIds.has(c.id),
+      (c) => !ignoredBots.has(c.user.login) && isNewComment(c.id) && !resolvedIds.has(c.id),
     );
 
     for (const comment of relevantComments) {

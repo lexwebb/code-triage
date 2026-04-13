@@ -104,7 +104,7 @@ export default function Comment({ comment, compact }: CommentProps) {
   );
 }
 
-export function getTimeAgo(dateStr: string): string {
+function getTimeAgo(dateStr: string): string {
   const date = new Date(dateStr);
   const now = new Date();
   const diffMs = now.getTime() - date.getTime();

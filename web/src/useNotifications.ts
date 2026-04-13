@@ -79,8 +79,15 @@ export function useNotifications(
     prChecksStatus: new Map(),
     prOpenComments: new Map(),
     initialized: false,
+    // eslint-disable-next-line react-hooks/purity -- useRef initial value only runs at mount
     lastReviewReminder: Date.now(),
   });
+
+  // Keep callback refs fresh so effects always call the latest version without re-subscribing
+  const onSelectPRRef = useRef(onSelectPR);
+  onSelectPRRef.current = onSelectPR;
+  const onDataChangedRef = useRef(onDataChanged);
+  onDataChangedRef.current = onDataChanged;
 
   // Request permission on mount
   useEffect(() => {
@@ -106,12 +113,12 @@ export function useNotifications(
         notify(
           `Review requested: ${repoShort}#${pr.number}`,
           pr.title,
-          () => onSelectPR(pr.number, pr.repo),
+          () => onSelectPRRef.current(pr.number, pr.repo),
         );
       }
     }
     prevState.current.reviewPRKeys = currentKeys;
-    if (hasNew) onDataChanged();
+    if (hasNew) onDataChangedRef.current();
   }, [reviewPulls]);
 
   // ── Track CI status changes on your PRs ──
@@ -134,13 +141,13 @@ export function useNotifications(
           notify(
             `Checks passed: ${repoShort}#${pr.number}`,
             pr.title,
-            () => onSelectPR(pr.number, pr.repo),
+            () => onSelectPRRef.current(pr.number, pr.repo),
           );
         } else if (pr.checksStatus === "failure") {
           notify(
             `Checks failed: ${repoShort}#${pr.number}`,
             pr.title,
-            () => onSelectPR(pr.number, pr.repo),
+            () => onSelectPRRef.current(pr.number, pr.repo),
           );
         }
       }
@@ -167,7 +174,7 @@ export function useNotifications(
         notify(
           `${newCount} new comment${newCount > 1 ? "s" : ""}: ${repoShort}#${pr.number}`,
           pr.title,
-          () => onSelectPR(pr.number, pr.repo),
+          () => onSelectPRRef.current(pr.number, pr.repo),
         );
       }
       prevState.current.prOpenComments.set(key, pr.openComments);
@@ -193,7 +200,7 @@ export function useNotifications(
         notify(
           `Waiting for your review: ${repoShort}#${pr.number}`,
           pr.title,
-          () => onSelectPR(pr.number, pr.repo),
+          () => onSelectPRRef.current(pr.number, pr.repo),
         );
       } else {
         notify(
@@ -242,6 +249,9 @@ export function useNotifications(
       const newPendingKeys = new Set<string>();
       const muted = getMutedPRs();
 
+      // Collect analyzed comment notifications to batch (digest mode)
+      const newlyAnalyzed: Array<{ pr: typeof pulls[0]; c: Awaited<ReturnType<typeof api.getPullComments>>[0] }> = [];
+
       for (const pr of pulls) {
         const prk = prKey(pr);
         try {
@@ -250,43 +260,58 @@ export function useNotifications(
             const key = commentKey(c, pr.repo, pr.number);
             newAllKeys.add(key);
 
-            // New comment appeared (any comment, before analysis)
+            // New human comment — notify immediately (high signal, not bursty)
             if (!prevState.current.allCommentKeys.has(key) && !muted.has(prk)) {
-              // Only notify for non-bot comments we haven't seen — analysis notifications cover bot comments
               if (!c.author.includes("[bot]")) {
                 hasNew = true;
                 const repoShort = pr.repo.split("/")[1] ?? pr.repo;
                 notify(
                   `New comment on ${repoShort}#${pr.number}`,
                   `${c.author} commented on ${c.path}:${c.line}`,
-                  () => onSelectPR(pr.number, pr.repo),
+                  () => onSelectPRRef.current(pr.number, pr.repo),
                 );
               }
             }
 
-            // Analysis completed — comment now has evaluation and is pending action
+            // Analysis completed — collect for digest
             if (c.crStatus === "pending" && c.evaluation) {
               newPendingKeys.add(key);
-
               if (!prevState.current.pendingCommentKeys.has(key) && !muted.has(prk)) {
                 hasNew = true;
-                const repoShort = pr.repo.split("/")[1] ?? pr.repo;
-                const actionLabel = c.evaluation.action === "fix" ? "Needs fix" :
-                  c.evaluation.action === "reply" ? "Needs reply" : "Can resolve";
-                notify(
-                  `${actionLabel}: ${repoShort}#${pr.number}`,
-                  `${c.path}:${c.line} — ${c.evaluation.summary}`,
-                  () => onSelectPR(pr.number, pr.repo),
-                );
+                newlyAnalyzed.push({ pr, c });
               }
             }
           }
         } catch { /* ignore */ }
       }
 
+      // Fire analysis notifications as digest
+      if (newlyAnalyzed.length === 1) {
+        const { pr, c } = newlyAnalyzed[0]!;
+        const repoShort = pr.repo.split("/")[1] ?? pr.repo;
+        const actionLabel = c.evaluation!.action === "fix" ? "Needs fix"
+          : c.evaluation!.action === "reply" ? "Needs reply" : "Can resolve";
+        notify(
+          `${actionLabel}: ${repoShort}#${pr.number}`,
+          `${c.path}:${c.line} — ${c.evaluation!.summary}`,
+          () => onSelectPRRef.current(pr.number, pr.repo),
+        );
+      } else if (newlyAnalyzed.length > 1) {
+        const fixes = newlyAnalyzed.filter((e) => e.c.evaluation?.action === "fix").length;
+        const replies = newlyAnalyzed.filter((e) => e.c.evaluation?.action === "reply").length;
+        const parts: string[] = [];
+        if (fixes > 0) parts.push(`${fixes} fix${fixes > 1 ? "es" : ""}`);
+        if (replies > 0) parts.push(`${replies} repl${replies > 1 ? "ies" : "y"}`);
+        if (parts.length === 0) parts.push(`${newlyAnalyzed.length} comments`);
+        notify(
+          `${newlyAnalyzed.length} comments need action`,
+          parts.join(", ") + " across your PRs",
+        );
+      }
+
       prevState.current.allCommentKeys = newAllKeys;
       prevState.current.pendingCommentKeys = newPendingKeys;
-      if (hasNew) onDataChanged();
+      if (hasNew) onDataChangedRef.current();
     }, POLL_INTERVAL);
 
     return () => clearInterval(interval);

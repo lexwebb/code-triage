@@ -10,6 +10,13 @@
   "bin": {
     "code-triage": "./dist/cli.js"
   },
+  "files": [
+    "dist/",
+    "web/dist/"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "build": "tsc",
     "build:web": "yarn workspace code-triage-web build",
@@ -18,7 +25,15 @@
     "dev:cli": "tsc --watch",
     "dev:web": "yarn workspace code-triage-web dev",
     "start": "node dist/cli.js",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src web/src",
+    "lint:fix": "eslint src web/src --fix",
+    "prepublishOnly": "yarn build:all",
+    "release": "node scripts/release.mjs",
+    "release:patch": "node scripts/release.mjs patch",
+    "release:minor": "node scripts/release.mjs minor",
+    "release:major": "node scripts/release.mjs major",
+    "release:dry-run": "node scripts/release.mjs --dry-run"
   },
   "keywords": [
     "coderabbit",
@@ -32,10 +47,16 @@
     "react": "^19.2.5"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@types/node": "^22.0.0",
     "@types/react": "^19.2.14",
     "concurrently": "^9.2.1",
+    "eslint": "9",
+    "eslint-plugin-react": "^7.37.5",
+    "eslint-plugin-react-hooks": "^7.0.1",
+    "eslint-plugin-react-refresh": "^0.5.2",
     "nodemon": "^3.1.14",
-    "typescript": "^5.8.0"
+    "typescript": "^5.8.0",
+    "typescript-eslint": "^8.58.2"
   }
 }

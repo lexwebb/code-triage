@@ -4,6 +4,13 @@ import { readFileSync, existsSync } from "fs";
 import { join, extname } from "path";
 import { fileURLToPath } from "url";
 import type { RepoInfo } from "./discovery.js";
+import { getRateLimitState } from "./exec.js";
+
+declare module "http" {
+  interface IncomingMessage {
+    __body?: unknown;
+  }
+}
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 
@@ -70,7 +77,7 @@ export function getRepos(): RepoInfo[] {
   return currentRepos;
 }
 
-let pollState = { lastPoll: 0, nextPoll: 0, intervalMs: 0, polling: false };
+const pollState = { lastPoll: 0, nextPoll: 0, intervalMs: 0, polling: false };
 let testNotificationPending = false;
 
 export function triggerTestNotification(): void {
@@ -131,6 +138,8 @@ export function getPollState() {
     ...pollState,
     fixJobs: Array.from(fixJobStatuses.values()),
     testNotification: consumeTestNotification(),
+    rateLimited: getRateLimitState().limited,
+    rateLimitResetAt: getRateLimitState().resetAt,
   };
 }
 
@@ -176,7 +185,7 @@ export function startServer(port: number, repos: RepoInfo[]): void {
       try {
         if (req.method === "POST") {
           const bodyStr = await readBody(req);
-          (req as any).__body = bodyStr ? JSON.parse(bodyStr) : {};
+          req.__body = bodyStr ? JSON.parse(bodyStr) : {};
         }
         await route.handler(req, res, params, query);
       } catch (err) {
@@ -205,7 +214,7 @@ export function startServer(port: number, repos: RepoInfo[]): void {
 }
 
 export function getBody<T>(req: IncomingMessage): T {
-  return (req as any).__body as T;
+  return req.__body as T;
 }
 
 export { addRoute, clearRoutes, json };

@@ -5,7 +5,8 @@ import { loadState, saveState, isNewComment, getCommentsByStatus } from "./state
 import { fetchNewComments } from "./poller.js";
 import { notifyNewComments } from "./notifier.js";
 import { analyzeComments, killAllChildren } from "./actioner.js";
-import { cleanupAllWorktrees } from "./worktree.js";
+import { cleanupAllWorktrees, pruneOrphanedWorktrees } from "./worktree.js";
+import { setTokenResolver } from "./exec.js";
 import {
   enableRawMode,
   registerHotkeys,
@@ -68,7 +69,7 @@ if (flags.demo) {
   startDemoServer(demoPort);
   console.log(`\nCode Triage demo running at http://localhost:${demoPort}\n`);
   if (flags.open) {
-    try { execSync(`open "http://localhost:${demoPort}"`, { stdio: "pipe" }); } catch {}
+    try { execSync(`open "http://localhost:${demoPort}"`, { stdio: "pipe" }); } catch { /* ignore */ }
   }
   // Keep process alive
   await new Promise(() => {});
@@ -115,9 +116,20 @@ async function runSetup(existing: Config): Promise<Config> {
   const intervalAnswer = await ask(`  Poll interval in minutes [${existing.interval}]: `);
   const interval = intervalAnswer ? parseInt(intervalAnswer, 10) : existing.interval;
 
+  // Optional: additional GitHub accounts (for multi-org support)
+  const accounts = existing.accounts ?? [];
+  const addAccount = await ask(`  Add a GitHub account for a different org? (y/N): `);
+  if (addAccount.toLowerCase() === "y") {
+    const name = await ask(`    Account name (e.g. work): `);
+    const token = await ask(`    Personal access token: `);
+    const orgs = await ask(`    Orgs (comma-separated, e.g. my-org,another-org): `);
+    accounts.push({ name, token, orgs: orgs.split(",").map((o) => o.trim()).filter(Boolean) });
+    console.log(`    Account '${name}' added for orgs: ${orgs}`);
+  }
+
   rl.close();
 
-  const config: Config = { root, port, interval };
+  const config: Config = { root, port, interval, ...(accounts.length ? { accounts } : {}) };
   saveConfig(config);
   console.log("\n  Config saved to ~/.code-triage/config.json\n");
   return config;
@@ -128,6 +140,23 @@ let config = loadConfig();
 // Run setup if --config flag or first run
 if (flags.config || !configExists()) {
   config = await runSetup(config);
+}
+
+// Install multi-account token resolver if accounts are configured
+if (config.accounts?.length) {
+  const { execFileSync: execSync2 } = await import("child_process");
+  let defaultToken: string | null = null;
+  setTokenResolver((repo?: string) => {
+    if (repo && config.accounts?.length) {
+      const owner = repo.split("/")[0];
+      const match = config.accounts.find((a) => a.orgs.includes(owner ?? ""));
+      if (match) return match.token;
+    }
+    if (!defaultToken) {
+      defaultToken = execSync2("gh", ["auth", "token"], { encoding: "utf-8", timeout: 5000 }).trim();
+    }
+    return defaultToken;
+  });
 }
 
 // CLI flags override config
@@ -174,6 +203,15 @@ console.log(`  Dry run: ${dryRun}`);
 console.log(`  WebUI: http://localhost:${port}\n`);
 
 startServer(port, repos);
+
+// Prune any orphaned worktrees from previous crashed sessions
+{
+  const state = loadState();
+  const activeJobs = state.fixJobs ?? [];
+  for (const r of repos) {
+    if (r.localPath) pruneOrphanedWorktrees(r.localPath, activeJobs);
+  }
+}
 
 let running = false;
 let shuttingDown = false;

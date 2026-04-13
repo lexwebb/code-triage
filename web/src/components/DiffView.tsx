@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import hljs from "highlight.js";
 import "highlight.js/styles/github-dark.min.css";
 import type { ReviewComment } from "../types";
@@ -191,42 +191,50 @@ export default function DiffView({ patch, filename, comments, repo, prNumber, co
             const isCommenting = commentingLine?.line === lineNum && commentingLine?.side === side;
 
             return (
-              <tr key={i} className={`${bgClass} group`}>
-                <td
-                  className="w-12 text-right pr-2 text-gray-600 select-none align-top cursor-pointer hover:text-blue-400 relative"
-                  onClick={() => line.oldLine ? setCommentingLine({ line: line.oldLine, side: "LEFT" }) : undefined}
-                >
-                  {line.oldLine ?? ""}
-                  {line.oldLine && (
-                    <span className="absolute left-0 top-0 opacity-0 group-hover:opacity-100 text-blue-400 text-xs">+</span>
-                  )}
-                </td>
-                <td
-                  className="w-12 text-right pr-2 text-gray-600 select-none align-top cursor-pointer hover:text-blue-400 relative"
-                  onClick={() => line.newLine ? setCommentingLine({ line: line.newLine, side: "RIGHT" }) : undefined}
-                >
-                  {line.newLine ?? ""}
-                  {line.newLine && (
-                    <span className="absolute left-0 top-0 opacity-0 group-hover:opacity-100 text-blue-400 text-xs">+</span>
-                  )}
-                </td>
-                <td className={`pl-4 pr-4 whitespace-pre ${textClass}`}>
-                  <span className="select-none text-gray-600 mr-2">{prefix}</span>
-                  <code data-highlight className={language ? `language-${language}` : ""}>
-                    {line.content}
-                  </code>
-                  {lineComments.map((comment) => (
-                    <Comment key={comment.id} comment={comment} />
-                  ))}
-                  {isCommenting && (
-                    <InlineCommentBox
-                      onSubmit={handleSubmitComment}
-                      onCancel={() => setCommentingLine(null)}
-                      submitting={submitting}
-                    />
-                  )}
-                </td>
-              </tr>
+              <Fragment key={i}>
+                <tr className={`${bgClass} group`}>
+                  <td
+                    className="w-12 text-right pr-2 text-gray-600 select-none align-top cursor-pointer relative"
+                    onClick={() => line.oldLine ? setCommentingLine({ line: line.oldLine, side: "LEFT" }) : undefined}
+                    title={line.oldLine ? "Click to comment on this line" : undefined}
+                  >
+                    {line.oldLine ?? ""}
+                    {line.oldLine && (
+                      <span className="absolute left-0 top-0 text-blue-500/40 group-hover:text-blue-400 text-xs transition-colors">+</span>
+                    )}
+                  </td>
+                  <td
+                    className="w-12 text-right pr-2 text-gray-600 select-none align-top cursor-pointer relative"
+                    onClick={() => line.newLine ? setCommentingLine({ line: line.newLine, side: "RIGHT" }) : undefined}
+                    title={line.newLine ? "Click to comment on this line" : undefined}
+                  >
+                    {line.newLine ?? ""}
+                    {line.newLine && (
+                      <span className="absolute left-0 top-0 text-blue-500/40 group-hover:text-blue-400 text-xs transition-colors">+</span>
+                    )}
+                  </td>
+                  <td className={`pl-4 pr-4 whitespace-pre ${textClass}`}>
+                    <span className="select-none text-gray-600 mr-2">{prefix}</span>
+                    <code data-highlight className={language ? `language-${language}` : ""}>
+                      {line.content}
+                    </code>
+                    {lineComments.map((comment) => (
+                      <Comment key={comment.id} comment={comment} />
+                    ))}
+                  </td>
+                </tr>
+                {isCommenting && (
+                  <tr>
+                    <td colSpan={3} className="p-0">
+                      <InlineCommentBox
+                        onSubmit={handleSubmitComment}
+                        onCancel={() => setCommentingLine(null)}
+                        submitting={submitting}
+                      />
+                    </td>
+                  </tr>
+                )}
+              </Fragment>
             );
           })}
         </tbody>

@@ -104,17 +104,34 @@ function JobModal({ job, onClose, onJobAction }: { job: FixJobStatus; onClose: (
 
         {/* Diff */}
         {job.status === "completed" && job.diff && (
-          <div className="flex-1 overflow-y-auto px-4 py-3">
-            <div className="text-xs text-gray-500 mb-1">Proposed Changes</div>
-            <pre className="p-2 text-xs overflow-x-auto bg-gray-800 rounded font-mono border border-gray-700">
+          <div className="flex-1 overflow-y-auto px-4 py-3 min-h-0">
+            <div className="text-xs text-gray-500 mb-1 flex items-center justify-between">
+              <span>Proposed Changes</span>
+              <button
+                onClick={() => navigator.clipboard.writeText(job.diff!)}
+                className="text-xs text-gray-600 hover:text-gray-400 transition-colors"
+                title="Copy diff to clipboard"
+              >
+                Copy
+              </button>
+            </div>
+            <div className="text-xs overflow-x-auto bg-gray-800 rounded font-mono border border-gray-700">
               {job.diff.split("\n").map((line, i) => {
-                let cls = "text-gray-400";
-                if (line.startsWith("+") && !line.startsWith("+++")) cls = "text-green-400";
-                else if (line.startsWith("-") && !line.startsWith("---")) cls = "text-red-400";
-                else if (line.startsWith("@@")) cls = "text-blue-400";
-                return <div key={i} className={cls}>{line}</div>;
+                if (line.startsWith("diff --git") || line.startsWith("index ") || line.startsWith("--- ") || line.startsWith("+++ ")) {
+                  return <div key={i} className="px-2 py-0.5 text-gray-500 bg-gray-850 border-b border-gray-700/50">{line}</div>;
+                }
+                if (line.startsWith("@@")) {
+                  return <div key={i} className="px-2 py-0.5 text-blue-400 bg-blue-500/5 border-b border-gray-700/30">{line}</div>;
+                }
+                if (line.startsWith("+")) {
+                  return <div key={i} className="px-2 py-0.5 text-green-400 bg-green-500/10">{line}</div>;
+                }
+                if (line.startsWith("-")) {
+                  return <div key={i} className="px-2 py-0.5 text-red-400 bg-red-500/10">{line}</div>;
+                }
+                return <div key={i} className="px-2 py-0.5 text-gray-400">{line}</div>;
               })}
-            </pre>
+            </div>
           </div>
         )}
 
@@ -156,7 +173,28 @@ function JobModal({ job, onClose, onJobAction }: { job: FixJobStatus; onClose: (
         )}
 
         {job.status === "failed" && (
-          <div className="px-4 py-3 border-t border-gray-800 flex items-center justify-end">
+          <div className="px-4 py-3 border-t border-gray-800 flex items-center justify-end gap-2">
+            {job.originalComment && job.branch && (
+              <button
+                onClick={async () => {
+                  if (!job.branch || !job.originalComment) return;
+                  setActing(true);
+                  try {
+                    await api.fixWithClaude(job.repo, job.commentId, job.prNumber, job.branch, job.originalComment);
+                    onJobAction();
+                    onClose();
+                  } catch (err) {
+                    console.error("Retry failed:", err);
+                  } finally {
+                    setActing(false);
+                  }
+                }}
+                disabled={acting}
+                className="text-xs px-4 py-1.5 bg-orange-600 hover:bg-orange-500 disabled:bg-orange-800 disabled:text-gray-400 text-white rounded transition-colors"
+              >
+                {acting ? "Retrying..." : "Retry Fix"}
+              </button>
+            )}
             <button
               onClick={onClose}
               className="text-xs px-4 py-1.5 bg-gray-700 hover:bg-gray-600 text-gray-300 rounded transition-colors"

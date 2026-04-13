@@ -94,6 +94,19 @@ function ThreadItem({ thread, onSelectFile, repo, prNumber, branch, fixBlocked, 
   // Fix with Claude state
   const [fixing, setFixing] = useState(false);
   const [fixError, setFixError] = useState<string | null>(null);
+  const [reEvaluating, setReEvaluating] = useState(false);
+
+  async function handleReEvaluate() {
+    setReEvaluating(true);
+    try {
+      await api.reEvaluate(repo, thread.root.id, prNumber);
+      onCommentAction();
+    } catch (err) {
+      console.error("Re-evaluate failed:", err);
+    } finally {
+      setReEvaluating(false);
+    }
+  }
 
   async function handleAction(action: "reply" | "resolve" | "dismiss") {
     setActing(true);
@@ -126,6 +139,12 @@ function ThreadItem({ thread, onSelectFile, repo, prNumber, branch, fixBlocked, 
       startedAt: Date.now(),
       status: "running",
       branch,
+      originalComment: {
+        path: thread.root.path,
+        line: thread.root.line,
+        body: thread.root.body,
+        diffHunk: thread.root.diffHunk,
+      },
     });
 
     try {
@@ -235,6 +254,14 @@ function ThreadItem({ thread, onSelectFile, repo, prNumber, branch, fixBlocked, 
               >
                 Dismiss
               </button>
+              <button
+                onClick={handleReEvaluate}
+                disabled={acting || fixing || reEvaluating}
+                className="text-xs px-3 py-1 bg-gray-700 hover:bg-gray-600 disabled:bg-gray-800 disabled:text-gray-400 text-gray-400 rounded transition-colors ml-auto"
+                title="Re-run Claude evaluation on this comment"
+              >
+                {reEvaluating ? "Evaluating..." : "Re-evaluate"}
+              </button>
             </div>
           )}
         </div>
@@ -245,13 +272,66 @@ function ThreadItem({ thread, onSelectFile, repo, prNumber, branch, fixBlocked, 
 
 export default function CommentThreads({ comments, onSelectFile, repo, prNumber, branch, fixJobs, onCommentAction, onFixStarted }: CommentThreadsProps) {
   const [collapsed, setCollapsed] = useState(false);
-  const threads = buildThreads(comments);
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [batching, setBatching] = useState(false);
+  const [filterText, setFilterText] = useState("");
+  const [filterAction, setFilterAction] = useState<"all" | "fix" | "reply" | "resolve">("all");
+  const allThreads = buildThreads(comments);
+
+  const threads = allThreads.filter((t) => {
+    if (filterText) {
+      const q = filterText.toLowerCase();
+      if (!t.root.path.toLowerCase().includes(q) && !t.root.body.toLowerCase().includes(q)) return false;
+    }
+    if (filterAction !== "all" && t.root.evaluation?.action !== filterAction) return false;
+    return true;
+  });
 
   if (threads.length === 0) return null;
 
   const openCount = threads.filter((t) => !t.isResolved).length;
   const resolvedCount = threads.filter((t) => t.isResolved).length;
   const hasRunningFix = fixJobs.some((j) => j.repo === repo && j.prNumber === prNumber && j.status === "running");
+
+  const actionableThreads = threads.filter((t) => !t.isResolved && !(t.root.crStatus === "replied" || t.root.crStatus === "dismissed" || t.root.crStatus === "fixed"));
+  const allSelected = actionableThreads.length > 0 && actionableThreads.every((t) => selected.has(t.root.id));
+
+  function toggleSelect(id: number) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) { next.delete(id); } else { next.add(id); }
+      return next;
+    });
+  }
+
+  function toggleSelectAll() {
+    if (allSelected) {
+      setSelected(new Set());
+    } else {
+      setSelected(new Set(actionableThreads.map((t) => t.root.id)));
+    }
+  }
+
+  async function handleBatchAction(action: "reply" | "resolve" | "dismiss") {
+    const items = threads
+      .filter((t) => selected.has(t.root.id))
+      .map((t) => ({ repo, commentId: t.root.id, prNumber }));
+    if (items.length === 0) return;
+    setBatching(true);
+    try {
+      await api.batchAction(action, items);
+      setSelected(new Set());
+      onCommentAction();
+    } catch (err) {
+      console.error("Batch action failed:", err);
+    } finally {
+      setBatching(false);
+    }
+  }
+
+  const filteredCount = threads.length;
+  const totalCount = allThreads.length;
+  const isFiltered = filterText !== "" || filterAction !== "all";
 
   return (
     <div className="border-b border-gray-800 flex-1 overflow-y-auto">
@@ -260,8 +340,8 @@ export default function CommentThreads({ comments, onSelectFile, repo, prNumber,
         className="w-full px-6 py-2 flex items-center justify-between text-xs text-gray-500 uppercase tracking-wide hover:bg-gray-800/30 sticky top-0 bg-gray-950 z-10"
       >
         <span>
-          Review Threads ({threads.length})
-          {resolvedCount > 0 && (
+          Review Threads ({isFiltered ? `${filteredCount} of ${totalCount}` : totalCount})
+          {resolvedCount > 0 && !isFiltered && (
             <span className="normal-case ml-2 text-gray-600">
               {openCount} open, {resolvedCount} resolved
             </span>
@@ -270,21 +350,91 @@ export default function CommentThreads({ comments, onSelectFile, repo, prNumber,
         <span className="text-gray-600">{collapsed ? "▶" : "▼"}</span>
       </button>
       {!collapsed && (
-        <div className="px-6 pb-3 space-y-3">
-          {threads.map((thread) => (
-            <ThreadItem
-              key={thread.root.id}
-              thread={thread}
-              onSelectFile={onSelectFile}
-              repo={repo}
-              prNumber={prNumber}
-              branch={branch}
-              fixBlocked={hasRunningFix}
-              onCommentAction={onCommentAction}
-              onFixStarted={onFixStarted}
+        <>
+          {/* Search/filter bar */}
+          <div className="px-6 py-1.5 flex items-center gap-2 border-b border-gray-800/50 bg-gray-900/20">
+            <input
+              type="text"
+              value={filterText}
+              onChange={(e) => setFilterText(e.target.value)}
+              placeholder="Filter by file or text..."
+              className="flex-1 text-xs bg-gray-800 border border-gray-700 rounded px-2 py-1 text-gray-300 placeholder-gray-600 focus:outline-none focus:border-gray-500"
             />
-          ))}
-        </div>
+            {(["all", "fix", "reply", "resolve"] as const).map((a) => (
+              <button
+                key={a}
+                onClick={() => setFilterAction(a)}
+                className={`text-xs px-2 py-0.5 rounded transition-colors ${
+                  filterAction === a
+                    ? a === "fix" ? "bg-orange-500/30 text-orange-300"
+                      : a === "reply" ? "bg-blue-500/30 text-blue-300"
+                      : a === "resolve" ? "bg-green-500/30 text-green-300"
+                      : "bg-gray-600 text-gray-200"
+                    : "bg-gray-800 text-gray-500 hover:text-gray-300"
+                }`}
+              >
+                {a === "all" ? "All" : a.charAt(0).toUpperCase() + a.slice(1)}
+              </button>
+            ))}
+          </div>
+          {/* Bulk action toolbar */}
+          {actionableThreads.length > 0 && (
+            <div className="px-6 py-1.5 flex items-center gap-3 border-b border-gray-800/50 bg-gray-900/30">
+              <input
+                type="checkbox"
+                checked={allSelected}
+                onChange={toggleSelectAll}
+                className="rounded border-gray-600 bg-gray-800 text-blue-500 cursor-pointer"
+                title="Select all"
+              />
+              {selected.size > 0 ? (
+                <>
+                  <span className="text-xs text-gray-400">{selected.size} selected</span>
+                  <button onClick={() => handleBatchAction("dismiss")} disabled={batching} className="text-xs px-2 py-0.5 bg-gray-700 hover:bg-gray-600 text-gray-300 rounded disabled:opacity-50">
+                    Dismiss all
+                  </button>
+                  <button onClick={() => handleBatchAction("resolve")} disabled={batching} className="text-xs px-2 py-0.5 bg-green-700/60 hover:bg-green-600/60 text-green-300 rounded disabled:opacity-50">
+                    Resolve all
+                  </button>
+                  <button onClick={() => handleBatchAction("reply")} disabled={batching} className="text-xs px-2 py-0.5 bg-blue-700/60 hover:bg-blue-600/60 text-blue-300 rounded disabled:opacity-50">
+                    Reply all
+                  </button>
+                </>
+              ) : (
+                <span className="text-xs text-gray-600">Select threads for bulk actions</span>
+              )}
+            </div>
+          )}
+          <div className="px-6 pb-3 space-y-3 pt-3">
+            {threads.map((thread) => {
+              const isActionable = actionableThreads.some((t) => t.root.id === thread.root.id);
+              return (
+                <div key={thread.root.id} className="flex items-start gap-2">
+                  {isActionable && (
+                    <input
+                      type="checkbox"
+                      checked={selected.has(thread.root.id)}
+                      onChange={() => toggleSelect(thread.root.id)}
+                      className="mt-2 rounded border-gray-600 bg-gray-800 text-blue-500 cursor-pointer shrink-0"
+                    />
+                  )}
+                  <div className={isActionable ? "flex-1 min-w-0" : "flex-1 min-w-0 pl-5"}>
+                    <ThreadItem
+                      thread={thread}
+                      onSelectFile={onSelectFile}
+                      repo={repo}
+                      prNumber={prNumber}
+                      branch={branch}
+                      fixBlocked={hasRunningFix}
+                      onCommentAction={onCommentAction}
+                      onFixStarted={onFixStarted}
+                    />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </>
       )}
     </div>
   );

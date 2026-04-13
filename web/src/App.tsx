@@ -198,7 +198,7 @@ export default function App() {
     api.getUser().then((u) => setCurrentUser(u.login)).catch(() => {});
   }, []);
 
-  // Initial load: use cache or fetch
+  // Initial load: use cache or fetch — runs once on mount only
   useEffect(() => {
     const cached = loadCache<PullRequest[]>(CACHE_KEY_PULLS);
     if (cached && cached.length > 0) {
@@ -209,6 +209,7 @@ export default function App() {
     } else {
       fetchPulls(true);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Track previous fix job states for notifications
@@ -301,6 +302,8 @@ export default function App() {
     }
     loadPR();
     return () => { cancelled = true; };
+    // selectedFile intentionally excluded: only re-run when the PR changes, not on file tab switch
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedPR?.number, selectedPR?.repo]);
 
   function handleSelectPR(number: number, repo: string) {
@@ -476,7 +479,7 @@ export default function App() {
                 try {
                   const detail = await api.getPull(selectedPR.number, selectedPR.repo);
                   setPrDetail(detail);
-                } catch {}
+                } catch { /* ignore */ }
               }} />
               {/* Tab bar */}
               <div className="flex border-b border-gray-800 shrink-0">
