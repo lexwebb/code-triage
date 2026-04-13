@@ -146,23 +146,30 @@ export default function App() {
     }
   }, []);
 
-  // Poll backend status — refresh frontend data when backend has polled since our last fetch
+  // Poll backend status — wait for each request to finish before scheduling the next
   useEffect(() => {
-    const interval = setInterval(async () => {
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout>;
+
+    async function check() {
       try {
         const status = await api.getPollStatus();
-        // Update countdown from backend's next poll time
+        if (cancelled) return;
         const remaining = Math.max(0, status.nextPoll - Date.now());
         setCountdown(remaining);
         setRefreshing(status.polling);
 
-        // If backend has polled since our last fetch, refresh data
         if (status.lastPoll > lastFetchRef.current) {
           await fetchPulls();
         }
       } catch { /* backend not reachable */ }
-    }, BACKEND_POLL_INTERVAL);
-    return () => clearInterval(interval);
+      if (!cancelled) {
+        timer = setTimeout(check, BACKEND_POLL_INTERVAL);
+      }
+    }
+
+    timer = setTimeout(check, BACKEND_POLL_INTERVAL);
+    return () => { cancelled = true; clearTimeout(timer); };
   }, [fetchPulls]);
 
   // Load PR detail when selectedPR changes
