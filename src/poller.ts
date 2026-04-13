@@ -127,11 +127,19 @@ export async function fetchNewComments(
     const comments = ghApi<GhComment[]>(`/repos/${repoPath}/pulls/${pr.number}/comments`);
     const resolvedIds = getResolvedCommentIds(repoPath, pr.number);
 
-    const crComments = comments.filter(
-      (c) => c.user.login === "coderabbitai[bot]" && isNewComment(c.id) && !resolvedIds.has(c.id),
+    // Include all review comments except noise bots (deploy previews, coverage, etc.)
+    const IGNORED_BOTS = new Set([
+      "vercel[bot]", "netlify[bot]", "codecov[bot]", "codecov-commenter",
+      "sonarcloud[bot]", "sonarqube[bot]", "dependabot[bot]", "renovate[bot]",
+      "github-actions[bot]", "sentry-io[bot]", "changeset-bot[bot]",
+      "gitpod-io[bot]", "stale[bot]", "linear[bot]",
+    ]);
+
+    const relevantComments = comments.filter(
+      (c) => !IGNORED_BOTS.has(c.user.login) && isNewComment(c.id) && !resolvedIds.has(c.id),
     );
 
-    for (const comment of crComments) {
+    for (const comment of relevantComments) {
       allNewComments.push({
         id: comment.id,
         prNumber: pr.number,
