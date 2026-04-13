@@ -35,6 +35,7 @@ export default function App() {
   const initial = parseRoute();
 
   const [_repos, setRepos] = useState<RepoInfo[]>([]);
+  const [currentUser, setCurrentUser] = useState<string | null>(null);
   const [repoFilter, setRepoFilter] = useState("");
   const [pulls, setPulls] = useState<PullRequest[]>(() => loadCache(CACHE_KEY_PULLS) ?? []);
   const [reviewPulls, setReviewPulls] = useState<PullRequest[]>(() => loadCache(CACHE_KEY_REVIEW) ?? []);
@@ -126,9 +127,10 @@ export default function App() {
     return () => window.removeEventListener("popstate", onPopState);
   }, []);
 
-  // Load repos on mount
+  // Load repos and user on mount
   useEffect(() => {
     api.getRepos().then(setRepos).catch(() => {});
+    api.getUser().then((u) => setCurrentUser(u.login)).catch(() => {});
   }, []);
 
   // Initial load: use cache or fetch
@@ -312,7 +314,7 @@ export default function App() {
             </div>
           ) : prDetail ? (
             <>
-              <PRDetail pr={prDetail} onReviewSubmitted={async () => {
+              <PRDetail pr={prDetail} currentUser={currentUser} onReviewSubmitted={async () => {
                 if (!selectedPR) return;
                 try {
                   const detail = await api.getPull(selectedPR.number, selectedPR.repo);

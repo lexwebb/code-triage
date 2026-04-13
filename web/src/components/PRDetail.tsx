@@ -4,6 +4,7 @@ import { api } from "../api";
 
 interface PRDetailProps {
   pr: PullRequestDetail;
+  currentUser?: string | null;
   onReviewSubmitted?: () => void;
 }
 
@@ -42,7 +43,8 @@ function ReviewerBadge({ reviewer }: { reviewer: Reviewer }) {
   );
 }
 
-export default function PRDetail({ pr, onReviewSubmitted }: PRDetailProps) {
+export default function PRDetail({ pr, currentUser, onReviewSubmitted }: PRDetailProps) {
+  const isOwnPR = currentUser != null && pr.author === currentUser;
   const [submitting, setSubmitting] = useState(false);
   const [reviewError, setReviewError] = useState<string | null>(null);
 
@@ -77,20 +79,24 @@ export default function PRDetail({ pr, onReviewSubmitted }: PRDetailProps) {
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <button
-            onClick={() => handleReview("APPROVE")}
-            disabled={submitting}
-            className="text-xs px-3 py-1.5 bg-green-600 hover:bg-green-500 disabled:bg-green-800 disabled:text-gray-400 text-white rounded transition-colors"
-          >
-            {submitting ? "..." : "Approve"}
-          </button>
-          <button
-            onClick={() => handleReview("REQUEST_CHANGES")}
-            disabled={submitting}
-            className="text-xs px-3 py-1.5 bg-red-600/80 hover:bg-red-500/80 disabled:bg-red-800/50 disabled:text-gray-400 text-white rounded transition-colors"
-          >
-            Request Changes
-          </button>
+          {!isOwnPR && (
+            <>
+              <button
+                onClick={() => handleReview("APPROVE")}
+                disabled={submitting}
+                className="text-xs px-3 py-1.5 bg-green-600 hover:bg-green-500 disabled:bg-green-800 disabled:text-gray-400 text-white rounded transition-colors"
+              >
+                {submitting ? "..." : "Approve"}
+              </button>
+              <button
+                onClick={() => handleReview("REQUEST_CHANGES")}
+                disabled={submitting}
+                className="text-xs px-3 py-1.5 bg-red-600/80 hover:bg-red-500/80 disabled:bg-red-800/50 disabled:text-gray-400 text-white rounded transition-colors"
+              >
+                Request Changes
+              </button>
+            </>
+          )}
           <a
             href={pr.url}
             target="_blank"
