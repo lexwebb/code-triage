@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "./api";
 import type { PullRequest, PullRequestDetail, PullFile, ReviewComment, RepoInfo } from "./types";
+import { parseRoute, pushRoute, type RouteState } from "./router";
 import RepoSelector from "./components/RepoSelector";
 import PRList from "./components/PRList";
 import PRDetail from "./components/PRDetail";
@@ -14,18 +15,52 @@ interface SelectedPR {
 }
 
 export default function App() {
+  // Initialize state from URL
+  const initial = parseRoute();
+
   const [repos, setRepos] = useState<RepoInfo[]>([]);
-  const [selectedRepo, setSelectedRepo] = useState<string | null>(null);
+  const [selectedRepo, setSelectedRepo] = useState<string | null>(initial.repo);
   const [pulls, setPulls] = useState<PullRequest[]>([]);
-  const [selectedPR, setSelectedPR] = useState<SelectedPR | null>(null);
+  const [selectedPR, setSelectedPR] = useState<SelectedPR | null>(
+    initial.repo && initial.prNumber ? { repo: initial.repo, number: initial.prNumber } : null,
+  );
   const [commentCounts, setCommentCounts] = useState<Record<string, number>>({});
   const [prDetail, setPrDetail] = useState<PullRequestDetail | null>(null);
   const [prFiles, setPrFiles] = useState<PullFile[]>([]);
   const [prComments, setPrComments] = useState<ReviewComment[]>([]);
-  const [selectedFile, setSelectedFile] = useState<string | null>(null);
+  const [selectedFile, setSelectedFile] = useState<string | null>(initial.file);
   const [loadingPR, setLoadingPR] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  // Sync URL when state changes
+  useEffect(() => {
+    const state: RouteState = {
+      repo: selectedPR?.repo ?? selectedRepo,
+      prNumber: selectedPR?.number ?? null,
+      file: selectedFile,
+    };
+    pushRoute(state);
+  }, [selectedRepo, selectedPR?.number, selectedPR?.repo, selectedFile]);
+
+  // Handle browser back/forward
+  useEffect(() => {
+    function onPopState() {
+      const route = parseRoute();
+      setSelectedRepo(route.repo);
+      if (route.repo && route.prNumber) {
+        setSelectedPR({ repo: route.repo, number: route.prNumber });
+      } else {
+        setSelectedPR(null);
+        setPrDetail(null);
+        setPrFiles([]);
+        setPrComments([]);
+      }
+      setSelectedFile(route.file);
+    }
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, []);
 
   // Load repos on mount
   useEffect(() => {
@@ -56,6 +91,7 @@ export default function App() {
         if (cancelled) return;
         setCommentCounts(counts);
 
+        // Auto-select first PR only if nothing from URL
         if (pullData.length > 0 && !selectedPR) {
           setSelectedPR({ number: pullData[0].number, repo: pullData[0].repo });
         }
@@ -86,10 +122,13 @@ export default function App() {
         setPrDetail(detail);
         setPrFiles(files);
         setPrComments(comments);
-        const fileWithComments = files.find((f) =>
-          comments.some((c) => c.path === f.filename)
-        );
-        setSelectedFile(fileWithComments?.filename ?? files[0]?.filename ?? null);
+        // Only auto-select file if URL didn't specify one
+        if (!selectedFile) {
+          const fileWithComments = files.find((f) =>
+            comments.some((c) => c.path === f.filename)
+          );
+          setSelectedFile(fileWithComments?.filename ?? files[0]?.filename ?? null);
+        }
       } catch (err) {
         console.error("Failed to load PR:", err);
       } finally {
@@ -101,6 +140,7 @@ export default function App() {
   }, [selectedPR?.number, selectedPR?.repo]);
 
   function handleSelectPR(number: number, repo: string) {
+    setSelectedFile(null);
     setSelectedPR({ number, repo });
   }
 
