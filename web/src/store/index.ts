@@ -21,13 +21,6 @@ export const useAppStore = create<AppStore>()(
   })),
 );
 
-// Wire subscriptions: trigger notification diffing when pull data changes
-useAppStore.subscribe(
-  (s) => s.pullFetchGeneration,
-  () => {
-    void useAppStore.getState().diffAndNotify();
-  },
-);
 
 export { useAppStore as default };
 export type { AppStore } from "./types";

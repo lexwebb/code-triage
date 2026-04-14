@@ -203,25 +203,15 @@ export interface FixJobsSlice {
 export interface NotificationsSlice {
   mutedPRs: Set<string>;
   permission: NotificationPermission;
-  initialized: boolean;
-  commentBaselineReady: boolean;
-  _previousReviewPRKeys: Set<string>;
-  _previousCommentKeys: Set<string>;
-  _previousPendingKeys: Set<string>;
-  _previousChecksStatus: Map<string, string>;
-  _previousOpenComments: Map<string, number>;
-  _lastReviewReminder: number;
-  _reminderInterval: ReturnType<typeof setInterval> | null;
-  _permissionInterval: ReturnType<typeof setInterval> | null;
+  pushSubscribed: boolean;
 
-  initializeBaseline: () => Promise<void>;
-  diffAndNotify: () => Promise<void>;
+  subscribePush: () => Promise<void>;
+  unsubscribePush: () => Promise<void>;
   mutePR: (repo: string, number: number) => void;
   unmutePR: (repo: string, number: number) => void;
   isPRMuted: (repo: string, number: number) => boolean;
   requestPermission: () => Promise<void>;
-  testNotification: () => void;
-  startReminderInterval: () => () => void;
+  loadMutedPRs: () => Promise<void>;
   checkPermissionPeriodically: () => () => void;
 }
 
