@@ -17,6 +17,7 @@ import SettingsView from "./components/SettingsView";
 import KeyboardShortcutsModal from "./components/KeyboardShortcutsModal";
 import type { FixJobStatus, PollStatus } from "./api";
 import { useMediaQuery } from "./useMediaQuery";
+import { cn } from "./lib/utils";
 import { X, Menu, RefreshCw, Pause, Bell, ArrowRight, Minus, Settings, PanelLeftClose, PanelLeftOpen, HelpCircle } from "lucide-react";
 import { CollapsibleSection } from "./components/ui/collapsible-section";
 import { IconButton } from "./components/ui/icon-button";
@@ -657,13 +658,13 @@ export default function App() {
         )}
         {/* Sidebar */}
         <div
-          className={`
-            z-50 flex shrink-0 flex-col border-r border-gray-800 bg-gray-950 shadow-xl transition-[transform,width] duration-200 ease-out
-            max-md:absolute max-md:inset-y-0 max-md:left-0 max-md:w-72 max-md:max-w-[85vw]
-            md:relative md:z-auto md:shadow-none
-            ${!isWide && !mobileDrawerOpen ? "max-md:-translate-x-full" : "max-md:translate-x-0"}
-            ${isWide ? (sidebarCollapsed ? "md:w-0 md:min-w-0 md:overflow-hidden md:border-0 md:p-0" : "md:w-72") : ""}
-          `}
+          className={cn(
+            "z-50 flex shrink-0 flex-col border-r border-gray-800 bg-gray-950 shadow-xl transition-[transform,width] duration-200 ease-out",
+            "max-md:absolute max-md:inset-y-0 max-md:left-0 max-md:w-72 max-md:max-w-[85vw]",
+            "md:relative md:z-auto md:shadow-none",
+            !isWide && !mobileDrawerOpen ? "max-md:-translate-x-full" : "max-md:translate-x-0",
+            isWide && (sidebarCollapsed ? "md:w-0 md:min-w-0 md:overflow-hidden md:border-0 md:p-0" : "md:w-72"),
+          )}
         >
           <div className="px-4 py-2 border-b border-gray-800 flex items-center justify-between gap-2 min-w-0">
             <div className="flex items-center gap-2 min-w-0">
@@ -758,7 +759,7 @@ export default function App() {
                     </div>
                     <span className="w-full h-1.5 bg-gray-800 rounded-full overflow-hidden">
                       <span
-                        className={`h-full block rounded-full transition-all ${pct >= 0.8 ? "bg-red-500" : pct >= 0.6 ? "bg-orange-500" : "bg-green-500"}`}
+                        className={cn("h-full block rounded-full transition-all", pct >= 0.8 ? "bg-red-500" : pct >= 0.6 ? "bg-orange-500" : "bg-green-500")}
                         style={{ width: `${Math.round(pct * 100)}%` }}
                       />
                     </span>
@@ -866,19 +867,21 @@ export default function App() {
                     key={tab.id}
                     type="button"
                     onClick={() => setActiveTab(tab.id)}
-                    className={`px-5 py-2 text-sm transition-colors rounded-t focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 focus-visible:ring-offset-gray-950 ${
+                    className={cn(
+                      "px-5 py-2 text-sm transition-colors rounded-t focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 focus-visible:ring-offset-gray-950",
                       activeTab === tab.id
                         ? "text-white border-b-2 border-blue-500 -mb-px"
-                        : "text-gray-500 hover:text-gray-300"
-                    }`}
+                        : "text-gray-500 hover:text-gray-300",
+                    )}
                   >
                     <span className="flex items-center gap-1.5">
                       {tab.id === "checks" && prDetail?.checksSummary && (
-                        <span className={`inline-block w-2 h-2 rounded-full ${
+                        <span className={cn(
+                          "inline-block w-2 h-2 rounded-full",
                           prDetail.checksSummary.failure > 0 ? "bg-red-400" :
                           prDetail.checksSummary.pending > 0 ? "bg-yellow-400" :
-                          "bg-green-400"
-                        }`} />
+                          "bg-green-400",
+                        )} />
                       )}
                       {tab.label}
                     </span>

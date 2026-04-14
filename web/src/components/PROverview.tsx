@@ -1,4 +1,5 @@
 import ReactMarkdown from "react-markdown";
+import { cn } from "../lib/utils";
 import remarkGfm from "remark-gfm";
 import rehypeRaw from "rehype-raw";
 import type { PullRequestDetail } from "../types";
@@ -19,7 +20,7 @@ export default function PROverview({ pr }: PROverviewProps) {
             ),
             code: ({ children, className, ...props }) => {
               const isBlock = className?.startsWith("language-");
-              if (isBlock) return <code className={`${className ?? ""} text-sm`} {...props}>{children}</code>;
+              if (isBlock) return <code className={cn(className, "text-sm")} {...props}>{children}</code>;
               return <code className="bg-gray-800 px-1 py-0.5 rounded text-pink-300 text-sm" {...props}>{children}</code>;
             },
             pre: ({ children, ...props }) => (

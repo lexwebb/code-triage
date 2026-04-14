@@ -1,4 +1,5 @@
 import { Fragment, useEffect, useRef, useState } from "react";
+import { cn } from "../lib/utils";
 import hljs from "highlight.js";
 import "highlight.js/styles/github-dark.min.css";
 import type { ReviewComment } from "../types";
@@ -189,7 +190,7 @@ export default function DiffView({ patch, filename, comments, repo, prNumber, co
 
             return (
               <Fragment key={i}>
-                <tr className={`${bgClass} group`}>
+                <tr className={cn(bgClass, "group")}>
                   <td
                     className="w-12 text-right pr-2 text-gray-600 select-none align-top cursor-pointer relative"
                     onClick={() => line.oldLine ? setCommentingLine({ line: line.oldLine, side: "LEFT" }) : undefined}
@@ -210,7 +211,7 @@ export default function DiffView({ patch, filename, comments, repo, prNumber, co
                       <span className="absolute left-0 top-0 text-blue-500/40 group-hover:text-blue-400 text-xs transition-colors">+</span>
                     )}
                   </td>
-                  <td className={`pl-4 pr-4 whitespace-pre ${textClass}`}>
+                  <td className={cn("pl-4 pr-4 whitespace-pre", textClass)}>
                     <span className="select-none text-gray-600 mr-2">{prefix}</span>
                     <code data-highlight className={language ? `language-${language}` : ""}>
                       {line.content}

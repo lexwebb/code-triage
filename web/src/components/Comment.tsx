@@ -1,4 +1,5 @@
 import { memo } from "react";
+import { cn } from "../lib/utils";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
@@ -17,14 +18,14 @@ const Comment = memo<CommentProps>(function Comment({ comment, compact }) {
   const timeAgo = getTimeAgo(comment.createdAt);
 
   return (
-    <div className={`${compact ? "my-1" : "my-2 ml-8"} border border-gray-700 rounded-lg bg-gray-900/80 overflow-hidden`}>
+    <div className={cn(compact ? "my-1" : "my-2 ml-8", "border border-gray-700 rounded-lg bg-gray-900/80 overflow-hidden")}>
       <div className="flex items-center gap-2 px-3 py-1.5 bg-gray-800/50 text-xs">
         <img
           src={comment.authorAvatar}
           alt={comment.author}
           className="w-4 h-4 rounded-full"
         />
-        <span className={`font-medium ${isBot ? "text-purple-400" : "text-gray-300"}`}>
+        <span className={cn("font-medium", isBot ? "text-purple-400" : "text-gray-300")}>
           {comment.author}
         </span>
         <span className="text-gray-500">{timeAgo}</span>
@@ -52,7 +53,7 @@ const Comment = memo<CommentProps>(function Comment({ comment, compact }) {
             code: ({ children, className, ...props }) => {
               const isBlock = className?.startsWith("hljs") || className?.startsWith("language-");
               if (isBlock) {
-                return <code className={`${className ?? ""} text-xs`} {...props}>{children}</code>;
+                return <code className={cn(className, "text-xs")} {...props}>{children}</code>;
               }
               return <code className="bg-gray-800 px-1 py-0.5 rounded text-pink-300 text-xs" {...props}>{children}</code>;
             },

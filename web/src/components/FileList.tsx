@@ -1,4 +1,5 @@
 import type { PullFile, ReviewComment } from "../types";
+import { cn } from "../lib/utils";
 import { MessageSquare } from "lucide-react";
 
 interface FileListProps {
@@ -24,9 +25,7 @@ export default function FileList({ files, selectedFile, onSelectFile, comments }
           <button
             key={file.filename}
             onClick={() => onSelectFile(file.filename)}
-            className={`w-full text-left px-6 py-1.5 text-sm hover:bg-gray-800/50 flex items-center justify-between ${
-              selectedFile === file.filename ? "bg-gray-800/70 text-white" : "text-gray-300"
-            }`}
+            className={cn("w-full text-left px-6 py-1.5 text-sm hover:bg-gray-800/50 flex items-center justify-between", selectedFile === file.filename ? "bg-gray-800/70 text-white" : "text-gray-300")}
           >
             <span className="font-mono text-xs truncate">{file.filename}</span>
             <span className="flex items-center gap-2 shrink-0 ml-2">

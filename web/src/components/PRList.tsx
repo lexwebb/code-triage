@@ -1,4 +1,5 @@
 import type { PullRequest } from "../types";
+import { cn } from "../lib/utils";
 import { Check, X, Circle } from "lucide-react";
 import { StatusBadge } from "./ui/status-badge";
 
@@ -68,7 +69,7 @@ export default function PRList({ pulls, selectedPR, onSelectPR, showRepo }: PRLi
             key={key}
             type="button"
             onClick={() => onSelectPR(pr.number, pr.repo)}
-            className={`text-left px-4 py-3 border-b border-gray-800 hover:bg-gray-800/50 transition-colors rounded-none focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-inset ${bgClass}`}
+            className={cn("text-left px-4 py-3 border-b border-gray-800 hover:bg-gray-800/50 transition-colors rounded-none focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-inset", bgClass)}
           >
             <div className="flex items-center justify-between">
               <span className="text-gray-500 text-xs font-mono">#{pr.number}</span>

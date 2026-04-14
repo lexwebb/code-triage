@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+import { cn } from "../lib/utils";
 import type { FixJobStatus } from "../api";
 import { api } from "../api";
 import { Clock, Check, X, HelpCircle } from "lucide-react";
@@ -117,11 +118,7 @@ function JobModal({ job, onClose, onJobAction }: { job: FixJobStatus; onClose: (
             <div className="text-xs text-gray-500 mb-1">Conversation</div>
             <div className="space-y-1.5 max-h-48 overflow-y-auto">
               {job.conversation.map((msg, i) => (
-                <div key={i} className={`text-xs p-2 rounded whitespace-pre-wrap ${
-                  msg.role === "claude"
-                    ? "bg-gray-800/60 text-gray-300 mr-8"
-                    : "bg-indigo-900/30 text-indigo-200 ml-8"
-                }`}>
+                <div key={i} className={cn("text-xs p-2 rounded whitespace-pre-wrap", msg.role === "claude" ? "bg-gray-800/60 text-gray-300 mr-8" : "bg-indigo-900/30 text-indigo-200 ml-8")}>
                   <span className="text-[10px] text-gray-500 block mb-0.5">
                     {msg.role === "claude" ? "Claude" : "You"}
                   </span>
@@ -289,7 +286,7 @@ function JobRow({ job, onSelect }: { job: FixJobStatus; onSelect: () => void }) 
       onClick={onSelect}
       className="w-full flex items-center gap-3 px-4 py-1.5 text-xs hover:bg-gray-800/50 transition-colors text-left"
     >
-      <span className={`flex items-center gap-1 ${statusColors[job.status] ?? "text-gray-400"}`}>
+      <span className={cn("flex items-center gap-1", statusColors[job.status] ?? "text-gray-400")}>
         {statusIcons[job.status] ?? null} {job.status}
       </span>
       <span className="text-gray-400 font-mono">{repoShort}#{job.prNumber}</span>

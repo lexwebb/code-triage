@@ -10,6 +10,7 @@ import { Button } from "./ui/button";
 import { StatusBadge } from "./ui/status-badge";
 import { Checkbox } from "./ui/checkbox";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "./ui/dialog";
+import { cn } from "../lib/utils";
 
 type ThreadKeyActions = {
   toggleExpand: () => void;
@@ -168,11 +169,7 @@ function FixConversation({ job, repo, onJobAction }: {
       <div className="text-[10px] uppercase tracking-wide text-indigo-400">Fix conversation</div>
       <div className="space-y-1.5 max-h-60 overflow-y-auto">
         {conversation.map((msg, i) => (
-          <div key={i} className={`text-xs p-2 rounded whitespace-pre-wrap ${
-            msg.role === "claude"
-              ? "bg-gray-800/60 text-gray-300 mr-8"
-              : "bg-indigo-900/30 text-indigo-200 ml-8"
-          }`}>
+          <div key={i} className={cn("text-xs p-2 rounded whitespace-pre-wrap", msg.role === "claude" ? "bg-gray-800/60 text-gray-300 mr-8" : "bg-indigo-900/30 text-indigo-200 ml-8")}>
             <span className="text-[10px] text-gray-500 block mb-0.5">
               {msg.role === "claude" ? "Claude" : "You"}
             </span>
@@ -372,11 +369,9 @@ function ThreadItem({ thread, onSelectFile, repo, prNumber, branch, fixBlocked, 
   return (
     <div
       ref={(el) => registerRowEl(thread.root.id, el)}
-      className={`rounded-lg ${isFocused ? "ring-2 ring-blue-500/70 ring-offset-2 ring-offset-gray-950" : ""}`}
+      className={cn("rounded-lg", isFocused && "ring-2 ring-blue-500/70 ring-offset-2 ring-offset-gray-950")}
     >
-      <div className={`border rounded-lg overflow-hidden ${
-        thread.isResolved || isActedOn ? "border-gray-800/50 opacity-70" : "border-gray-800"
-      }`}>
+      <div className={cn("border rounded-lg overflow-hidden", thread.isResolved || isActedOn ? "border-gray-800/50 opacity-70" : "border-gray-800")}>
       <button
         type="button"
         onClick={() => setExpanded(!expanded)}
@@ -824,14 +819,12 @@ export default function CommentThreads({ comments, onSelectFile, repo, prNumber,
               <button
                 key={a}
                 onClick={() => setFilterAction(a)}
-                className={`text-xs px-2 py-0.5 rounded transition-colors ${
-                  filterAction === a
+                className={cn("text-xs px-2 py-0.5 rounded transition-colors", filterAction === a
                     ? a === "fix" ? "bg-orange-500/30 text-orange-300"
                       : a === "reply" ? "bg-blue-500/30 text-blue-300"
                       : a === "resolve" ? "bg-green-500/30 text-green-300"
                       : "bg-gray-600 text-gray-200"
-                    : "bg-gray-800 text-gray-500 hover:text-gray-300"
-                }`}
+                    : "bg-gray-800 text-gray-500 hover:text-gray-300")}
               >
                 {a === "all" ? "All" : a.charAt(0).toUpperCase() + a.slice(1)}
               </button>

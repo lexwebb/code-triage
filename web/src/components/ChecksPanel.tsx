@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
+import { cn } from "../lib/utils";
 import type { CheckSuite, CheckRun, CheckAnnotation } from "../types";
 import { CollapsibleSection } from "./ui/collapsible-section";
 import {
@@ -64,7 +65,7 @@ function AnnotationLevelBadge({ level }: { level: CheckAnnotation["level"] }) {
     notice: "bg-blue-900/50 text-blue-300",
   };
   return (
-    <span className={`text-xs px-1.5 py-0.5 rounded ${styles[level]}`}>
+    <span className={cn("text-xs px-1.5 py-0.5 rounded", styles[level])}>
       {level}
     </span>
   );
@@ -116,7 +117,7 @@ function CheckRunRow({
         <RunStatusIcon run={run} />
         <button
           type="button"
-          className={`flex-1 text-left text-sm text-gray-200 ${hasAnnotations ? "cursor-pointer hover:text-white" : ""}`}
+          className={cn("flex-1 text-left text-sm text-gray-200", hasAnnotations ? "cursor-pointer hover:text-white" : "")}
           onClick={() => hasAnnotations && setExpanded(!expanded)}
           disabled={!hasAnnotations}
         >

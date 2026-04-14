@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from "react";
+import { cn } from "../lib/utils";
 import type { PullRequestDetail, Reviewer } from "../types";
 import { api } from "../api";
 import { isPRMuted, mutePR, unmutePR } from "../useNotifications";
@@ -37,7 +38,7 @@ function ReviewerBadge({ reviewer }: { reviewer: Reviewer }) {
 
   return (
     <div
-      className={`flex items-center gap-1.5 px-2 py-1 rounded border text-xs ${stateStyles[reviewer.state] ?? ""}`}
+      className={cn("flex items-center gap-1.5 px-2 py-1 rounded border text-xs", stateStyles[reviewer.state])}
       title={`${reviewer.login}: ${stateLabels[reviewer.state] ?? reviewer.state}`}
     >
       <img src={reviewer.avatar} alt={reviewer.login} className="w-4 h-4 rounded-full" />
