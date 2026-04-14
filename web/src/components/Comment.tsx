@@ -3,6 +3,7 @@ import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
 import rehypeRaw from "rehype-raw";
 import type { ReviewComment } from "../types";
+import { ExternalLink } from "lucide-react";
 
 interface CommentProps {
   comment: ReviewComment;
@@ -34,7 +35,7 @@ export default function Comment({ comment, compact }: CommentProps) {
             title="Open comment on GitHub"
             onClick={(e) => e.stopPropagation()}
           >
-            GitHub ↗
+            <span className="flex items-center gap-1">GitHub <ExternalLink size={11} /></span>
           </a>
         )}
       </div>

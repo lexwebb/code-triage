@@ -16,6 +16,7 @@ import SettingsView from "./components/SettingsView";
 import KeyboardShortcutsModal from "./components/KeyboardShortcutsModal";
 import type { FixJobStatus, PollStatus } from "./api";
 import { useMediaQuery } from "./useMediaQuery";
+import { ChevronRight, ChevronDown, X, Menu, RefreshCw, Pause, Bell, ArrowRight, Minus, Settings } from "lucide-react";
 
 /** Human-readable duration for rate-limit countdown (ticks down each second in the UI). */
 function formatDurationUntil(targetMs: number, nowMs: number): string {
@@ -49,7 +50,7 @@ function MutedReviewSection({ pulls, selectedPR, onSelectPR }: {
         className="w-full px-4 py-1.5 text-xs text-gray-600 uppercase tracking-wide border-y border-gray-800 bg-gray-900/20 flex items-center justify-between hover:bg-gray-800/30 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/60 focus-visible:ring-inset"
       >
         <span>Muted ({pulls.length})</span>
-        <span className="text-gray-700">{expanded ? "▼" : "▶"}</span>
+        <span className="text-gray-700">{expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}</span>
       </button>
       {expanded && (
         <div className="opacity-60">
@@ -607,14 +608,14 @@ export default function App() {
       {updateAvailable && (
         <div className="bg-yellow-600/80 px-4 py-2 flex items-center justify-between shrink-0">
           <span className="text-sm text-white">
-            A new version of Code Triage is available ({updateAvailable.behind} commit{updateAvailable.behind > 1 ? "s" : ""} behind, {updateAvailable.localSha} → {updateAvailable.remoteSha}).
+            A new version of Code Triage is available ({updateAvailable.behind} commit{updateAvailable.behind > 1 ? "s" : ""} behind, {updateAvailable.localSha} <ArrowRight size={12} className="inline" /> {updateAvailable.remoteSha}).
             Run <code className="bg-black/20 px-1 rounded">git pull && yarn build:all</code> to update.
           </span>
           <button
             onClick={() => setUpdateAvailable(null)}
             className="text-white/70 hover:text-white ml-4 text-lg"
           >
-            ✕
+            <X size={16} />
           </button>
         </div>
       )}
@@ -626,7 +627,7 @@ export default function App() {
             className="rounded px-2 py-1 text-gray-300 hover:bg-gray-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
             aria-label="Open pull request list"
           >
-            ☰
+            <Menu size={18} />
           </button>
           <span className="min-w-0 flex-1 truncate text-center text-xs font-semibold text-white">Code Triage</span>
           <span className="shrink-0 font-mono text-[10px] text-gray-600" title="Time until next backend poll">
@@ -687,7 +688,7 @@ export default function App() {
                 className="text-xs text-gray-500 hover:text-gray-300 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 rounded"
                 title="Settings"
               >
-                ⚙
+                <Settings size={14} />
               </button>
               <button
                 type="button"
@@ -710,7 +711,7 @@ export default function App() {
                 className="text-xs text-gray-500 hover:text-gray-300 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 rounded"
                 title={`Test notification (permission: ${notifPermission})`}
               >
-                🔔
+                <Bell size={14} />
               </button>
               <button
                 type="button"
@@ -719,7 +720,7 @@ export default function App() {
                 className="text-xs text-gray-500 hover:text-gray-300 disabled:text-gray-700 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 rounded"
                 title="Refresh lists and reset adaptive poll schedule (repo hot/cold)"
               >
-                {refreshing ? "↻" : "⟳"}
+                <RefreshCw size={14} className={refreshing ? "animate-spin" : ""} />
               </button>
             </div>
           </div>
@@ -730,7 +731,7 @@ export default function App() {
               <div className="flex items-center gap-1.5">
                 {pollMeta.polling && <span className="text-cyan-400/90">Polling…</span>}
                 {pollMeta.pollPaused && (
-                  <span className="text-orange-400/90" title={pollMeta.pollPausedReason ?? "Polling paused"}>⏸ Paused</span>
+                  <span className="text-orange-400/90 flex items-center gap-1" title={pollMeta.pollPausedReason ?? "Polling paused"}><Pause size={12} /> Paused</span>
                 )}
                 {!pollMeta.polling && !pollMeta.pollPaused && !pollMeta.rateLimited && !pollMeta.lastPollError && (
                   <span className="text-gray-600">Idle</span>
@@ -782,7 +783,7 @@ export default function App() {
                   </span>
                 </>
               ) : (
-                <span className="text-gray-700">—</span>
+                <span className="text-gray-700"><Minus size={12} /></span>
               )}
             </div>
           </div>

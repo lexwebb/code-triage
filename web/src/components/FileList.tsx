@@ -1,4 +1,5 @@
 import type { PullFile, ReviewComment } from "../types";
+import { MessageSquare } from "lucide-react";
 
 interface FileListProps {
   files: PullFile[];
@@ -30,8 +31,8 @@ export default function FileList({ files, selectedFile, onSelectFile, comments }
             <span className="font-mono text-xs truncate">{file.filename}</span>
             <span className="flex items-center gap-2 shrink-0 ml-2">
               {(commentsByFile[file.filename] ?? 0) > 0 && (
-                <span className="text-xs text-yellow-400">
-                  {commentsByFile[file.filename]} 💬
+                <span className="text-xs text-yellow-400 flex items-center gap-1">
+                  {commentsByFile[file.filename]} <MessageSquare size={12} />
                 </span>
               )}
               <span className="text-green-400 text-xs">+{file.additions}</span>

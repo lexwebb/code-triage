@@ -3,6 +3,7 @@ import type { ReviewComment } from "../types";
 import { api } from "../api";
 import type { FixJobStatus } from "../api";
 import Comment from "./Comment";
+import { Check, ChevronRight, ChevronDown } from "lucide-react";
 
 type ThreadKeyActions = {
   toggleExpand: () => void;
@@ -89,9 +90,9 @@ function EvalBadge({ action }: { action: string }) {
 }
 
 function StatusBadge({ status }: { status: string }) {
-  if (status === "replied") return <span className="text-xs text-green-400">Replied ✓</span>;
+  if (status === "replied") return <span className="text-xs text-green-400 flex items-center gap-1">Replied <Check size={12} /></span>;
   if (status === "dismissed") return <span className="text-xs text-gray-500">Dismissed</span>;
-  if (status === "fixed") return <span className="text-xs text-blue-400">Fixed ✓</span>;
+  if (status === "fixed") return <span className="text-xs text-blue-400 flex items-center gap-1">Fixed <Check size={12} /></span>;
   return null;
 }
 
@@ -279,7 +280,7 @@ function ThreadItem({ thread, onSelectFile, repo, prNumber, branch, fixBlocked, 
           {isActedOn && <StatusBadge status={status!} />}
           {!isActedOn && eval_ && <EvalBadge action={eval_.action} />}
           {thread.isResolved && <span className="text-green-500/70 text-xs font-sans">Resolved</span>}
-          <span className="text-gray-600 text-xs">{expanded ? "▼" : "▶"}</span>
+          <span className="text-gray-600 text-xs">{expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}</span>
         </span>
       </button>
       {expanded && (
@@ -373,7 +374,7 @@ function ThreadItem({ thread, onSelectFile, repo, prNumber, branch, fixBlocked, 
                 onClick={() => setShowSuggestion(!showSuggestion)}
                 className="text-xs text-gray-400 hover:text-gray-300 flex items-center gap-1"
               >
-                <span>{showSuggestion ? "▼" : "▶"}</span>
+                <span>{showSuggestion ? <ChevronDown size={14} /> : <ChevronRight size={14} />}</span>
                 <span>
                   {eval_.action === "fix" ? "Suggested fix" : "Suggested response"}
                   {eval_.summary && <span className="text-gray-600 ml-1">— {eval_.summary}</span>}
@@ -628,7 +629,7 @@ export default function CommentThreads({ comments, onSelectFile, repo, prNumber,
             </span>
           )}
         </span>
-        <span className="text-gray-600">{collapsed ? "▶" : "▼"}</span>
+        <span className="text-gray-600">{collapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}</span>
       </button>
       {!collapsed && (
         <>

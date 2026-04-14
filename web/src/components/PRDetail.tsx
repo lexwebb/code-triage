@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from "react";
 import type { PullRequestDetail, Reviewer } from "../types";
 import { api } from "../api";
 import { isPRMuted, mutePR, unmutePR } from "../useNotifications";
+import { Check, X, Clock, MessageSquare, Minus, Bell, BellOff, ArrowLeft, ExternalLink } from "lucide-react";
 
 interface PRDetailProps {
   pr: PullRequestDetail;
@@ -17,12 +18,12 @@ function ReviewerBadge({ reviewer }: { reviewer: Reviewer }) {
     COMMENTED: "border-gray-500/50 bg-gray-500/10",
     DISMISSED: "border-gray-500/50 bg-gray-500/10",
   };
-  const stateIcons: Record<string, string> = {
-    APPROVED: "✓",
-    CHANGES_REQUESTED: "✗",
-    PENDING: "⏳",
-    COMMENTED: "💬",
-    DISMISSED: "—",
+  const stateIcons: Record<string, React.ReactNode> = {
+    APPROVED: <Check size={12} />,
+    CHANGES_REQUESTED: <X size={12} />,
+    PENDING: <Clock size={12} />,
+    COMMENTED: <MessageSquare size={12} />,
+    DISMISSED: <Minus size={12} />,
   };
   const stateLabels: Record<string, string> = {
     APPROVED: "Approved",
@@ -39,7 +40,7 @@ function ReviewerBadge({ reviewer }: { reviewer: Reviewer }) {
     >
       <img src={reviewer.avatar} alt={reviewer.login} className="w-4 h-4 rounded-full" />
       <span className="text-gray-300">{reviewer.login}</span>
-      <span>{stateIcons[reviewer.state] ?? ""}</span>
+      {stateIcons[reviewer.state] ?? null}
     </div>
   );
 }
@@ -82,7 +83,7 @@ export default function PRDetail({ pr, currentUser, onReviewSubmitted }: PRDetai
           </h2>
           <div className="flex items-center gap-3 mt-1 text-sm text-gray-400">
             <span className="font-mono text-xs bg-gray-800 px-2 py-0.5 rounded">
-              {pr.branch} &larr; {pr.baseBranch}
+              {pr.branch} <ArrowLeft size={12} className="inline" /> {pr.baseBranch}
             </span>
             <span className="text-green-400">+{pr.additions}</span>
             <span className="text-red-400">-{pr.deletions}</span>
@@ -121,7 +122,7 @@ export default function PRDetail({ pr, currentUser, onReviewSubmitted }: PRDetai
             }`}
             title={muted ? "Unmute notifications for this PR" : "Mute notifications for this PR"}
           >
-            {muted ? "🔕" : "🔔"}
+            {muted ? <BellOff size={14} /> : <Bell size={14} />}
           </button>
           <a
             href={pr.url}
@@ -129,7 +130,7 @@ export default function PRDetail({ pr, currentUser, onReviewSubmitted }: PRDetai
             rel="noopener noreferrer"
             className="text-xs text-blue-400 hover:text-blue-300 px-2 py-1.5 rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 focus-visible:ring-offset-gray-950"
           >
-            GitHub &rarr;
+            <span className="flex items-center gap-1">GitHub <ExternalLink size={12} /></span>
           </a>
         </div>
       </div>

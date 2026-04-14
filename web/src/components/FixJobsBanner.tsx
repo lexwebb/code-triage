@@ -1,6 +1,7 @@
-import { useState } from "react";
+import React, { useState } from "react";
 import type { FixJobStatus } from "../api";
 import { api } from "../api";
+import { Clock, Check, X } from "lucide-react";
 
 interface FixJobsBannerProps {
   fixJobs: FixJobStatus[];
@@ -65,7 +66,7 @@ function JobModal({ job, onClose, onJobAction }: { job: FixJobStatus; onClose: (
             <h3 className="text-sm font-semibold text-white">Fix Job Details</h3>
             <span className="text-xs text-gray-500">{repoShort}#{job.prNumber} — {job.path}</span>
           </div>
-          <button onClick={onClose} className="text-gray-500 hover:text-gray-300 text-lg px-2">✕</button>
+          <button onClick={onClose} className="text-gray-500 hover:text-gray-300 px-2"><X size={16} /></button>
         </div>
 
         {/* Info */}
@@ -216,10 +217,10 @@ function JobRow({ job, onSelect }: { job: FixJobStatus; onSelect: () => void }) 
     completed: "text-green-400",
     failed: "text-red-400",
   };
-  const statusIcons: Record<string, string> = {
-    running: "⏳",
-    completed: "✓",
-    failed: "✗",
+  const statusIcons: Record<string, React.ReactNode> = {
+    running: <Clock size={12} />,
+    completed: <Check size={12} />,
+    failed: <X size={12} />,
   };
 
   return (
@@ -227,8 +228,8 @@ function JobRow({ job, onSelect }: { job: FixJobStatus; onSelect: () => void }) 
       onClick={onSelect}
       className="w-full flex items-center gap-3 px-4 py-1.5 text-xs hover:bg-gray-800/50 transition-colors text-left"
     >
-      <span className={statusColors[job.status] ?? "text-gray-400"}>
-        {statusIcons[job.status] ?? "?"} {job.status}
+      <span className={`flex items-center gap-1 ${statusColors[job.status] ?? "text-gray-400"}`}>
+        {statusIcons[job.status] ?? null} {job.status}
       </span>
       <span className="text-gray-400 font-mono">{repoShort}#{job.prNumber}</span>
       <span className="text-gray-500 truncate flex-1">{job.path}</span>

@@ -1,4 +1,5 @@
 import type { PullRequest } from "../types";
+import { Check, X, Circle } from "lucide-react";
 
 interface PRListProps {
   pulls: PullRequest[];
@@ -19,23 +20,23 @@ function StatusIcon({ pr }: { pr: PullRequest }) {
   return (
     <span className="flex items-center gap-1">
       {mergeReady && (
-        <span className="bg-green-500/15 text-green-400 text-xs px-1.5 py-0.5 rounded-full" title="Ready to merge">
-          ✓ merge
+        <span className="bg-green-500/15 text-green-400 text-xs px-1.5 py-0.5 rounded-full flex items-center gap-1" title="Ready to merge">
+          <Check size={12} /> merge
         </span>
       )}
       {failed && (
-        <span className="bg-red-500/15 text-red-400 text-xs px-1.5 py-0.5 rounded-full" title="CI checks failed">
-          ✗ CI
+        <span className="bg-red-500/15 text-red-400 text-xs px-1.5 py-0.5 rounded-full flex items-center gap-1" title="CI checks failed">
+          <X size={12} /> CI
         </span>
       )}
       {pending && (
-        <span className="bg-yellow-500/15 text-yellow-400 text-xs px-1.5 py-0.5 rounded-full" title="CI checks running">
-          ● CI
+        <span className="bg-yellow-500/15 text-yellow-400 text-xs px-1.5 py-0.5 rounded-full flex items-center gap-1" title="CI checks running">
+          <Circle size={10} fill="currentColor" /> CI
         </span>
       )}
       {!mergeReady && pr.hasHumanApproval && (
-        <span className="bg-green-500/10 text-green-500 text-xs px-1.5 py-0.5 rounded-full" title="Approved">
-          ✓ approved
+        <span className="bg-green-500/10 text-green-500 text-xs px-1.5 py-0.5 rounded-full flex items-center gap-1" title="Approved">
+          <Check size={12} /> approved
         </span>
       )}
     </span>
