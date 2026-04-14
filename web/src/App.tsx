@@ -730,10 +730,13 @@ export default function App() {
                 const pct = used / pollMeta.rateLimitLimit;
                 return (
                   <div className="flex flex-col gap-0.5">
-                    <div className="flex items-center justify-between">
-                      <span className="text-gray-600">{pollMeta.rateLimitRemaining}/{pollMeta.rateLimitLimit}</span>
+                    <div className="flex items-center gap-1.5 text-gray-600">
+                      <span>{pollMeta.rateLimitRemaining}/{pollMeta.rateLimitLimit}</span>
                       {pollMeta.rateLimitResetAt && pct >= 0.5 && (
-                        <span className="text-gray-600">resets {formatDurationUntil(pollMeta.rateLimitResetAt, rateLimitNow)}</span>
+                        <span className="text-gray-600/60">·</span>
+                      )}
+                      {pollMeta.rateLimitResetAt && pct >= 0.5 && (
+                        <span>resets {formatDurationUntil(pollMeta.rateLimitResetAt, rateLimitNow)}</span>
                       )}
                     </div>
                     <span className="w-full h-1.5 bg-gray-800 rounded-full overflow-hidden">
