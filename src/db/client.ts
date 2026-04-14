@@ -64,6 +64,17 @@ function ensureSchema(raw: Database.Database): void {
       has_push INTEGER NOT NULL,
       checked_at INTEGER NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS eval_queue (
+      comment_key  TEXT PRIMARY KEY,
+      comment_id   INTEGER NOT NULL,
+      repo         TEXT NOT NULL,
+      pr_number    INTEGER NOT NULL,
+      comment_json TEXT NOT NULL,
+      status       TEXT NOT NULL DEFAULT 'queued',
+      attempts     INTEGER NOT NULL DEFAULT 0,
+      created_at   TEXT NOT NULL,
+      updated_at   TEXT NOT NULL
+    );
   `);
   raw.prepare("INSERT OR IGNORE INTO meta (id, last_poll) VALUES (1, NULL)").run();
   migrateCommentsColumns(raw);

@@ -185,6 +185,40 @@ export function patchCommentTriage(
   state.comments[key] = rec;
 }
 
+const ACTED_ON: Set<CommentStatus> = new Set(["replied", "dismissed", "fixed"]);
+
+export function needsEvaluation(state: CrWatchState, commentId: number, repo?: string): boolean {
+  const key = commentKey(commentId, repo);
+  const record = state.comments[key] ?? state.comments[String(commentId)];
+  if (!record) return true; // not in state at all
+  if (record.evaluation) return false; // already evaluated
+  if (record.status === "evaluating") return false; // in progress
+  if (ACTED_ON.has(record.status)) return false; // already handled
+  if (record.evalFailed) return false; // dead-lettered — needs manual re-evaluate
+  return true; // pending with no evaluation
+}
+
+export function markEvaluating(state: CrWatchState, commentId: number, prNumber: number, repo?: string): void {
+  const key = commentKey(commentId, repo);
+  const prev = state.comments[key];
+  state.comments[key] = {
+    status: "evaluating",
+    prNumber,
+    timestamp: new Date().toISOString(),
+    ...(repo ? { repo } : {}),
+    ...carryTriage(prev),
+  };
+}
+
+export function markEvalFailed(state: CrWatchState, commentId: number, repo?: string): void {
+  const key = commentKey(commentId, repo);
+  const prev = state.comments[key];
+  if (prev) {
+    prev.status = "pending";
+    prev.evalFailed = true;
+  }
+}
+
 export function isNewComment(state: CrWatchState, commentId: number, repo?: string): boolean {
   const prefixedKey = commentKey(commentId, repo);
   if (state.comments[prefixedKey]) return false;

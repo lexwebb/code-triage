@@ -3,7 +3,7 @@ import { tmpdir } from "os";
 import { join } from "path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { closeStateDatabase, getStateDir } from "./db/client.js";
-import { compactCommentHistory, isNewComment, loadState, markComment, markCommentWithEvaluation, patchCommentTriage, saveState } from "./state.js";
+import { compactCommentHistory, isNewComment, loadState, markComment, markCommentWithEvaluation, needsEvaluation, markEvaluating, markEvalFailed, patchCommentTriage, saveState } from "./state.js";
 
 let testRoot: string;
 
@@ -95,5 +95,62 @@ describe("state persistence", () => {
     expect(s.comments["o/r:99"]?.status).toBe("replied");
     expect(s.comments["o/r:99"]?.triageNote).toBe("later");
     expect(s.comments["o/r:99"]?.priority).toBe(2);
+  });
+});
+
+describe("evaluation state helpers", () => {
+  it("needsEvaluation returns true for comments without evaluation", () => {
+    const s = loadState();
+    expect(needsEvaluation(s, 100, "o/r")).toBe(true);
+    markComment(s, 100, "pending", 1, "o/r");
+    saveState(s);
+    expect(needsEvaluation(loadState(), 100, "o/r")).toBe(true);
+  });
+
+  it("needsEvaluation returns false for comments with evaluation", () => {
+    const s = loadState();
+    markCommentWithEvaluation(s, 200, "pending", 1, { action: "reply", summary: "ok", reply: "hi" }, "o/r");
+    saveState(s);
+    expect(needsEvaluation(loadState(), 200, "o/r")).toBe(false);
+  });
+
+  it("needsEvaluation returns false for evaluating status", () => {
+    const s = loadState();
+    markEvaluating(s, 300, 1, "o/r");
+    saveState(s);
+    expect(needsEvaluation(loadState(), 300, "o/r")).toBe(false);
+  });
+
+  it("needsEvaluation returns false for acted-on comments", () => {
+    const s = loadState();
+    markComment(s, 400, "replied", 1, "o/r");
+    saveState(s);
+    expect(needsEvaluation(loadState(), 400, "o/r")).toBe(false);
+  });
+
+  it("needsEvaluation returns false for dead-lettered (evalFailed) comments", () => {
+    const s = loadState();
+    markEvaluating(s, 700, 1, "o/r");
+    markEvalFailed(s, 700, "o/r");
+    saveState(s);
+    expect(needsEvaluation(loadState(), 700, "o/r")).toBe(false);
+  });
+
+  it("markEvaluating sets status to evaluating", () => {
+    const s = loadState();
+    markEvaluating(s, 500, 1, "o/r");
+    saveState(s);
+    const loaded = loadState();
+    expect(loaded.comments["o/r:500"]?.status).toBe("evaluating");
+  });
+
+  it("markEvalFailed sets evalFailed and pending status", () => {
+    const s = loadState();
+    markEvaluating(s, 600, 1, "o/r");
+    markEvalFailed(s, 600, "o/r");
+    saveState(s);
+    const loaded = loadState();
+    expect(loaded.comments["o/r:600"]?.status).toBe("pending");
+    expect(loaded.comments["o/r:600"]?.evalFailed).toBe(true);
   });
 });
