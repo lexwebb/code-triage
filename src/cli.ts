@@ -231,7 +231,13 @@ if (flags.repo) {
   }
 }
 
-repos = await filterReposToPushAccess(repos);
+// In dev mode, skip the push-access filter to avoid GitHub API calls on every hot reload
+const devStartup = process.env.NODE_ENV === "development" || process.env.npm_lifecycle_event === "dev";
+if (!devStartup) {
+  repos = await filterReposToPushAccess(repos);
+} else {
+  console.log(`  Dev mode: skipping push-access filter (${repos.length} repos)`);
+}
 if (repos.length === 0 && (flags.repo || configExists())) {
   console.error(
     "No GitHub repositories with push access. Remove read-only clones from your repos directory, or use a token with write access.",
@@ -569,5 +575,11 @@ registerHotkeys([
 ]);
 
 // Initial poll, then enter interactive mode
-await poll();
+// In dev mode, skip the initial poll to avoid burning GitHub API quota on every hot reload
+if (isDev) {
+  console.log("  Dev mode: skipping initial poll (press 'r' to poll manually)");
+  schedulePoll(repos.length);
+} else {
+  await poll();
+}
 enableRawMode();
