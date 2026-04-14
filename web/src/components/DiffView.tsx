@@ -29,6 +29,12 @@ import { Button } from "./ui/button";
 import Comment from "./Comment";
 import { useAppStore } from "../store";
 
+// Adapter: refractor v5 highlight() returns a Root node, but react-diff-view's
+// tokenizer expects highlight() to return an array of child nodes.
+const refractorAdapter = {
+  highlight: (code: string, language: string) => refractor.highlight(code, language).children,
+};
+
 // Register languages with refractor
 refractor.register(tsxLang);
 refractor.register(tsLang);
@@ -201,11 +207,11 @@ export default function DiffView() {
     try {
       tokens = tokenize(maybeHunks, {
         highlight: true,
-        refractor,
+        refractor: refractorAdapter,
         language,
       });
     } catch {
-      // Language not registered or tokenization failed
+      // Language not registered or tokenization failed — render without highlighting
     }
   }
 
