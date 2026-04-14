@@ -46,6 +46,7 @@ export const createPrDetailSlice: SliceCreator<PrDetailSlice> = (set, get) => ({
   commentingLine: null,
   commentBody: "",
   commentSubmitting: false,
+  diffViewType: "unified",
 
   // Checks
   checkSuites: null,
@@ -87,6 +88,7 @@ export const createPrDetailSlice: SliceCreator<PrDetailSlice> = (set, get) => ({
       commentingLine: null,
       commentBody: "",
       commentSubmitting: false,
+      diffViewType: "unified",
       // Reset checks
       checkSuites: null,
       checksError: null,
@@ -415,6 +417,8 @@ export const createPrDetailSlice: SliceCreator<PrDetailSlice> = (set, get) => ({
       set({ commentSubmitting: false });
     }
   },
+
+  setDiffViewType: (type) => set({ diffViewType: type }),
 
   // Checks actions
   fetchChecks: async (headSha) => {

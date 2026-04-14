@@ -88,6 +88,7 @@ export interface PrDetailSlice {
   commentingLine: { line: number; side: "LEFT" | "RIGHT" } | null;
   commentBody: string;
   commentSubmitting: boolean;
+  diffViewType: "unified" | "split";
 
   // Checks
   checkSuites: CheckSuite[] | null;
@@ -132,6 +133,7 @@ export interface PrDetailSlice {
   setCommentingLine: (line: { line: number; side: "LEFT" | "RIGHT" } | null) => void;
   setCommentBody: (body: string) => void;
   submitInlineComment: (commitId: string, filename: string) => Promise<void>;
+  setDiffViewType: (type: "unified" | "split") => void;
 
   // Checks actions
   fetchChecks: (headSha?: string) => Promise<void>;
