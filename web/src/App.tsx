@@ -422,6 +422,7 @@ export default function App() {
 
     if (status.lastPoll > lastFetchRef.current) {
       void fetchPulls();
+      void refreshPrDetailRef.current();
     }
   }, [fetchPulls]);
 
@@ -478,7 +479,7 @@ export default function App() {
           selectedPRRef.current?.repo === data.repo &&
           selectedPRRef.current?.number === data.prNumber
         ) {
-          void reloadCommentsRef.current();
+          void refreshPrDetailRef.current();
         }
       } catch { /* ignore */ }
     });
@@ -539,6 +540,20 @@ export default function App() {
     }
   }
   reloadCommentsRef.current = reloadComments;
+
+  /** Silently refresh PR detail + comments for the currently selected PR (e.g. after a backend poll). */
+  const refreshPrDetailRef = useRef<() => Promise<void>>(() => Promise.resolve());
+  refreshPrDetailRef.current = async () => {
+    if (!selectedPR) return;
+    try {
+      const [detail, comments] = await Promise.all([
+        api.getPull(selectedPR.number, selectedPR.repo),
+        api.getPullComments(selectedPR.number, selectedPR.repo),
+      ]);
+      setPrDetail(detail);
+      setPrComments(comments);
+    } catch { /* ignore — background refresh */ }
+  };
 
   useNotifications(pulls, reviewPulls, handleSelectPR, reloadComments, pullFetchGeneration);
 
