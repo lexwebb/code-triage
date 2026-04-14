@@ -125,7 +125,7 @@ function openTopLevelUnresolvedCount(
 }
 
 /** One pass per repo: single list of open PRs, then authored + review-requested rows (halves REST vs two endpoints). */
-async function buildPullSidebarLists(targetRepos: RepoInfo[]): Promise<{
+export async function buildPullSidebarLists(targetRepos: RepoInfo[]): Promise<{
   authored: Array<Record<string, unknown>>;
   reviewRequested: Array<Record<string, unknown>>;
   /** True when GET /user failed and we have no cached login (sidebar lists are empty). */

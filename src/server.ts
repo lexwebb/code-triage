@@ -1,4 +1,5 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "http";
+import { notifyFixJobComplete } from "./push.js";
 import { registerRoutes } from "./api.js";
 import { readFileSync, existsSync } from "fs";
 import { join, extname } from "path";
@@ -309,6 +310,16 @@ export function setFixJobStatus(job: FixJobStatus): void {
     claudeOutput: job.claudeOutput,
   });
   broadcastPollStatus();
+  if (job.status === "completed" || job.status === "failed") {
+    notifyFixJobComplete({
+      repo: job.repo,
+      prNumber: job.prNumber,
+      commentId: job.commentId,
+      path: job.path,
+      status: job.status,
+      error: job.error,
+    });
+  }
 }
 
 export function getActiveFixForBranch(branch: string): FixJobStatus | undefined {
