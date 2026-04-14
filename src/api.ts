@@ -1,4 +1,6 @@
 import { addRoute, json, getRepos, getBody, getPollState, getHealthPayload, setFixJobStatus, clearFixJobStatus, getActiveFixForBranch, getActiveFixForPR, subscribeSse, getListenPort, notifyConfigSaved, getFixJobStatus } from "./server.js";
+import { getVapidKeys } from "./vapid.js";
+import { savePushSubscription, deletePushSubscription, mutePR as dbMutePR, unmutePR as dbUnmutePR, getMutedPRs as dbGetMutedPRs } from "./push-db.js";
 import type { RepoInfo } from "./discovery.js";
 import { loadConfig, saveConfig, configExists, type Config } from "./config.js";
 import { loadState, markComment, patchCommentTriage, saveState, addFixJob as addFixJobState, removeFixJob as removeFixJobState, getFixJobs, getPendingTriageCountsByPr, needsEvaluation } from "./state.js";
@@ -1440,5 +1442,63 @@ export function registerRoutes(): void {
     } catch (err) {
       json(res, { error: `Comment failed: ${(err as Error).message}` }, 500);
     }
+  });
+
+  // ── Push notification endpoints ──
+
+  addRoute("GET", "/api/push/vapid-public-key", (_req, res) => {
+    const keys = getVapidKeys();
+    json(res, { publicKey: keys.publicKey });
+  });
+
+  addRoute("POST", "/api/push/subscribe", async (req, res) => {
+    const body = await getBody(req) as { endpoint?: string; keys?: { p256dh?: string; auth?: string } };
+    if (!body.endpoint || !body.keys?.p256dh || !body.keys?.auth) {
+      res.writeHead(400);
+      json(res, { error: "Missing endpoint or keys" });
+      return;
+    }
+    savePushSubscription({
+      endpoint: body.endpoint,
+      keys: { p256dh: body.keys.p256dh, auth: body.keys.auth },
+    });
+    json(res, { ok: true });
+  });
+
+  addRoute("DELETE", "/api/push/unsubscribe", async (req, res) => {
+    const body = await getBody(req) as { endpoint?: string };
+    if (!body.endpoint) {
+      res.writeHead(400);
+      json(res, { error: "Missing endpoint" });
+      return;
+    }
+    deletePushSubscription(body.endpoint);
+    json(res, { ok: true });
+  });
+
+  addRoute("POST", "/api/push/mute", async (req, res) => {
+    const body = await getBody(req) as { repo?: string; number?: number };
+    if (!body.repo || typeof body.number !== "number") {
+      res.writeHead(400);
+      json(res, { error: "Missing repo or number" });
+      return;
+    }
+    dbMutePR(body.repo, body.number);
+    json(res, { ok: true });
+  });
+
+  addRoute("DELETE", "/api/push/mute", async (req, res) => {
+    const body = await getBody(req) as { repo?: string; number?: number };
+    if (!body.repo || typeof body.number !== "number") {
+      res.writeHead(400);
+      json(res, { error: "Missing repo or number" });
+      return;
+    }
+    dbUnmutePR(body.repo, body.number);
+    json(res, { ok: true });
+  });
+
+  addRoute("GET", "/api/push/muted", (_req, res) => {
+    json(res, { muted: dbGetMutedPRs() });
   });
 }
