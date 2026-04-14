@@ -3,7 +3,6 @@ import { parseArgs } from "util";
 import { execSync, execFileSync } from "child_process";
 import { loadState, saveState, needsEvaluation, getCommentsByStatus, compactCommentHistory } from "./state.js";
 import { fetchNewComments, fetchNewCommentsBatch, getGitHubLogin } from "./poller.js";
-import { notifyNewComments } from "./notifier.js";
 import { clampEvalConcurrency, killAllChildren } from "./actioner.js";
 import { enqueueMany, recoverQueue, startWorker, stopWorker } from "./eval-queue.js";
 import { cleanupAllWorktrees, pruneOrphanedWorktrees } from "./worktree.js";
@@ -431,15 +430,13 @@ async function poll(): Promise<void> {
       for (const repoInfo of repos) {
         if (!reposToPoll.includes(repoInfo.repo)) continue;
         try {
-          const { comments, pullsByNumber } = batch.get(repoInfo.repo) ?? {
+          const { comments } = batch.get(repoInfo.repo) ?? {
             comments: [],
-            pullsByNumber: {},
           };
           const hadActivity = comments.length > 0;
           pollOutcomes.push({ repo: repoInfo.repo, hadActivity });
 
           if (comments.length > 0) {
-            notifyNewComments(comments, pullsByNumber);
             enqueueMany(comments, repoInfo.repo, state);
           }
         } catch (err) {
@@ -451,7 +448,7 @@ async function poll(): Promise<void> {
       for (const repoInfo of repos) {
         if (!reposToPoll.includes(repoInfo.repo)) continue;
         try {
-          const { comments, pullsByNumber } = await fetchNewComments(
+          const { comments } = await fetchNewComments(
             repoInfo.repo,
             (id) => needsEvaluation(state, id, repoInfo.repo),
             pollReviewRequested,
@@ -460,7 +457,6 @@ async function poll(): Promise<void> {
           const hadActivity = comments.length > 0;
           pollOutcomes.push({ repo: repoInfo.repo, hadActivity });
           if (comments.length > 0) {
-            notifyNewComments(comments, pullsByNumber);
             enqueueMany(comments, repoInfo.repo, state);
           }
         } catch (e2) {

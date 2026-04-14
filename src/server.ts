@@ -151,29 +151,9 @@ export function getClaudeStats() {
     totalFixesThisSession: claudeTotalFixesThisSession,
   };
 }
-let testNotificationPending = false;
-
-export function triggerTestNotification(): void {
-  testNotificationPending = true;
-  broadcastPollStatus({ peekTestNotification: true });
-}
-
-export function consumeTestNotification(): boolean {
-  if (testNotificationPending) {
-    testNotificationPending = false;
-    return true;
-  }
-  return false;
-}
-
 /** Push current poll/fix-job snapshot to all SSE clients (see `poll-status` event). */
-export function broadcastPollStatus(options?: { consumeTestNotification?: boolean; peekTestNotification?: boolean }): void {
-  sseBroadcast("poll-status", {
-    status: getPollState({
-      consumeTestNotification: options?.consumeTestNotification === true,
-      peekTestNotification: options?.peekTestNotification === true,
-    }),
-  });
+export function broadcastPollStatus(): void {
+  sseBroadcast("poll-status", { status: getPollState() });
 }
 
 export function updatePollState(state: {
@@ -241,7 +221,7 @@ export function subscribeSse(req: IncomingMessage, res: ServerResponse): void {
   res.write("\n");
 
   try {
-    const snapshot = getPollState({ consumeTestNotification: false });
+    const snapshot = getPollState();
     res.write(`event: poll-status\ndata: ${JSON.stringify({ status: snapshot })}\n\n`);
   } catch {
     /* connection may have closed immediately */
@@ -370,9 +350,7 @@ export interface HealthPayload {
   fixJobsRunning: number;
 }
 
-export function getPollState(options?: { consumeTestNotification?: boolean; peekTestNotification?: boolean }) {
-  const consume = options?.consumeTestNotification !== false;
-  const peek = options?.peekTestNotification === true;
+export function getPollState() {
   const rl = getRateLimitState();
   const eff = pollState.intervalMs;
   const perPoll = pollState.estimatedPollRequests ?? 0;
@@ -382,11 +360,6 @@ export function getPollState(options?: { consumeTestNotification?: boolean; peek
     ...pollState,
     estimatedGithubRequestsPerHour,
     fixJobs: Array.from(fixJobStatuses.values()),
-    testNotification: consume
-      ? consumeTestNotification()
-      : peek
-        ? testNotificationPending
-        : false,
     pollPaused: pollState.pollPaused ?? false,
     pollPausedReason: pollState.pollPausedReason ?? null,
     rateLimited: rl.limited,
@@ -401,7 +374,7 @@ export function getPollState(options?: { consumeTestNotification?: boolean; peek
 
 /** Snapshot for `GET /api/health` — does not consume the one-shot test-notification flag. */
 export function getHealthPayload(): HealthPayload {
-  const ps = getPollState({ consumeTestNotification: false });
+  const ps = getPollState();
   return {
     status: "ok",
     uptimeMs: Date.now() - serverStartedAt,

@@ -111,7 +111,6 @@ export interface PollStatus {
   pollPaused?: boolean;
   pollPausedReason?: string | null;
   fixJobs: FixJobStatus[];
-  testNotification: boolean;
   rateLimited?: boolean;
   rateLimitResetAt?: number | null;
   /** From GitHub `X-RateLimit-Remaining` / `X-RateLimit-Limit` when present. */
