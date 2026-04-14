@@ -1151,6 +1151,26 @@ export function registerRoutes(): void {
     json(res, { success: true });
   });
 
+  // POST /api/actions/fix-reply-and-resolve — post suggested reply and resolve the thread
+  addRoute("POST", "/api/actions/fix-reply-and-resolve", async (req, res) => {
+    const body = getBody<{ repo: string; commentId: number; prNumber: number; replyBody: string }>(req);
+
+    try {
+      await postReply(body.repo, body.prNumber, body.commentId, body.replyBody);
+      await resolveThread(body.repo, body.commentId, body.prNumber, undefined);
+    } catch (err) {
+      json(res, { error: `Reply failed: ${(err as Error).message}` }, 500);
+      return;
+    }
+
+    const state = loadState();
+    markComment(state, body.commentId, "replied", body.prNumber, body.repo);
+    saveState(state);
+    clearFixJobStatus(body.commentId);
+
+    json(res, { success: true });
+  });
+
   // POST /api/actions/fix-reply — respond to Claude's questions and resume the fix session
   addRoute("POST", "/api/actions/fix-reply", async (req, res) => {
     const body = getBody<{ repo: string; commentId: number; message: string }>(req);
