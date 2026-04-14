@@ -1,17 +1,10 @@
-import { useState, useRef, useEffect } from "react";
+import { useCallback } from "react";
 import { cn } from "../lib/utils";
-import type { PullRequestDetail, Reviewer } from "../types";
-import { api } from "../api";
-import { isPRMuted, mutePR, unmutePR } from "../useNotifications";
+import type { Reviewer } from "../types";
+import { useAppStore } from "../store";
 import { Check, X, Clock, MessageSquare, Minus, Bell, BellOff, ArrowLeft, ExternalLink } from "lucide-react";
 import { Switch } from "./ui/switch";
 import { Button } from "./ui/button";
-
-interface PRDetailProps {
-  pr: PullRequestDetail;
-  currentUser?: string | null;
-  onReviewSubmitted?: () => void;
-}
 
 function ReviewerBadge({ reviewer }: { reviewer: Reviewer }) {
   const stateStyles: Record<string, string> = {
@@ -48,32 +41,30 @@ function ReviewerBadge({ reviewer }: { reviewer: Reviewer }) {
   );
 }
 
-export default function PRDetail({ pr, currentUser, onReviewSubmitted }: PRDetailProps) {
-  const isOwnPR = currentUser != null && pr.author === currentUser;
-  const [submitting, setSubmitting] = useState(false);
-  const [reviewError, setReviewError] = useState<string | null>(null);
-  const [muted, setMuted] = useState(() => isPRMuted(pr.repo, pr.number));
-  const [showRequestChanges, setShowRequestChanges] = useState(false);
-  const [requestBody, setRequestBody] = useState("");
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
+export default function PRDetail() {
+  const pr = useAppStore((s) => s.detail);
+  const currentUser = useAppStore((s) => s.currentUser);
+  const submitting = useAppStore((s) => s.reviewSubmitting);
+  const reviewError = useAppStore((s) => s.reviewError);
+  const showRequestChanges = useAppStore((s) => s.showRequestChanges);
+  const requestBody = useAppStore((s) => s.reviewBody);
+  const submitReview = useAppStore((s) => s.submitReview);
+  const setShowRequestChanges = useAppStore((s) => s.setShowRequestChanges);
+  const setReviewBody = useAppStore((s) => s.setReviewBody);
+  const muted = useAppStore((s) => s.detail ? s.isPRMuted(s.detail.repo, s.detail.number) : false);
+  const mutePR = useAppStore((s) => s.mutePR);
+  const unmutePR = useAppStore((s) => s.unmutePR);
 
-  useEffect(() => {
-    if (showRequestChanges) textareaRef.current?.focus();
-  }, [showRequestChanges]);
+  const textareaRef = useCallback((node: HTMLTextAreaElement | null) => {
+    if (node) node.focus();
+  }, []);
+
+  if (!pr) return null;
+
+  const isOwnPR = currentUser != null && pr.author === currentUser;
 
   async function handleReview(event: "APPROVE" | "REQUEST_CHANGES" | "COMMENT", body?: string) {
-    setSubmitting(true);
-    setReviewError(null);
-    try {
-      await api.submitReview(pr.repo, pr.number, event, body);
-      setShowRequestChanges(false);
-      setRequestBody("");
-      onReviewSubmitted?.();
-    } catch (err) {
-      setReviewError((err as Error).message);
-    } finally {
-      setSubmitting(false);
-    }
+    await submitReview(event, body);
   }
 
   return (
@@ -118,8 +109,8 @@ export default function PRDetail({ pr, currentUser, onReviewSubmitted }: PRDetai
               size="sm"
               checked={!muted}
               onCheckedChange={(checked) => {
-                if (checked) { unmutePR(pr.repo, pr.number); setMuted(false); }
-                else { mutePR(pr.repo, pr.number); setMuted(true); }
+                if (checked) { unmutePR(pr.repo, pr.number); }
+                else { mutePR(pr.repo, pr.number); }
               }}
             />
           </label>
@@ -140,7 +131,7 @@ export default function PRDetail({ pr, currentUser, onReviewSubmitted }: PRDetai
           <textarea
             ref={textareaRef}
             value={requestBody}
-            onChange={(e) => setRequestBody(e.target.value)}
+            onChange={(e) => setReviewBody(e.target.value)}
             placeholder="Describe the changes you're requesting..."
             className="w-full bg-gray-800/50 text-sm text-gray-300 p-3 resize-none focus:outline-none min-h-[80px]"
             onKeyDown={(e) => {

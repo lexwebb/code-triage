@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
-import { api } from "../api";
+import { useAppStore } from "../store";
 import { cn } from "../lib/utils";
-import type { CheckSuite, CheckRun, CheckAnnotation } from "../types";
+import type { CheckRun, CheckAnnotation } from "../types";
 import { CollapsibleSection } from "./ui/collapsible-section";
 import {
   CheckCircle2,
@@ -150,45 +150,28 @@ function CheckRunRow({
   );
 }
 
-export default function ChecksPanel({
-  prNumber,
-  repo,
-  headSha,
-  onSelectFile,
-}: {
-  prNumber: number;
-  repo: string;
-  headSha?: string;
-  onSelectFile?: (file: string) => void;
-}) {
-  const [state, setState] = useState<{
-    key: string;
-    suites: CheckSuite[] | null;
-    error: string | null;
-  }>({ key: "", suites: null, error: null });
-
-  const fetchKey = `${repo}/${prNumber}`;
+export default function ChecksPanel() {
+  const detail = useAppStore((s) => s.detail);
+  const suites = useAppStore((s) => s.checkSuites);
+  const error = useAppStore((s) => s.checksError);
+  const fetchChecks = useAppStore((s) => s.fetchChecks);
+  const setActiveTab = useAppStore((s) => s.setActiveTab);
+  const selectFile = useAppStore((s) => s.selectFile);
 
   useEffect(() => {
-    let cancelled = false;
-    api.getChecks(prNumber, repo, headSha).then(
-      (data) => { if (!cancelled) setState({ key: fetchKey, suites: data, error: null }); },
-      (err) => {
-        if (!cancelled) setState({ key: fetchKey, suites: null, error: err instanceof Error ? err.message : "Failed to load checks" });
-      },
-    );
-    return () => { cancelled = true; };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fetchKey]);
+    fetchChecks(detail?.headSha);
+  }, [detail?.headSha, fetchChecks]);
 
-  const isLoading = state.key !== fetchKey;
-  const { suites, error } = state;
+  const onSelectFile = (f: string) => {
+    setActiveTab("files");
+    selectFile(f);
+  };
 
-  if (error && !isLoading) {
+  if (error) {
     return <div className="text-red-400 text-sm p-4">{error}</div>;
   }
 
-  if (isLoading || suites === null) {
+  if (suites === null) {
     return (
       <div className="flex items-center justify-center p-8 text-gray-500">
         <Loader2 size={20} className="animate-spin mr-2" />

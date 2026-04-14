@@ -1,21 +1,10 @@
-import { Fragment, useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef } from "react";
 import { cn } from "../lib/utils";
 import hljs from "highlight.js";
 import "highlight.js/styles/github-dark.min.css";
-import type { ReviewComment } from "../types";
-import { api } from "../api";
 import { Button } from "./ui/button";
 import Comment from "./Comment";
-
-interface DiffViewProps {
-  patch: string;
-  filename: string;
-  comments: ReviewComment[];
-  repo: string;
-  prNumber: number;
-  commitId: string;
-  onCommentCreated?: () => void;
-}
+import { useAppStore } from "../store";
 
 interface DiffLine {
   type: "add" | "remove" | "context" | "header";
@@ -66,12 +55,13 @@ function getLanguage(filename: string): string | undefined {
   return ext ? map[ext] : undefined;
 }
 
-function InlineCommentBox({ onSubmit, onCancel, submitting }: {
-  onSubmit: (body: string) => void;
-  onCancel: () => void;
-  submitting: boolean;
-}) {
-  const [text, setText] = useState("");
+function InlineCommentBox({ onCancel }: { onCancel: () => void }) {
+  const body = useAppStore((s) => s.commentBody);
+  const submitting = useAppStore((s) => s.commentSubmitting);
+  const setBody = useAppStore((s) => s.setCommentBody);
+  const submit = useAppStore((s) => s.submitInlineComment);
+  const detail = useAppStore((s) => s.detail);
+  const selectedFile = useAppStore((s) => s.selectedFile);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
@@ -82,13 +72,13 @@ function InlineCommentBox({ onSubmit, onCancel, submitting }: {
     <div className="my-2 ml-8 border border-blue-500/30 rounded-lg bg-gray-900 overflow-hidden">
       <textarea
         ref={textareaRef}
-        value={text}
-        onChange={(e) => setText(e.target.value)}
+        value={body}
+        onChange={(e) => setBody(e.target.value)}
         placeholder="Leave a comment..."
         className="w-full bg-transparent text-xs text-gray-300 p-3 resize-none focus:outline-none min-h-[80px]"
         onKeyDown={(e) => {
-          if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && text.trim()) {
-            onSubmit(text.trim());
+          if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && body.trim()) {
+            void submit(detail!.headSha, selectedFile!);
           }
           if (e.key === "Escape") onCancel();
         }}
@@ -102,7 +92,7 @@ function InlineCommentBox({ onSubmit, onCancel, submitting }: {
           >
             Cancel
           </button>
-          <Button variant="blue" size="xs" onClick={() => text.trim() && onSubmit(text.trim())} disabled={!text.trim() || submitting}>
+          <Button variant="blue" size="xs" onClick={() => body.trim() && void submit(detail!.headSha, selectedFile!)} disabled={!body.trim() || submitting}>
             {submitting ? "Posting..." : "Comment"}
           </Button>
         </div>
@@ -111,18 +101,22 @@ function InlineCommentBox({ onSubmit, onCancel, submitting }: {
   );
 }
 
-export default function DiffView({ patch, filename, comments, repo, prNumber, commitId, onCommentCreated }: DiffViewProps) {
-  const codeRef = useRef<HTMLTableElement>(null);
-  const diffLines = parsePatch(patch);
-  const language = getLanguage(filename);
-  const [commentingLine, setCommentingLine] = useState<{ line: number; side: "LEFT" | "RIGHT" } | null>(null);
-  const [submitting, setSubmitting] = useState(false);
+export default function DiffView() {
+  const selectedFile = useAppStore((s) => s.selectedFile);
+  const files = useAppStore((s) => s.files);
+  const comments = useAppStore((s) => s.comments);
+  const selectedPR = useAppStore((s) => s.selectedPR);
+  const detail = useAppStore((s) => s.detail);
+  const commentingLine = useAppStore((s) => s.commentingLine);
+  const setCommentingLine = useAppStore((s) => s.setCommentingLine);
 
-  const commentsByLine: Record<number, ReviewComment[]> = {};
-  for (const c of comments) {
-    if (!commentsByLine[c.line]) commentsByLine[c.line] = [];
-    commentsByLine[c.line].push(c);
-  }
+  const file = files.find((f) => f.filename === selectedFile);
+  const fileComments = comments.filter((c) => c.path === selectedFile);
+
+  const codeRef = useRef<HTMLTableElement>(null);
+
+  const patch = file?.patch;
+  const filename = file?.filename;
 
   useEffect(() => {
     if (codeRef.current) {
@@ -132,28 +126,25 @@ export default function DiffView({ patch, filename, comments, repo, prNumber, co
     }
   }, [patch, filename]);
 
-  async function handleSubmitComment(body: string) {
-    if (!commentingLine) return;
-    setSubmitting(true);
-    try {
-      await api.createComment(repo, prNumber, commitId, filename, commentingLine.line, commentingLine.side, body);
-      setCommentingLine(null);
-      onCommentCreated?.();
-    } catch (err) {
-      console.error("Failed to create comment:", err);
-    } finally {
-      setSubmitting(false);
-    }
+  if (!file || !selectedPR || !detail) return null;
+
+  const diffLines = parsePatch(file.patch);
+  const language = getLanguage(file.filename);
+
+  const commentsByLine: Record<number, typeof fileComments> = {};
+  for (const c of fileComments) {
+    if (!commentsByLine[c.line]) commentsByLine[c.line] = [];
+    commentsByLine[c.line].push(c);
   }
 
-  if (!patch) {
+  if (!file.patch) {
     return <div className="text-gray-500 text-sm p-4">No diff available for this file.</div>;
   }
 
   return (
     <div className="font-mono text-xs">
       <div className="sticky top-0 bg-gray-900 border-b border-gray-800 px-4 py-2 text-sm text-gray-300">
-        {filename}
+        {file.filename}
       </div>
       <table ref={codeRef} className="w-full border-collapse">
         <tbody>
@@ -225,9 +216,7 @@ export default function DiffView({ patch, filename, comments, repo, prNumber, co
                   <tr>
                     <td colSpan={3} className="p-0">
                       <InlineCommentBox
-                        onSubmit={handleSubmitComment}
                         onCancel={() => setCommentingLine(null)}
-                        submitting={submitting}
                       />
                     </td>
                   </tr>

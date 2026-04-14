@@ -1,15 +1,10 @@
-import React, { useState } from "react";
+import React from "react";
 import { cn } from "../lib/utils";
 import type { FixJobStatus } from "../api";
-import { api } from "../api";
+import { useAppStore } from "../store";
 import { Clock, Check, X, HelpCircle } from "lucide-react";
 import { IconButton } from "./ui/icon-button";
 import { Button } from "./ui/button";
-
-interface FixJobsBannerProps {
-  fixJobs: FixJobStatus[];
-  onJobAction: () => void;
-}
 
 function elapsed(startedAt: number): string {
   const ms = Date.now() - startedAt;
@@ -19,51 +14,56 @@ function elapsed(startedAt: number): string {
   return `${secs}s`;
 }
 
-function JobModal({ job, onClose, onJobAction }: { job: FixJobStatus; onClose: () => void; onJobAction: () => void }) {
-  const [acting, setActing] = useState(false);
-  const [replyText, setReplyText] = useState("");
-  const [noChangesReply, setNoChangesReply] = useState(job.suggestedReply ?? "");
+function JobModal({ commentId }: { commentId: number }) {
+  const job = useAppStore((s) => s.jobs.find((j) => j.commentId === commentId));
+  const acting = useAppStore((s) => s.acting[commentId] ?? false);
+  const replyText = useAppStore((s) => s.replyText[commentId] ?? "");
+  const noChangesReply = useAppStore((s) => s.noChangesReply[commentId] ?? "");
+  const setReplyText = useAppStore((s) => s.setReplyText);
+  const setNoChangesReply = useAppStore((s) => s.setNoChangesReply);
+  const applyFix = useAppStore((s) => s.apply);
+  const discardFix = useAppStore((s) => s.discard);
+  const sendReply = useAppStore((s) => s.sendReply);
+  const sendReplyAndResolve = useAppStore((s) => s.sendReplyAndResolve);
+  const retryFix = useAppStore((s) => s.retryFix);
+  const close = useAppStore((s) => s.setSelectedJobId);
+  const reloadComments = useAppStore((s) => s.reloadComments);
+
+  if (!job) return null;
+
+  const onClose = () => close(null);
   const repoShort = job.repo.split("/")[1] ?? job.repo;
 
   async function handleApply() {
-    if (!job.branch) return;
-    setActing(true);
+    if (!job || !job.branch) return;
     try {
-      await api.fixApply(job.repo, job.commentId, job.prNumber, job.branch);
-      onJobAction();
-      onClose();
+      await applyFix(job.repo, job.commentId, job.prNumber, job.branch);
+      await reloadComments();
+      close(null);
     } catch (err) {
       console.error("Apply failed:", err);
-    } finally {
-      setActing(false);
     }
   }
 
   async function handleDiscard() {
-    if (!job.branch) return;
-    setActing(true);
+    if (!job || !job.branch) return;
     try {
-      await api.fixDiscard(job.branch, job.commentId);
-      onJobAction();
-      onClose();
+      await discardFix(job.branch, job.commentId);
+      await reloadComments();
+      close(null);
     } catch (err) {
       console.error("Discard failed:", err);
-    } finally {
-      setActing(false);
     }
   }
 
   async function handleSendReply() {
-    if (!replyText.trim() || acting) return;
-    setActing(true);
+    if (!job || !replyText.trim() || acting) return;
     try {
-      await api.fixReply(job.repo, job.commentId, replyText.trim());
-      setReplyText("");
-      onJobAction();
+      await sendReply(job.repo, job.commentId, replyText.trim());
+      setReplyText(job.commentId, "");
+      await reloadComments();
     } catch (err) {
       console.error("Reply failed:", err);
-    } finally {
-      setActing(false);
     }
   }
 
@@ -148,7 +148,7 @@ function JobModal({ job, onClose, onJobAction }: { job: FixJobStatus; onClose: (
             <div className="text-xs text-gray-500 mb-2">Review and optionally edit the reply before sending:</div>
             <textarea
               value={noChangesReply}
-              onChange={(e) => setNoChangesReply(e.target.value)}
+              onChange={(e) => setNoChangesReply(commentId, e.target.value)}
               rows={4}
               className="w-full text-xs bg-gray-950 border border-gray-700 rounded px-2 py-1.5 text-gray-300 placeholder-gray-600 focus:outline-none focus:border-blue-500 resize-y"
             />
@@ -211,7 +211,7 @@ function JobModal({ job, onClose, onJobAction }: { job: FixJobStatus; onClose: (
             <div className="flex gap-2 items-end">
               <textarea
                 value={replyText}
-                onChange={(e) => setReplyText(e.target.value)}
+                onChange={(e) => setReplyText(commentId, e.target.value)}
                 onKeyDown={(e) => {
                   if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
                     void handleSendReply();
@@ -255,15 +255,12 @@ function JobModal({ job, onClose, onJobAction }: { job: FixJobStatus; onClose: (
                 size="xs"
                 onClick={async () => {
                   if (!job.branch || !job.originalComment) return;
-                  setActing(true);
                   try {
-                    await api.fixWithClaude(job.repo, job.commentId, job.prNumber, job.branch, job.originalComment);
-                    onJobAction();
-                    onClose();
+                    await retryFix(job.repo, job.commentId, job.prNumber, job.branch, job.originalComment);
+                    await reloadComments();
+                    close(null);
                   } catch (err) {
                     console.error("Retry failed:", err);
-                  } finally {
-                    setActing(false);
                   }
                 }}
                 disabled={acting}
@@ -284,15 +281,12 @@ function JobModal({ job, onClose, onJobAction }: { job: FixJobStatus; onClose: (
               size="xs"
               onClick={async () => {
                 if (!noChangesReply.trim()) return;
-                setActing(true);
                 try {
-                  await api.fixReplyAndResolve(job.repo, job.commentId, job.prNumber, noChangesReply.trim());
-                  onJobAction();
-                  onClose();
+                  await sendReplyAndResolve(job.repo, job.commentId, job.prNumber, noChangesReply.trim());
+                  await reloadComments();
+                  close(null);
                 } catch (err) {
                   console.error("Reply failed:", err);
-                } finally {
-                  setActing(false);
                 }
               }}
               disabled={acting || !noChangesReply.trim()}
@@ -342,9 +336,10 @@ function JobRow({ job, onSelect }: { job: FixJobStatus; onSelect: () => void }) 
   );
 }
 
-export default function FixJobsBanner({ fixJobs, onJobAction }: FixJobsBannerProps) {
-  const [selectedJobId, setSelectedJobId] = useState<number | null>(null);
-  const selectedJob = selectedJobId != null ? fixJobs.find((j) => j.commentId === selectedJobId) ?? null : null;
+export default function FixJobsBanner() {
+  const fixJobs = useAppStore((s) => s.jobs);
+  const selectedJobId = useAppStore((s) => s.selectedJobId);
+  const setSelectedJobId = useAppStore((s) => s.setSelectedJobId);
 
   if (fixJobs.length === 0) return null;
 
@@ -371,12 +366,8 @@ export default function FixJobsBanner({ fixJobs, onJobAction }: FixJobsBannerPro
           ))}
         </div>
       </div>
-      {selectedJob && (
-        <JobModal
-          job={selectedJob}
-          onClose={() => setSelectedJobId(null)}
-          onJobAction={onJobAction}
-        />
+      {selectedJobId != null && (
+        <JobModal commentId={selectedJobId} />
       )}
     </>
   );
