@@ -1,4 +1,4 @@
-import type { User, RepoInfo, PullRequest, PullRequestDetail, PullFile, ReviewComment, CrWatchState } from "./types";
+import type { User, RepoInfo, PullRequest, PullRequestDetail, PullFile, ReviewComment, CrWatchState, CheckSuite } from "./types";
 
 const BASE = "";
 
@@ -129,6 +129,7 @@ export const api = {
   getPull: (number: number, repo: string) => fetchJSON<PullRequestDetail>(`/api/pulls/${number}${repoQueryRequired(repo)}`),
   getPullFiles: (number: number, repo: string) => fetchJSON<PullFile[]>(`/api/pulls/${number}/files${repoQueryRequired(repo)}`),
   getPullComments: (number: number, repo: string) => fetchJSON<ReviewComment[]>(`/api/pulls/${number}/comments${repoQueryRequired(repo)}`),
+  getChecks: (number: number, repo: string) => fetchJSON<CheckSuite[]>(`/api/pulls/${number}/checks${repoQueryRequired(repo)}`),
   getFileContent: (prNumber: number, path: string, repo: string) => fetchJSON<{ content: string; path: string }>(`/api/pulls/${prNumber}/files/${path}${repoQueryRequired(repo)}`),
   getState: () => fetchJSON<CrWatchState>("/api/state"),
   getPollStatus: () => fetchJSON<PollStatus>("/api/poll-status"),
