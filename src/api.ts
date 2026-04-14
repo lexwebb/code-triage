@@ -1085,9 +1085,9 @@ export function registerRoutes(): void {
         saveState(s);
         setFixJobStatus({
           commentId: body.commentId, repo: body.repo, prNumber: body.prNumber,
-          path: body.comment.path, startedAt: Date.now(), status: "failed",
-          error: "Claude made no changes",
-          claudeOutput: result.rawOutput,
+          path: body.comment.path, startedAt: Date.now(), status: "no_changes",
+          suggestedReply: result.message,
+          claudeOutput: result.message,
         });
         return;
       }
@@ -1098,7 +1098,7 @@ export function registerRoutes(): void {
       setFixJobStatus({
         commentId: body.commentId, repo: body.repo, prNumber: body.prNumber,
         path: body.comment.path, startedAt: Date.now(), status: "completed",
-        diff, branch: body.branch, claudeOutput: result.rawOutput,
+        diff, branch: body.branch, claudeOutput: result.message,
         conversation: [{ role: "claude", message: result.message }],
       });
     } catch (err) {
