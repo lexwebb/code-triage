@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useRef } from "react";
 import { parseDiff, Diff, Hunk, tokenize, getChangeKey } from "react-diff-view";
 import type { HunkData, ChangeData, ChangeEventArgs } from "react-diff-view";
 import { refractor } from "refractor/core";
@@ -184,32 +184,37 @@ export default function DiffView() {
   const file = files.find((f) => f.filename === selectedFile);
   const fileComments = comments.filter((c) => c.path === selectedFile);
 
-  if (!file || !selectedPR || !detail) return null;
-  if (!file.patch) {
-    return <div className="text-gray-500 text-sm p-4">No diff available for this file.</div>;
+  // Parse diff and tokenize — hooks must be called unconditionally (before early returns)
+  const patch = file?.patch;
+  const filename = file?.filename;
+  const language = filename ? getLanguage(filename) : undefined;
+
+  let diffData = null as ReturnType<typeof parseDiff>[number] | null;
+  if (patch && filename) {
+    const diffText = `diff --git a/${filename} b/${filename}\n--- a/${filename}\n+++ b/${filename}\n${patch}`;
+    [diffData] = parseDiff(diffText, { nearbySequences: "zip" });
   }
 
-  // Prepend a minimal git diff header so parseDiff can parse a single-file patch
-  const diffText = `diff --git a/${file.filename} b/${file.filename}\n--- a/${file.filename}\n+++ b/${file.filename}\n${file.patch}`;
-  const [parsed] = parseDiff(diffText, { nearbySequences: "zip" });
-  const { hunks } = parsed;
-
-  const language = getLanguage(file.filename);
-  // eslint-disable-next-line react-hooks/rules-of-hooks
-  const tokens = useMemo(() => {
-    if (!language || !hunks.length) return undefined;
+  const maybeHunks = diffData?.hunks;
+  let tokens: ReturnType<typeof tokenize> | undefined;
+  if (language && maybeHunks?.length) {
     try {
-      return tokenize(hunks, {
+      tokens = tokenize(maybeHunks, {
         highlight: true,
         refractor,
         language,
       });
     } catch {
-      return undefined;
+      // Language not registered or tokenization failed
     }
-  }, [hunks, language]);
+  }
 
-  const widgets = buildWidgets(hunks, fileComments, commentingLine, () => setCommentingLine(null));
+  if (!file || !selectedPR || !detail) return null;
+  if (!file.patch || !diffData || !maybeHunks) {
+    return <div className="text-gray-500 text-sm p-4">No diff available for this file.</div>;
+  }
+
+  const widgets = buildWidgets(maybeHunks, fileComments, commentingLine, () => setCommentingLine(null));
 
   const handleGutterClick = ({ change }: ChangeEventArgs) => {
     if (!change) return;
@@ -253,14 +258,14 @@ export default function DiffView() {
       </div>
       <Diff
         viewType={diffViewType}
-        diffType={parsed.type}
-        hunks={hunks}
+        diffType={diffData.type}
+        hunks={maybeHunks}
         tokens={tokens}
         widgets={widgets}
         gutterEvents={{ onClick: handleGutterClick }}
       >
-        {(hunks) =>
-          hunks.map((hunk) => (
+        {(displayHunks) =>
+          displayHunks.map((hunk) => (
             <Hunk key={hunk.content} hunk={hunk} />
           ))
         }
