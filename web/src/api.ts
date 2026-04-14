@@ -102,6 +102,13 @@ export interface PollStatus {
   rateLimitUpdatedAt?: number;
   /** Present when CLI records a top-level poll failure (see `/api/health`). */
   lastPollError?: string | null;
+  claude?: {
+    activeEvals: number;
+    activeFixJobs: number;
+    evalConcurrencyCap: number;
+    totalEvalsThisSession: number;
+    totalFixesThisSession: number;
+  };
 }
 
 export interface PullsBundleResponse {

@@ -114,6 +114,41 @@ const pollState = {
   pollPaused: false,
   pollPausedReason: null as string | null,
 };
+
+// --- Claude/AI usage tracking ---
+let claudeActiveEvals = 0;
+let claudeActiveFixJobs = 0;
+let claudeEvalConcurrencyCap = 2;
+let claudeTotalEvalsThisSession = 0;
+let claudeTotalFixesThisSession = 0;
+
+export function updateClaudeStats(stats: {
+  activeEvals?: number;
+  activeFixJobs?: number;
+  evalConcurrencyCap?: number;
+  evalStarted?: boolean;
+  evalFinished?: boolean;
+  fixStarted?: boolean;
+  fixFinished?: boolean;
+}): void {
+  if (stats.activeEvals !== undefined) claudeActiveEvals = stats.activeEvals;
+  if (stats.activeFixJobs !== undefined) claudeActiveFixJobs = stats.activeFixJobs;
+  if (stats.evalConcurrencyCap !== undefined) claudeEvalConcurrencyCap = stats.evalConcurrencyCap;
+  if (stats.evalStarted) { claudeActiveEvals++; claudeTotalEvalsThisSession++; }
+  if (stats.evalFinished) { claudeActiveEvals = Math.max(0, claudeActiveEvals - 1); }
+  if (stats.fixStarted) { claudeActiveFixJobs++; claudeTotalFixesThisSession++; }
+  if (stats.fixFinished) { claudeActiveFixJobs = Math.max(0, claudeActiveFixJobs - 1); }
+}
+
+export function getClaudeStats() {
+  return {
+    activeEvals: claudeActiveEvals,
+    activeFixJobs: claudeActiveFixJobs,
+    evalConcurrencyCap: claudeEvalConcurrencyCap,
+    totalEvalsThisSession: claudeTotalEvalsThisSession,
+    totalFixesThisSession: claudeTotalFixesThisSession,
+  };
+}
 let testNotificationPending = false;
 
 export function triggerTestNotification(): void {
@@ -307,6 +342,7 @@ export function getPollState(options?: { consumeTestNotification?: boolean; peek
     rateLimitLimit: rl.limit,
     rateLimitResource: rl.resource,
     rateLimitUpdatedAt: rl.updatedAt,
+    claude: getClaudeStats(),
   };
 }
 

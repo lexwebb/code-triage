@@ -2,6 +2,7 @@ import { spawn, type ChildProcess } from "child_process";
 import { markComment, markCommentWithEvaluation, saveState } from "./state.js";
 import { ghPost, ghGraphQL } from "./exec.js";
 import { log } from "./logger.js";
+import { updateClaudeStats } from "./server.js";
 import { runWithConcurrency } from "./run-with-concurrency.js";
 import { loadConfig } from "./config.js";
 import type { CrComment, CrWatchState, Evaluation, PrInfo, SpawnOptions } from "./types.js";
@@ -301,11 +302,17 @@ ${comment.diffHunk}
 
 Make the changes directly. Do not explain, just fix the code.`;
 
-  const output = await spawnTracked("claude", ["-p", fixPrompt, "--dangerously-skip-permissions"], {
-    cwd: worktreePath,
-    stdio: ["pipe", "pipe", "pipe"],
-    stderrToConsole: true,
-  });
+  updateClaudeStats({ fixStarted: true });
+  let output: string;
+  try {
+    output = await spawnTracked("claude", ["-p", fixPrompt, "--dangerously-skip-permissions"], {
+      cwd: worktreePath,
+      stdio: ["pipe", "pipe", "pipe"],
+      stderrToConsole: true,
+    });
+  } finally {
+    updateClaudeStats({ fixFinished: true });
+  }
   return output;
 }
 
@@ -343,8 +350,10 @@ export async function analyzeComments(
   }
 
   const cap = clampEvalConcurrency(evalConcurrency);
+  updateClaudeStats({ evalConcurrencyCap: cap });
   await runWithConcurrency(tasks, cap, async ({ comment, prNumber }) => {
     log.info(`Evaluating: ${comment.path}:${comment.line}`);
+    updateClaudeStats({ evalStarted: true });
     let evaluation: Evaluation;
     try {
       evaluation = await evaluateComment(comment, repoPath);
@@ -352,8 +361,10 @@ export async function analyzeComments(
       log.error(`Error evaluating comment ${comment.id}: ${(err as Error).message}`);
       markComment(state, comment.id, "pending", prNumber, repoPath);
       saveState(state);
+      updateClaudeStats({ evalFinished: true });
       return;
     }
+    updateClaudeStats({ evalFinished: true });
     log.info(`Result: ${evaluation.action} — ${evaluation.summary}`);
     markCommentWithEvaluation(state, comment.id, "pending", prNumber, evaluation, repoPath);
     saveState(state);

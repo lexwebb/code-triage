@@ -17,11 +17,6 @@ import KeyboardShortcutsModal from "./components/KeyboardShortcutsModal";
 import type { FixJobStatus, PollStatus } from "./api";
 import { useMediaQuery } from "./useMediaQuery";
 
-function formatRateLimitReset(ms: number | null): string {
-  if (ms == null || ms <= 0) return "";
-  return new Date(ms).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", second: "2-digit" });
-}
-
 /** Human-readable duration for rate-limit countdown (ticks down each second in the UI). */
 function formatDurationUntil(targetMs: number, nowMs: number): string {
   const ms = Math.max(0, targetMs - nowMs);
@@ -139,6 +134,7 @@ export default function App() {
     rateLimitLimit: null as number | null,
     rateLimitResource: null as string | null,
     lastPollError: null as string | null,
+    claude: null as { activeEvals: number; activeFixJobs: number; evalConcurrencyCap: number; totalEvalsThisSession: number; totalFixesThisSession: number } | null,
   });
   const [sidebarCollapsed, setSidebarCollapsed] = useState(
     () => typeof sessionStorage !== "undefined" && sessionStorage.getItem("code-triage:sidebar-collapsed") === "1",
@@ -383,6 +379,7 @@ export default function App() {
       rateLimitLimit: status.rateLimitLimit ?? null,
       rateLimitResource: status.rateLimitResource ?? null,
       lastPollError: status.lastPollError ?? null,
+      claude: status.claude ?? null,
     });
 
     for (const job of status.fixJobs) {
@@ -726,86 +723,68 @@ export default function App() {
               </button>
             </div>
           </div>
-          <div className="px-4 py-1 border-b border-gray-800 flex flex-wrap items-center justify-end gap-x-2 gap-y-0.5 text-[10px] text-gray-500 min-h-5">
-            {pollMeta.polling && <span className="text-cyan-400/90">Polling…</span>}
-            {pollMeta.pollPaused && !pollMeta.rateLimited && (
-              <span className="text-orange-400/90" title={pollMeta.pollPausedReason ?? "Polling paused"}>
-                ⏸ Paused — {pollMeta.pollPausedReason ?? "API quota &gt;80%"}
-              </span>
-            )}
-            {/* Rate limit usage bar */}
-            {pollMeta.rateLimitRemaining != null && pollMeta.rateLimitLimit != null && pollMeta.rateLimitLimit > 0 && (
-              <span className="flex items-center gap-1.5" title={`GitHub API: ${pollMeta.rateLimitRemaining}/${pollMeta.rateLimitLimit} requests remaining`}>
-                <span className="text-gray-600">{pollMeta.rateLimitRemaining}/{pollMeta.rateLimitLimit}</span>
-                <span className="w-16 h-1.5 bg-gray-800 rounded-full overflow-hidden">
-                  <span
-                    className={`h-full block rounded-full transition-all ${
-                      (pollMeta.rateLimitLimit - pollMeta.rateLimitRemaining) / pollMeta.rateLimitLimit >= 0.8
-                        ? "bg-red-500"
-                        : (pollMeta.rateLimitLimit - pollMeta.rateLimitRemaining) / pollMeta.rateLimitLimit >= 0.6
-                          ? "bg-orange-500"
-                          : "bg-green-500"
-                    }`}
-                    style={{ width: `${Math.round(((pollMeta.rateLimitLimit - pollMeta.rateLimitRemaining) / pollMeta.rateLimitLimit) * 100)}%` }}
-                  />
-                </span>
-              </span>
-            )}
-            {pollMeta.rateLimited && (
-              <span
-                className="text-amber-400/90 max-w-[min(100%,360px)] truncate"
-                title={
-                  [
-                    pollMeta.rateLimitResource ? `${pollMeta.rateLimitResource} quota` : "GitHub API",
-                    pollMeta.rateLimitRemaining != null && pollMeta.rateLimitLimit != null
-                      ? `${pollMeta.rateLimitRemaining}/${pollMeta.rateLimitLimit} requests left in window`
-                      : null,
-                    pollMeta.rateLimitResetAt
-                      ? `Resets in ${formatDurationUntil(pollMeta.rateLimitResetAt, rateLimitNow)} (wall ${formatRateLimitReset(pollMeta.rateLimitResetAt)})`
-                      : null,
-                  ]
-                    .filter(Boolean)
-                    .join(" · ") || "GitHub API rate limit"
-                }
-              >
-                Rate limited
-                {pollMeta.rateLimitResource ? ` (${pollMeta.rateLimitResource})` : ""}
-                {pollMeta.rateLimitRemaining != null && pollMeta.rateLimitLimit != null
-                  ? ` ${pollMeta.rateLimitRemaining}/${pollMeta.rateLimitLimit}`
-                  : ""}
-                {pollMeta.rateLimitResetAt
-                  ? ` · in ${formatDurationUntil(pollMeta.rateLimitResetAt, rateLimitNow)}`
-                  : ""}
-              </span>
-            )}
-            {pollMeta.lastPollError && (
-              <span className="text-red-400/90 max-w-[220px] truncate" title={pollMeta.lastPollError}>
-                {pollMeta.lastPollError}
-              </span>
-            )}
-            {githubUserUnavailable && (
-              <span
-                className="text-amber-400/90 max-w-[min(100%,420px)]"
-                title="GitHub GET /user failed (often rate limited). PR lists stay empty until it succeeds; other tabs may still work."
-              >
-                GitHub user unavailable — PR lists empty until quota recovers
-              </span>
-            )}
-            {pollMeta.estimatedPollRequests != null &&
-              pollMeta.estimatedPollRequests > 0 &&
-              pollMeta.intervalMs > 0 &&
-              pollMeta.estimatedGithubRequestsPerHour != null && (
-                <span
-                  className="text-gray-500 max-w-[min(100%,420px)] truncate"
-                  title={pollMeta.pollBudgetNote ?? undefined}
-                >
-                  ~{pollMeta.estimatedGithubRequestsPerHour} poll req/h · ~{pollMeta.estimatedPollRequests} req/poll ·{" "}
-                  {Math.round(pollMeta.intervalMs / 60000)}m
-                  {pollMeta.baseIntervalMs != null && pollMeta.baseIntervalMs < pollMeta.intervalMs
-                    ? ` (base ${Math.round(pollMeta.baseIntervalMs / 60000)}m)`
-                    : ""}
-                </span>
+          <div className="px-3 py-2 border-b border-gray-800 grid grid-cols-2 gap-x-4 text-[10px] text-gray-500">
+            {/* GitHub column */}
+            <div className="flex flex-col gap-1">
+              <span className="text-gray-600 font-medium uppercase tracking-wide">GitHub</span>
+              <div className="flex items-center gap-1.5">
+                {pollMeta.polling && <span className="text-cyan-400/90">Polling…</span>}
+                {pollMeta.pollPaused && (
+                  <span className="text-orange-400/90" title={pollMeta.pollPausedReason ?? "Polling paused"}>⏸ Paused</span>
+                )}
+                {!pollMeta.polling && !pollMeta.pollPaused && !pollMeta.rateLimited && !pollMeta.lastPollError && (
+                  <span className="text-gray-600">Idle</span>
+                )}
+                {pollMeta.rateLimited && <span className="text-amber-400/90">Rate limited</span>}
+                {pollMeta.lastPollError && (
+                  <span className="text-red-400/90 truncate" title={pollMeta.lastPollError}>Error</span>
+                )}
+                {githubUserUnavailable && <span className="text-amber-400/90">User unavailable</span>}
+              </div>
+              {pollMeta.rateLimitRemaining != null && pollMeta.rateLimitLimit != null && pollMeta.rateLimitLimit > 0 && (() => {
+                const used = pollMeta.rateLimitLimit - pollMeta.rateLimitRemaining;
+                const pct = used / pollMeta.rateLimitLimit;
+                return (
+                  <div className="flex flex-col gap-0.5">
+                    <div className="flex items-center justify-between">
+                      <span className="text-gray-600">{pollMeta.rateLimitRemaining}/{pollMeta.rateLimitLimit}</span>
+                      {pollMeta.rateLimitResetAt && pct >= 0.5 && (
+                        <span className="text-gray-600">resets {formatDurationUntil(pollMeta.rateLimitResetAt, rateLimitNow)}</span>
+                      )}
+                    </div>
+                    <span className="w-full h-1.5 bg-gray-800 rounded-full overflow-hidden">
+                      <span
+                        className={`h-full block rounded-full transition-all ${pct >= 0.8 ? "bg-red-500" : pct >= 0.6 ? "bg-orange-500" : "bg-green-500"}`}
+                        style={{ width: `${Math.round(pct * 100)}%` }}
+                      />
+                    </span>
+                  </div>
+                );
+              })()}
+            </div>
+
+            {/* Claude/AI column */}
+            <div className="flex flex-col gap-1">
+              <span className="text-gray-600 font-medium uppercase tracking-wide">Claude</span>
+              {pollMeta.claude ? (
+                <>
+                  <div className="flex items-center gap-1.5">
+                    {pollMeta.claude.activeEvals > 0 ? (
+                      <span className="text-cyan-400/90">{pollMeta.claude.activeEvals}/{pollMeta.claude.evalConcurrencyCap} evals running</span>
+                    ) : pollMeta.claude.activeFixJobs > 0 ? (
+                      <span className="text-orange-400/90">{pollMeta.claude.activeFixJobs} fix{pollMeta.claude.activeFixJobs > 1 ? "es" : ""} running</span>
+                    ) : (
+                      <span className="text-gray-600">Idle</span>
+                    )}
+                  </div>
+                  <span className="text-gray-700">
+                    {pollMeta.claude.totalEvalsThisSession} evals · {pollMeta.claude.totalFixesThisSession} fixes this session
+                  </span>
+                </>
+              ) : (
+                <span className="text-gray-700">—</span>
               )}
+            </div>
           </div>
           <RepoFilter
             filter={repoFilter}
