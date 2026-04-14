@@ -81,6 +81,7 @@ export default function App() {
   const initial = parseRoute();
 
   const [_repos, setRepos] = useState<RepoInfo[]>([]);
+  const [_preferredEditor, setPreferredEditor] = useState("vscode");
   const [currentUser, setCurrentUser] = useState<string | null>(null);
   const [repoFilter, setRepoFilter] = useState("");
   const [pulls, setPulls] = useState<PullRequest[]>(() => loadCache(CACHE_KEY_PULLS) ?? []);
@@ -147,6 +148,7 @@ export default function App() {
       .getConfig()
       .then((r) => {
         setSetupConfig(r);
+        setPreferredEditor(r.config.preferredEditor ?? "vscode");
         setAppGate(r.needsSetup ? "setup" : "ready");
       })
       .catch((err) => {
@@ -544,6 +546,7 @@ export default function App() {
         listenPort={setupConfig.listenPort}
         onSave={async (body) => {
           const result = await api.saveConfig(body);
+          if (typeof body.preferredEditor === "string") setPreferredEditor(body.preferredEditor);
           setAppGate("ready");
           setLoading(true);
           setError(null);
@@ -954,12 +957,13 @@ export default function App() {
               }}
               onSave={async (body) => {
                 const result = await api.saveConfig(body);
+                if (typeof body.preferredEditor === "string") setPreferredEditor(body.preferredEditor);
                 setShowSettings(false);
                 setSettingsModal(null);
                 await fetchPulls(false);
                 try {
-                  const repos = await api.getRepos();
-                  setRepos(repos);
+                  const r = await api.getRepos();
+                  setRepos(r);
                 } catch {
                   /* ignore */
                 }

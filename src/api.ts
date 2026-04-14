@@ -173,6 +173,7 @@ export function serializeConfigForClient(c: Config): Record<string, unknown> {
     repoPollColdIntervalMinutes: c.repoPollColdIntervalMinutes ?? 60,
     pollApiHeadroom: c.pollApiHeadroom ?? 0.35,
     pollRateLimitAware: c.pollRateLimitAware !== false,
+    preferredEditor: c.preferredEditor ?? "vscode",
   };
 }
 
@@ -316,6 +317,11 @@ export function mergeConfigFromBody(body: Record<string, unknown>, previous: Con
       ? body.pollRateLimitAware
       : (previous.pollRateLimitAware !== false);
 
+  const preferredEditor =
+    typeof body.preferredEditor === "string" && body.preferredEditor.trim()
+      ? body.preferredEditor.trim()
+      : (previous.preferredEditor ?? "vscode");
+
   return {
     root,
     port,
@@ -333,6 +339,7 @@ export function mergeConfigFromBody(body: Record<string, unknown>, previous: Con
     repoPollColdIntervalMinutes,
     pollApiHeadroom,
     pollRateLimitAware,
+    preferredEditor,
   };
 }
 
@@ -740,6 +747,7 @@ export function registerRoutes(): void {
         snoozeUntil: record?.snoozeUntil ?? null,
         priority: record?.priority ?? null,
         triageNote: record?.triageNote ?? null,
+        evalFailed: record?.evalFailed ?? false,
       };
     }));
   });

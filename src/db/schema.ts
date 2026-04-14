@@ -18,6 +18,7 @@ export const comments = sqliteTable("comments", {
   snoozeUntil: text("snooze_until"),
   priority: integer("priority"),
   triageNote: text("triage_note"),
+  evalFailed: integer("eval_failed"),
 });
 
 export const fixJobs = sqliteTable("fix_jobs", {

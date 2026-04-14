@@ -81,6 +81,9 @@ function migrateCommentsColumns(raw: Database.Database): void {
   if (!names.has("triage_note")) {
     raw.exec("ALTER TABLE comments ADD COLUMN triage_note TEXT");
   }
+  if (!names.has("eval_failed")) {
+    raw.exec("ALTER TABLE comments ADD COLUMN eval_failed INTEGER DEFAULT 0");
+  }
 }
 
 export function parseCommentIdFromKey(commentKey: string): number {
@@ -104,8 +107,8 @@ export function repoFromCommentKey(commentKey: string): string | undefined {
 
 export function writeStateToDb(raw: Database.Database, state: CrWatchState): void {
   const insertComment = raw.prepare(
-    `INSERT INTO comments (comment_key, comment_id, repo, pr_number, status, timestamp, evaluation_json, snooze_until, priority, triage_note)
-     VALUES (@comment_key, @comment_id, @repo, @pr_number, @status, @timestamp, @evaluation_json, @snooze_until, @priority, @triage_note)`,
+    `INSERT INTO comments (comment_key, comment_id, repo, pr_number, status, timestamp, evaluation_json, snooze_until, priority, triage_note, eval_failed)
+     VALUES (@comment_key, @comment_id, @repo, @pr_number, @status, @timestamp, @evaluation_json, @snooze_until, @priority, @triage_note, @eval_failed)`,
   );
   const insertJob = raw.prepare(
     `INSERT INTO fix_jobs (comment_id, repo, pr_number, branch, path, worktree_path, started_at)
@@ -128,6 +131,7 @@ export function writeStateToDb(raw: Database.Database, state: CrWatchState): voi
         snooze_until: v.snoozeUntil ?? null,
         priority: v.priority ?? null,
         triage_note: v.triageNote ?? null,
+        eval_failed: v.evalFailed ? 1 : 0,
       });
     }
     for (const j of state.fixJobs ?? []) {

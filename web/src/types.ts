@@ -80,10 +80,11 @@ export interface ReviewComment {
   inReplyToId: number | null;
   isResolved: boolean;
   evaluation: CommentEvaluation | null;
-  crStatus: "pending" | "replied" | "fixed" | "dismissed" | null;
+  crStatus: "pending" | "evaluating" | "replied" | "fixed" | "dismissed" | null;
   snoozeUntil?: string | null;
   priority?: number | null;
   triageNote?: string | null;
+  evalFailed?: boolean;
 }
 
 export interface CheckAnnotation {

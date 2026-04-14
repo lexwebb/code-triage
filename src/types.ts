@@ -1,4 +1,4 @@
-export type CommentStatus = "pending" | "replied" | "fixed" | "dismissed";
+export type CommentStatus = "pending" | "evaluating" | "replied" | "fixed" | "dismissed";
 export type EvalAction = "reply" | "fix" | "resolve";
 
 export interface CommentRecord {
@@ -13,6 +13,8 @@ export interface CommentRecord {
   priority?: number;
   /** Local note; never sent to GitHub. */
   triageNote?: string | null;
+  /** True when evaluation failed after max retries (dead-lettered). */
+  evalFailed?: boolean;
 }
 
 export interface CommentTriagePatch {

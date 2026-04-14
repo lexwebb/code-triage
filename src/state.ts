@@ -63,6 +63,7 @@ export function loadState(): CrWatchState {
       ...(row.snoozeUntil != null && row.snoozeUntil !== "" ? { snoozeUntil: row.snoozeUntil } : {}),
       ...(row.priority != null ? { priority: row.priority } : {}),
       ...(row.triageNote != null && row.triageNote !== "" ? { triageNote: row.triageNote } : {}),
+      ...(row.evalFailed ? { evalFailed: true } : {}),
     };
   }
 
