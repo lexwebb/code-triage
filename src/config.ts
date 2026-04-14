@@ -42,6 +42,8 @@ export interface Config {
   pollApiHeadroom?: number;
   /** When true (default), lengthen the poll interval when many repos are active and quota is tight. */
   pollRateLimitAware?: boolean;
+  /** IDE to open files in from the web UI. Default "vscode". */
+  preferredEditor?: string;
 }
 
 const DEFAULTS: Config = {

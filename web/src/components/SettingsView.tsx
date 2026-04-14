@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { AppConfigPayload } from "../api";
+import { Checkbox } from "./ui/checkbox";
 
 type AccountRow = {
   name: string;
@@ -19,6 +20,7 @@ function payloadToForm(c: AppConfigPayload): {
   repoPollColdIntervalMinutes: number;
   pollApiHeadroom: number;
   pollRateLimitAware: boolean;
+  preferredEditor: string;
   ignoredBots: string;
   githubToken: string;
   hasGithubToken: boolean;
@@ -38,6 +40,7 @@ function payloadToForm(c: AppConfigPayload): {
     repoPollColdIntervalMinutes: c.repoPollColdIntervalMinutes ?? 60,
     pollApiHeadroom: c.pollApiHeadroom ?? 0.35,
     pollRateLimitAware: c.pollRateLimitAware !== false,
+    preferredEditor: c.preferredEditor ?? "vscode",
     ignoredBots: (c.ignoredBots ?? []).join("\n"),
     githubToken: "",
     hasGithubToken: Boolean(c.hasGithubToken),
@@ -133,6 +136,7 @@ export default function SettingsView({
         repoPollColdIntervalMinutes: form.repoPollColdIntervalMinutes,
         pollApiHeadroom: form.pollApiHeadroom,
         pollRateLimitAware: form.pollRateLimitAware,
+        preferredEditor: form.preferredEditor,
         ignoredBots,
         accounts,
         evalPromptAppend: form.evalPromptAppend.trim() || undefined,
@@ -221,6 +225,22 @@ export default function SettingsView({
               placeholder="~/src"
             />
           </label>
+          <label className="block space-y-1">
+            <span className="text-sm text-gray-400">Preferred editor</span>
+            <select
+              className="w-full rounded-md border border-gray-700 bg-gray-900 px-3 py-2 text-sm"
+              value={form.preferredEditor}
+              onChange={(e) => update("preferredEditor", e.target.value)}
+            >
+              <option value="vscode">VS Code</option>
+              <option value="cursor">Cursor</option>
+              <option value="webstorm">WebStorm</option>
+              <option value="idea">IntelliJ IDEA</option>
+              <option value="zed">Zed</option>
+              <option value="sublime">Sublime Text</option>
+              <option value="windsurf">Windsurf</option>
+            </select>
+          </label>
           <div className="grid grid-cols-2 gap-4">
             <label className="block space-y-1">
               <span className="text-sm text-gray-400">HTTP port</span>
@@ -277,11 +297,9 @@ export default function SettingsView({
             </label>
           </div>
           <label className="flex items-center gap-2 cursor-pointer">
-            <input
-              type="checkbox"
+            <Checkbox
               checked={form.pollReviewRequested}
-              onChange={(e) => update("pollReviewRequested", e.target.checked)}
-              className="rounded border-gray-600"
+              onCheckedChange={(v) => update("pollReviewRequested", v === true)}
             />
             <span className="text-sm text-gray-300">Poll review-requested PRs (not your authored)</span>
           </label>
@@ -326,11 +344,9 @@ export default function SettingsView({
               />
             </label>
             <label className="flex items-end gap-2 cursor-pointer pb-2">
-              <input
-                type="checkbox"
+              <Checkbox
                 checked={form.pollRateLimitAware}
-                onChange={(e) => update("pollRateLimitAware", e.target.checked)}
-                className="rounded border-gray-600"
+                onCheckedChange={(v) => update("pollRateLimitAware", v === true)}
               />
               <span className="text-sm text-gray-300">Slow polling when GitHub quota is tight</span>
             </label>

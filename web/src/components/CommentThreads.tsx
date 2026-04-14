@@ -8,6 +8,7 @@ import { IconButton } from "./ui/icon-button";
 import { CollapsibleSection } from "./ui/collapsible-section";
 import { Button } from "./ui/button";
 import { StatusBadge } from "./ui/status-badge";
+import { Checkbox } from "./ui/checkbox";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "./ui/dialog";
 
 type ThreadKeyActions = {
@@ -31,6 +32,40 @@ interface CommentThreadsProps {
   /** When true, thread hotkeys are disabled (e.g. shortcuts modal open). */
   globalModalOpen?: boolean;
   onOpenShortcutsHelp?: () => void;
+  /** Absolute local path to the repo root (for IDE links). */
+  repoLocalPath?: string;
+  /** User's preferred editor key (e.g. "vscode", "cursor"). */
+  preferredEditor?: string;
+}
+
+const EDITOR_LABELS: Record<string, string> = {
+  vscode: "VS Code",
+  cursor: "Cursor",
+  webstorm: "WebStorm",
+  idea: "IDEA",
+  zed: "Zed",
+  sublime: "Sublime",
+  windsurf: "Windsurf",
+};
+
+function buildEditorUri(editor: string, absPath: string, line: number): string {
+  switch (editor) {
+    case "cursor":
+      return `cursor://file/${absPath}:${line}`;
+    case "webstorm":
+      return `jetbrains://webstorm/navigate/reference?path=${encodeURIComponent(absPath)}&line=${line}`;
+    case "idea":
+      return `jetbrains://idea/navigate/reference?path=${encodeURIComponent(absPath)}&line=${line}`;
+    case "zed":
+      return `zed://file/${absPath}:${line}`;
+    case "sublime":
+      return `subl://open?url=file://${encodeURIComponent(absPath)}&line=${line}`;
+    case "windsurf":
+      return `windsurf://file/${absPath}:${line}`;
+    case "vscode":
+    default:
+      return `vscode://file/${absPath}:${line}`;
+  }
 }
 
 interface Thread {
@@ -101,7 +136,7 @@ function ThreadStatusBadge({ status }: { status: string }) {
   return null;
 }
 
-function ThreadItem({ thread, onSelectFile, repo, prNumber, branch, fixBlocked, onCommentAction, onFixStarted, isFocused, registerRowEl, threadActionsRef }: {
+function ThreadItem({ thread, onSelectFile, repo, prNumber, branch, fixBlocked, onCommentAction, onFixStarted, isFocused, registerRowEl, threadActionsRef, repoLocalPath, preferredEditor }: {
   thread: Thread;
   onSelectFile: (f: string) => void;
   repo: string;
@@ -113,6 +148,8 @@ function ThreadItem({ thread, onSelectFile, repo, prNumber, branch, fixBlocked, 
   isFocused: boolean;
   registerRowEl: (id: number, el: HTMLDivElement | null) => void;
   threadActionsRef: MutableRefObject<Map<number, ThreadKeyActions>>;
+  repoLocalPath?: string;
+  preferredEditor?: string;
 }) {
   const eval_ = thread.root.evaluation;
   const status = thread.root.crStatus;
@@ -281,6 +318,16 @@ function ThreadItem({ thread, onSelectFile, repo, prNumber, branch, fixBlocked, 
               onClick={(e) => e.stopPropagation()}
             >
               GH
+            </a>
+          )}
+          {repoLocalPath && (
+            <a
+              href={buildEditorUri(preferredEditor ?? "vscode", `${repoLocalPath}/${thread.root.path}`, thread.root.line)}
+              className="text-gray-500 hover:text-purple-400 font-sans text-[10px] shrink-0 focus:outline-none focus-visible:ring-2 focus-visible:ring-purple-500 rounded px-0.5"
+              title={`Open in ${EDITOR_LABELS[preferredEditor ?? "vscode"] ?? preferredEditor}`}
+              onClick={(e) => e.stopPropagation()}
+            >
+              {EDITOR_LABELS[preferredEditor ?? "vscode"] ?? preferredEditor}
             </a>
           )}
         </span>
@@ -489,7 +536,7 @@ function ThreadItem({ thread, onSelectFile, repo, prNumber, branch, fixBlocked, 
   );
 }
 
-export default function CommentThreads({ comments, onSelectFile, repo, prNumber, branch, fixJobs, onCommentAction, onFixStarted, globalModalOpen = false, onOpenShortcutsHelp }: CommentThreadsProps) {
+export default function CommentThreads({ comments, onSelectFile, repo, prNumber, branch, fixJobs, onCommentAction, onFixStarted, globalModalOpen = false, onOpenShortcutsHelp, repoLocalPath, preferredEditor }: CommentThreadsProps) {
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [batching, setBatching] = useState(false);
   const [filterText, setFilterText] = useState("");
@@ -696,11 +743,9 @@ export default function CommentThreads({ comments, onSelectFile, repo, prNumber,
               </button>
             ))}
             <label className="flex items-center gap-1.5 text-xs text-gray-500 shrink-0 ml-1 cursor-pointer select-none">
-              <input
-                type="checkbox"
+              <Checkbox
                 checked={showSnoozed}
-                onChange={(e) => setShowSnoozed(e.target.checked)}
-                className="rounded border-gray-600 bg-gray-800 text-blue-500"
+                onCheckedChange={(v) => setShowSnoozed(v === true)}
               />
               Snoozed
             </label>
@@ -727,11 +772,9 @@ export default function CommentThreads({ comments, onSelectFile, repo, prNumber,
           {/* Bulk action toolbar */}
           {actionableThreads.length > 0 && (
             <div className="px-6 py-1.5 flex items-center gap-3 border-b border-gray-800/50 bg-gray-900/30">
-              <input
-                type="checkbox"
+              <Checkbox
                 checked={allSelected}
-                onChange={toggleSelectAll}
-                className="rounded border-gray-600 bg-gray-800 text-blue-500 cursor-pointer"
+                onCheckedChange={toggleSelectAll}
                 title="Select all"
               />
               {selected.size > 0 ? (
@@ -758,11 +801,10 @@ export default function CommentThreads({ comments, onSelectFile, repo, prNumber,
               return (
                 <div key={thread.root.id} className="flex items-start gap-2">
                   {isActionable && (
-                    <input
-                      type="checkbox"
+                    <Checkbox
                       checked={selected.has(thread.root.id)}
-                      onChange={() => toggleSelect(thread.root.id)}
-                      className="mt-2 rounded border-gray-600 bg-gray-800 text-blue-500 cursor-pointer shrink-0"
+                      onCheckedChange={() => toggleSelect(thread.root.id)}
+                      className="mt-2 shrink-0"
                     />
                   )}
                   <div className={isActionable ? "flex-1 min-w-0" : "flex-1 min-w-0 pl-5"}>
@@ -778,6 +820,8 @@ export default function CommentThreads({ comments, onSelectFile, repo, prNumber,
                       isFocused={focusedIdx === idx}
                       registerRowEl={registerRowEl}
                       threadActionsRef={threadActionsRef}
+                      repoLocalPath={repoLocalPath}
+                      preferredEditor={preferredEditor}
                     />
                   </div>
                 </div>

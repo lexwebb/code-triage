@@ -68,6 +68,8 @@ export interface AppConfigPayload {
   pollApiHeadroom: number;
   /** Stretch poll interval when quota is tight (default true). */
   pollRateLimitAware: boolean;
+  /** IDE to open files in from the web UI. Default "vscode". */
+  preferredEditor: string;
 }
 
 export interface ConfigGetResponse {

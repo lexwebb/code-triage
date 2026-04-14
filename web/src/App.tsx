@@ -80,8 +80,8 @@ function saveCache<T>(key: string, data: T): void {
 export default function App() {
   const initial = parseRoute();
 
-  const [_repos, setRepos] = useState<RepoInfo[]>([]);
-  const [_preferredEditor, setPreferredEditor] = useState("vscode");
+  const [repos, setRepos] = useState<RepoInfo[]>([]);
+  const [preferredEditor, setPreferredEditor] = useState("vscode");
   const [currentUser, setCurrentUser] = useState<string | null>(null);
   const [repoFilter, setRepoFilter] = useState("");
   const [pulls, setPulls] = useState<PullRequest[]>(() => loadCache(CACHE_KEY_PULLS) ?? []);
@@ -889,6 +889,8 @@ export default function App() {
                   onFixStarted={(job) => setFixJobs((prev) => [...prev.filter((j) => j.commentId !== job.commentId), job])}
                   globalModalOpen={shortcutsOpen}
                   onOpenShortcutsHelp={() => setShortcutsOpen(true)}
+                  repoLocalPath={repos.find((r) => r.repo === selectedPR!.repo)?.localPath}
+                  preferredEditor={preferredEditor}
                 />
               )}
 
