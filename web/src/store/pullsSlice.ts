@@ -31,9 +31,15 @@ export const createPullsSlice: SliceCreator<PullsSlice> = (set, get) => ({
           pullFetchGeneration: s.pullFetchGeneration + 1,
         }));
 
-        // Auto-select first PR on initial load if nothing selected
-        if (isInitial && authored.length > 0 && !get().selectedPR) {
-          void get().selectPR(authored[0].number, authored[0].repo);
+        if (isInitial) {
+          const current = get().selectedPR;
+          if (current) {
+            // URL had a PR route — load its detail now that pulls are ready
+            void get().selectPR(current.number, current.repo);
+          } else if (authored.length > 0) {
+            // No PR in URL — auto-select first authored PR
+            void get().selectPR(authored[0].number, authored[0].repo);
+          }
         }
       } catch (err) {
         if (isInitial) set({ error: (err as Error).message });
