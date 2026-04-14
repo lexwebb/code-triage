@@ -339,9 +339,28 @@ setConfigSavedHandler(applyConfigReload);
 
 async function poll(): Promise<void> {
   if (running || shuttingDown) return;
+
+  // Hard block: skip poll when >=80% of GitHub API quota is consumed
+  const rl = getRateLimitState();
+  if (rl.remaining != null && rl.limit != null && rl.limit > 0) {
+    const usagePercent = ((rl.limit - rl.remaining) / rl.limit) * 100;
+    if (usagePercent >= 80) {
+      const resetMs = rl.resetAt ? Math.max(rl.resetAt - Date.now(), 30_000) : 60_000;
+      const resetMin = Math.ceil(resetMs / 60_000);
+      const reason = `${rl.remaining}/${rl.limit} remaining (${Math.round(usagePercent)}% used). Resuming in ~${resetMin}m.`;
+      console.log(`\n  Rate limit: ${reason} Pausing polls.`);
+      setStatus(`Paused — ${reason}`);
+      updatePollState({ polling: false, pollPaused: true, pollPausedReason: reason });
+      if (pollTimer) clearTimeout(pollTimer);
+      setNextPollTime(resetMs);
+      pollTimer = setTimeout(poll, resetMs);
+      return;
+    }
+  }
+
   running = true;
   setProcessing(true);
-  updatePollState({ polling: true });
+  updatePollState({ polling: true, pollPaused: false, pollPausedReason: null });
 
   if (pollTimer) {
     clearTimeout(pollTimer);

@@ -87,6 +87,9 @@ export interface PollStatus {
   estimatedGithubRequestsPerHour?: number;
   pollBudgetNote?: string | null;
   polling: boolean;
+  /** True when poll is paused because >=80% of API quota is consumed. */
+  pollPaused?: boolean;
+  pollPausedReason?: string | null;
   fixJobs: FixJobStatus[];
   testNotification: boolean;
   rateLimited?: boolean;

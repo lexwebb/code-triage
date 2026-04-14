@@ -110,6 +110,9 @@ const pollState = {
   polling: false,
   /** Last top-level poll failure (outer catch in `cli.ts`); cleared on success. */
   lastPollError: null as string | null,
+  /** True when poll is paused because >=80% of API quota is consumed. */
+  pollPaused: false,
+  pollPausedReason: null as string | null,
 };
 let testNotificationPending = false;
 
@@ -145,6 +148,9 @@ export function updatePollState(state: {
   pollBudgetNote?: string | null;
   polling?: boolean;
   lastPollError?: string | null;
+  /** True when poll is paused because >=80% of API quota is consumed. */
+  pollPaused?: boolean;
+  pollPausedReason?: string | null;
 }): void {
   Object.assign(pollState, state);
   broadcastPollStatus();
@@ -293,6 +299,8 @@ export function getPollState(options?: { consumeTestNotification?: boolean; peek
       : peek
         ? testNotificationPending
         : false,
+    pollPaused: pollState.pollPaused ?? false,
+    pollPausedReason: pollState.pollPausedReason ?? null,
     rateLimited: rl.limited,
     rateLimitResetAt: rl.resetAt,
     rateLimitRemaining: rl.remaining,

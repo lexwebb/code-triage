@@ -131,6 +131,8 @@ export default function App() {
     estimatedGithubRequestsPerHour: null as number | null,
     estimatedPollRequests: null as number | null,
     pollBudgetNote: null as string | null,
+    pollPaused: false,
+    pollPausedReason: null as string | null,
     rateLimited: false,
     rateLimitResetAt: null as number | null,
     rateLimitRemaining: null as number | null,
@@ -373,6 +375,8 @@ export default function App() {
       estimatedGithubRequestsPerHour: status.estimatedGithubRequestsPerHour ?? null,
       estimatedPollRequests: status.estimatedPollRequests ?? null,
       pollBudgetNote: status.pollBudgetNote ?? null,
+      pollPaused: status.pollPaused ?? false,
+      pollPausedReason: status.pollPausedReason ?? null,
       rateLimited: status.rateLimited ?? false,
       rateLimitResetAt: status.rateLimitResetAt ?? null,
       rateLimitRemaining: status.rateLimitRemaining ?? null,
@@ -724,6 +728,29 @@ export default function App() {
           </div>
           <div className="px-4 py-1 border-b border-gray-800 flex flex-wrap items-center justify-end gap-x-2 gap-y-0.5 text-[10px] text-gray-500 min-h-5">
             {pollMeta.polling && <span className="text-cyan-400/90">Polling…</span>}
+            {pollMeta.pollPaused && !pollMeta.rateLimited && (
+              <span className="text-orange-400/90" title={pollMeta.pollPausedReason ?? "Polling paused"}>
+                ⏸ Paused — {pollMeta.pollPausedReason ?? "API quota &gt;80%"}
+              </span>
+            )}
+            {/* Rate limit usage bar */}
+            {pollMeta.rateLimitRemaining != null && pollMeta.rateLimitLimit != null && pollMeta.rateLimitLimit > 0 && (
+              <span className="flex items-center gap-1.5" title={`GitHub API: ${pollMeta.rateLimitRemaining}/${pollMeta.rateLimitLimit} requests remaining`}>
+                <span className="text-gray-600">{pollMeta.rateLimitRemaining}/{pollMeta.rateLimitLimit}</span>
+                <span className="w-16 h-1.5 bg-gray-800 rounded-full overflow-hidden">
+                  <span
+                    className={`h-full block rounded-full transition-all ${
+                      (pollMeta.rateLimitLimit - pollMeta.rateLimitRemaining) / pollMeta.rateLimitLimit >= 0.8
+                        ? "bg-red-500"
+                        : (pollMeta.rateLimitLimit - pollMeta.rateLimitRemaining) / pollMeta.rateLimitLimit >= 0.6
+                          ? "bg-orange-500"
+                          : "bg-green-500"
+                    }`}
+                    style={{ width: `${Math.round(((pollMeta.rateLimitLimit - pollMeta.rateLimitRemaining) / pollMeta.rateLimitLimit) * 100)}%` }}
+                  />
+                </span>
+              </span>
+            )}
             {pollMeta.rateLimited && (
               <span
                 className="text-amber-400/90 max-w-[min(100%,360px)] truncate"
