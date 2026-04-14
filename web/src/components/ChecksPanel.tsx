@@ -152,10 +152,12 @@ function CheckRunRow({
 export default function ChecksPanel({
   prNumber,
   repo,
+  headSha,
   onSelectFile,
 }: {
   prNumber: number;
   repo: string;
+  headSha?: string;
   onSelectFile?: (file: string) => void;
 }) {
   const [state, setState] = useState<{
@@ -168,7 +170,7 @@ export default function ChecksPanel({
 
   useEffect(() => {
     let cancelled = false;
-    api.getChecks(prNumber, repo).then(
+    api.getChecks(prNumber, repo, headSha).then(
       (data) => { if (!cancelled) setState({ key: fetchKey, suites: data, error: null }); },
       (err) => {
         if (!cancelled) setState({ key: fetchKey, suites: null, error: err instanceof Error ? err.message : "Failed to load checks" });

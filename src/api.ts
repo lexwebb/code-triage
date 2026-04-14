@@ -567,16 +567,19 @@ export function registerRoutes(): void {
     });
   });
 
-  // GET /api/pulls/:number/checks?repo=owner/repo
+  // GET /api/pulls/:number/checks?repo=owner/repo&sha=abc123
   addRoute("GET", "/api/pulls/:number/checks", async (_req, res, params, query) => {
     const repo = requireRepo(query);
     const prNumber = parseInt(params.number, 10);
 
-    // Get the PR head SHA
-    const pr = await ghAsync<{ head: { sha: string } }>(`/repos/${repo}/pulls/${prNumber}`);
-    const sha = pr.head.sha;
+    // Use SHA from query param (already known from PR detail) to avoid an extra API call
+    let sha = query.get("sha") ?? "";
+    if (!sha) {
+      const pr = await ghAsync<{ head: { sha: string } }>(`/repos/${repo}/pulls/${prNumber}`);
+      sha = pr.head.sha;
+    }
 
-    // Fetch suites and runs in parallel
+    // Fetch suites and runs in parallel (per_page=100; repos with >100 check runs will be truncated)
     const [suitesData, runsData] = await Promise.all([
       ghAsync<GhCheckSuitesResponse>(`/repos/${repo}/commits/${sha}/check-suites?per_page=100`),
       ghAsync<GhCheckRunsFullResponse>(`/repos/${repo}/commits/${sha}/check-runs?per_page=100`),
