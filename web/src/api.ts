@@ -161,6 +161,8 @@ export const api = {
     postJSON<{ success: boolean }>("/api/actions/fix-apply", { repo, commentId, prNumber, branch }),
   fixDiscard: (branch: string, commentId?: number) =>
     postJSON<{ success: boolean }>("/api/actions/fix-discard", { branch, commentId }),
+  fixReply: (repo: string, commentId: number, message: string) =>
+    postJSON<{ success: boolean; error?: string }>("/api/actions/fix-reply", { repo, commentId, message }),
   submitReview: (repo: string, prNumber: number, event: "APPROVE" | "REQUEST_CHANGES" | "COMMENT", body?: string) =>
     postJSON<{ success: boolean }>("/api/actions/review", { repo, prNumber, event, body }),
   createComment: (repo: string, prNumber: number, commitId: string, path: string, line: number, side: "LEFT" | "RIGHT", body: string) =>

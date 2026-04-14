@@ -28,6 +28,7 @@ function payloadToForm(c: AppConfigPayload): {
   evalPromptAppend: string;
   evalPromptAppendByRepoJson: string;
   evalClaudeExtraArgsJson: string;
+  fixConversationMaxTurns: number;
 } {
   return {
     root: c.root,
@@ -53,6 +54,7 @@ function payloadToForm(c: AppConfigPayload): {
     evalPromptAppend: c.evalPromptAppend ?? "",
     evalPromptAppendByRepoJson: JSON.stringify(c.evalPromptAppendByRepo ?? {}, null, 2),
     evalClaudeExtraArgsJson: JSON.stringify(c.evalClaudeExtraArgs ?? [], null, 2),
+    fixConversationMaxTurns: c.fixConversationMaxTurns ?? 5,
   };
 }
 
@@ -142,6 +144,7 @@ export default function SettingsView({
         evalPromptAppend: form.evalPromptAppend.trim() || undefined,
         evalPromptAppendByRepo,
         evalClaudeExtraArgs,
+        fixConversationMaxTurns: form.fixConversationMaxTurns,
       };
       const gt = form.githubToken.trim();
       if (gt) {
@@ -473,6 +476,22 @@ export default function SettingsView({
 
         <section className="space-y-2">
           <h2 className="text-xs text-gray-500 uppercase tracking-wide">Claude evaluation</h2>
+          <div className="grid grid-cols-2 gap-4">
+            <label className="block space-y-1">
+              <span className="text-sm text-gray-400">Fix conversation max turns (0 = unlimited)</span>
+              <input
+                type="number"
+                min={0}
+                max={50}
+                className="w-full rounded-md border border-gray-700 bg-gray-900 px-3 py-2 text-sm"
+                value={form.fixConversationMaxTurns}
+                onChange={(e) => update("fixConversationMaxTurns", parseInt(e.target.value, 10) || 0)}
+              />
+            </label>
+          </div>
+          <p className="text-xs text-gray-600">
+            When Claude asks clarifying questions during a fix, this limits how many rounds of Q&amp;A before it must attempt the fix.
+          </p>
           <label className="block space-y-1">
             <span className="text-sm text-gray-400">Append to eval prompt (all repos)</span>
             <textarea

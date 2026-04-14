@@ -272,6 +272,8 @@ export function setFixJobStatus(job: FixJobStatus): void {
     status: job.status,
     path: job.path,
     error: job.error,
+    sessionId: job.sessionId,
+    conversation: job.conversation,
   });
   broadcastPollStatus();
 }
