@@ -137,13 +137,88 @@ function ThreadStatusBadge({ status }: { status: string }) {
   return null;
 }
 
-function ThreadItem({ thread, onSelectFile, repo, prNumber, branch, fixBlocked, onCommentAction, onFixStarted, isFocused, registerRowEl, threadActionsRef, repoLocalPath, preferredEditor }: {
+function FixConversation({ job, repo, onJobAction }: {
+  job: FixJobStatus;
+  repo: string;
+  onJobAction: () => void;
+}) {
+  const [reply, setReply] = useState("");
+  const [sending, setSending] = useState(false);
+
+  async function handleSend() {
+    if (!reply.trim() || sending) return;
+    setSending(true);
+    try {
+      await api.fixReply(repo, job.commentId, reply.trim());
+      setReply("");
+      onJobAction();
+    } catch (err) {
+      console.error("Fix reply failed:", err);
+    } finally {
+      setSending(false);
+    }
+  }
+
+  const conversation = job.conversation ?? [];
+  const claudeTurns = conversation.filter((m) => m.role === "claude").length;
+  const isRunning = job.status === "running";
+
+  return (
+    <div className="mx-1 mt-2 p-2 bg-indigo-950/20 rounded border border-indigo-500/30 space-y-2">
+      <div className="text-[10px] uppercase tracking-wide text-indigo-400">Fix conversation</div>
+      <div className="space-y-1.5 max-h-60 overflow-y-auto">
+        {conversation.map((msg, i) => (
+          <div key={i} className={`text-xs p-2 rounded ${
+            msg.role === "claude"
+              ? "bg-gray-800/60 text-gray-300 mr-8"
+              : "bg-indigo-900/30 text-indigo-200 ml-8"
+          }`}>
+            <span className="text-[10px] text-gray-500 block mb-0.5">
+              {msg.role === "claude" ? "Claude" : "You"}
+            </span>
+            {msg.message}
+          </div>
+        ))}
+        {isRunning && (
+          <div className="text-xs text-gray-500 italic px-2">Claude is thinking...</div>
+        )}
+      </div>
+      {job.status === "awaiting_response" && (
+        <div className="flex gap-2 items-end">
+          <textarea
+            value={reply}
+            onChange={(e) => setReply(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+                void handleSend();
+              }
+            }}
+            placeholder="Reply to Claude..."
+            disabled={sending}
+            rows={2}
+            autoFocus
+            className="flex-1 text-xs bg-gray-950 border border-gray-700 rounded px-2 py-1 text-gray-300 placeholder-gray-600 focus:outline-none focus:border-indigo-500 resize-y"
+          />
+          <div className="flex flex-col items-end gap-1">
+            <Button variant="blue" size="xs" onClick={() => void handleSend()} disabled={sending || !reply.trim()}>
+              {sending ? "Sending..." : "Send"}
+            </Button>
+            <span className="text-[10px] text-gray-600">Turn {claudeTurns}</span>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ThreadItem({ thread, onSelectFile, repo, prNumber, branch, fixBlocked, fixJobs, onCommentAction, onFixStarted, isFocused, registerRowEl, threadActionsRef, repoLocalPath, preferredEditor }: {
   thread: Thread;
   onSelectFile: (f: string) => void;
   repo: string;
   prNumber: number;
   branch: string;
   fixBlocked: boolean;
+  fixJobs?: FixJobStatus[];
   onCommentAction: () => void;
   onFixStarted: (job: FixJobStatus) => void;
   isFocused: boolean;
@@ -172,6 +247,10 @@ function ThreadItem({ thread, onSelectFile, repo, prNumber, branch, fixBlocked, 
   useEffect(() => {
     setPriorityDraft(thread.root.priority != null ? String(thread.root.priority) : "");
   }, [thread.root.priority, thread.root.id]);
+
+  const fixJob = fixJobs?.find((j) => j.commentId === thread.root.id);
+  const isAwaitingResponse = fixJob?.status === "awaiting_response";
+  const isFixRunning = fixJob?.status === "running";
 
   // Fix with Claude state
   const [fixing, setFixing] = useState(false);
@@ -335,8 +414,10 @@ function ThreadItem({ thread, onSelectFile, repo, prNumber, branch, fixBlocked, 
         </span>
         <span className="flex items-center gap-2 shrink-0">
           {isEvaluating && <ThreadStatusBadge status="evaluating" />}
-          {!isEvaluating && isActedOn && <ThreadStatusBadge status={status!} />}
-          {!isEvaluating && !isActedOn && eval_ && <EvalBadge action={eval_.action} />}
+          {!isEvaluating && isAwaitingResponse && <StatusBadge color="blue">Claude Asking</StatusBadge>}
+          {!isEvaluating && isFixRunning && <StatusBadge color="yellow">Fix Running</StatusBadge>}
+          {!isEvaluating && !isAwaitingResponse && !isFixRunning && isActedOn && <ThreadStatusBadge status={status!} />}
+          {!isEvaluating && !isAwaitingResponse && !isFixRunning && !isActedOn && eval_ && <EvalBadge action={eval_.action} />}
           {!isEvaluating && !isActedOn && !eval_ && thread.root.evalFailed && (
             <StatusBadge color="gray" className="text-red-400">Eval failed</StatusBadge>
           )}
@@ -457,6 +538,11 @@ function ThreadItem({ thread, onSelectFile, repo, prNumber, branch, fixBlocked, 
             </div>
           )}
 
+          {/* Fix conversation */}
+          {fixJob && (fixJob.status === "awaiting_response" || (fixJob.status === "running" && fixJob.conversation?.length)) && (
+            <FixConversation job={fixJob} repo={repo} onJobAction={onCommentAction} />
+          )}
+
           {/* Action buttons */}
           {!isActedOn && !thread.isResolved && !isEvaluating && (
             <div className="flex items-center gap-2 mx-1 mt-2 pt-2 border-t border-gray-800">
@@ -465,15 +551,17 @@ function ThreadItem({ thread, onSelectFile, repo, prNumber, branch, fixBlocked, 
                   {acting ? "Sending..." : "Send Reply"}
                 </Button>
               )}
-              <Button
-                variant="orange"
-                size="xs"
-                onClick={() => setFixModalOpen(true)}
-                disabled={acting || fixing || fixBlocked}
-                title={fixBlocked ? "A fix is already running on this PR" : undefined}
-              >
-                {fixing ? "Starting fix..." : fixBlocked ? "Fix running..." : "Fix with Claude"}
-              </Button>
+              {!isAwaitingResponse && (
+                <Button
+                  variant="orange"
+                  size="xs"
+                  onClick={() => setFixModalOpen(true)}
+                  disabled={acting || fixing || fixBlocked}
+                  title={fixBlocked ? "A fix is already running on this PR" : undefined}
+                >
+                  {fixing ? "Starting fix..." : fixBlocked ? "Fix running..." : "Fix with Claude"}
+                </Button>
+              )}
               <Button variant="green" size="xs" onClick={() => handleAction("resolve")} disabled={acting || fixing}>
                 Resolve
               </Button>
@@ -821,6 +909,7 @@ export default function CommentThreads({ comments, onSelectFile, repo, prNumber,
                       prNumber={prNumber}
                       branch={branch}
                       fixBlocked={hasRunningFix}
+                      fixJobs={fixJobs}
                       onCommentAction={onCommentAction}
                       onFixStarted={onFixStarted}
                       isFocused={focusedIdx === idx}
