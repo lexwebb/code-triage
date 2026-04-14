@@ -291,14 +291,17 @@ export async function resolveThread(
   );
 }
 
-export async function applyFixWithClaude(worktreePath: string, comment: { path: string; line: number; body: string; diffHunk: string }): Promise<string> {
+export async function applyFixWithClaude(worktreePath: string, comment: { path: string; line: number; body: string; diffHunk: string }, userInstructions?: string): Promise<string> {
+  const userBlock = userInstructions?.trim()
+    ? `\n\nAdditional instructions from the developer:\n${userInstructions.trim()}`
+    : "";
   const fixPrompt = `Apply this CodeRabbit review suggestion. Make the minimal changes needed:
 
 - File: ${comment.path}, line ${comment.line}
   Comment: ${comment.body.split("\n").slice(0, 10).join("\n  ")}
 
 Diff context:
-${comment.diffHunk}
+${comment.diffHunk}${userBlock}
 
 Make the changes directly. Do not explain, just fix the code.`;
 

@@ -18,7 +18,7 @@ import {
 } from "./terminal.js";
 import { startServer, updateRepos, updatePollState, triggerTestNotification, sseBroadcast, setConfigSavedHandler } from "./server.js";
 import { discoverRepos, type RepoInfo } from "./discovery.js";
-import { filterRepoPathsWithPushAccess } from "./github-batching.js";
+import { filterRepoPathsWithPushAccess, loadCachedPushAccess } from "./github-batching.js";
 import { loadConfig, saveConfig, configExists, type Config } from "./config.js";
 import { computeEffectivePollIntervalMs, estimatePollRequestCount } from "./poll-rate-budget.js";
 import { recordPollOutcomes, selectReposToPoll } from "./repo-poll-schedule.js";
@@ -231,12 +231,22 @@ if (flags.repo) {
   }
 }
 
-// In dev mode, skip the push-access filter to avoid GitHub API calls on every hot reload
+// In dev mode, use cached push-access results to avoid GitHub API calls on every hot reload
 const devStartup = process.env.NODE_ENV === "development" || process.env.npm_lifecycle_event === "dev";
 if (!devStartup) {
   repos = await filterReposToPushAccess(repos);
 } else {
-  console.log(`  Dev mode: skipping push-access filter (${repos.length} repos)`);
+  const cached = loadCachedPushAccess(repos.map((r) => r.repo));
+  if (cached) {
+    const allowed = new Set(cached);
+    const skipped = repos.length - allowed.size;
+    repos = repos.filter((r) => allowed.has(r.repo));
+    if (skipped > 0) {
+      console.log(`  Dev mode: filtered ${skipped} repo(s) without push access (cached).`);
+    }
+  } else {
+    console.log(`  Dev mode: no push-access cache — polling all ${repos.length} repos. Press 'd' to discover and cache.`);
+  }
 }
 if (repos.length === 0 && (flags.repo || configExists())) {
   console.error(

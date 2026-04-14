@@ -148,8 +148,8 @@ export const api = {
     postJSON<{ success: boolean; evaluation?: unknown }>("/api/actions/re-evaluate", { repo, commentId, prNumber }),
   batchAction: (action: "reply" | "resolve" | "dismiss", items: Array<{ repo: string; commentId: number; prNumber: number }>) =>
     postJSON<{ results: Array<{ commentId: number; success: boolean; error?: string }> }>("/api/actions/batch", { action, items }),
-  fixWithClaude: (repo: string, commentId: number, prNumber: number, branch: string, comment: { path: string; line: number; body: string; diffHunk: string }) =>
-    postJSON<{ success: boolean; status: string; branch?: string; error?: string }>("/api/actions/fix", { repo, commentId, prNumber, branch, comment }),
+  fixWithClaude: (repo: string, commentId: number, prNumber: number, branch: string, comment: { path: string; line: number; body: string; diffHunk: string }, userInstructions?: string) =>
+    postJSON<{ success: boolean; status: string; branch?: string; error?: string }>("/api/actions/fix", { repo, commentId, prNumber, branch, comment, ...(userInstructions ? { userInstructions } : {}) }),
   fixApply: (repo: string, commentId: number, prNumber: number, branch: string) =>
     postJSON<{ success: boolean }>("/api/actions/fix-apply", { repo, commentId, prNumber, branch }),
   fixDiscard: (branch: string, commentId?: number) =>

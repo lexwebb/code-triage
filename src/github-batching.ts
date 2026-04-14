@@ -1,4 +1,5 @@
 import { ghGraphQL, partitionEntriesByToken, partitionRepoPathsByToken } from "./exec.js";
+import { getRawSqlite, openStateDatabase } from "./db/client.js";
 
 /** Open PRs per repo in one GraphQL round-trip chunk. */
 const REPO_LIST_CHUNK = 8;
@@ -78,7 +79,48 @@ export function resetOpenPullsCacheForTests(): void {
  */
 export async function filterRepoPathsWithPushAccess(repoPaths: string[]): Promise<string[]> {
   const { writableRepoPaths } = await fetchOpenPullRequestsForRepos(repoPaths);
+  savePushAccessCache(repoPaths, writableRepoPaths);
   return repoPaths.filter((rp) => writableRepoPaths.has(rp));
+}
+
+const PUSH_ACCESS_CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+
+/**
+ * Reads cached push-access results from SQLite. Returns the filtered repo list if ALL
+ * requested repos have a non-expired cache entry, or `null` on cache miss (any repo
+ * missing or expired).
+ */
+export function loadCachedPushAccess(repoPaths: string[]): string[] | null {
+  if (repoPaths.length === 0) return [];
+  openStateDatabase();
+  const sqlite = getRawSqlite();
+  const stmt = sqlite.prepare("SELECT has_push, checked_at FROM repo_access WHERE repo = ?");
+  const now = Date.now();
+  const allowed: string[] = [];
+  for (const rp of repoPaths) {
+    const row = stmt.get(rp) as { has_push: number; checked_at: number } | undefined;
+    if (!row || now - row.checked_at > PUSH_ACCESS_CACHE_TTL_MS) {
+      return null; // cache miss — at least one repo is missing or expired
+    }
+    if (row.has_push) allowed.push(rp);
+  }
+  return allowed;
+}
+
+/** Persists push-access results so dev-mode restarts can skip the GitHub API call. */
+export function savePushAccessCache(repoPaths: string[], writableSet: Set<string>): void {
+  openStateDatabase();
+  const sqlite = getRawSqlite();
+  const upsert = sqlite.prepare(
+    "INSERT INTO repo_access (repo, has_push, checked_at) VALUES (?, ?, ?) ON CONFLICT(repo) DO UPDATE SET has_push = excluded.has_push, checked_at = excluded.checked_at",
+  );
+  const now = Date.now();
+  const run = sqlite.transaction(() => {
+    for (const rp of repoPaths) {
+      upsert.run(rp, writableSet.has(rp) ? 1 : 0, now);
+    }
+  });
+  run();
 }
 
 type GqlOpenPullNode = {

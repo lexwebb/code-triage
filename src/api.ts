@@ -744,7 +744,7 @@ export function registerRoutes(): void {
 
   // POST /api/actions/fix — create worktree, run Claude, return diff
   addRoute("POST", "/api/actions/fix", async (req, res) => {
-    const body = getBody<{ repo: string; commentId: number; prNumber: number; branch: string; comment: { path: string; line: number; body: string; diffHunk: string } }>(req);
+    const body = getBody<{ repo: string; commentId: number; prNumber: number; branch: string; comment: { path: string; line: number; body: string; diffHunk: string }; userInstructions?: string }>(req);
 
     // Prevent concurrent fixes on the same branch or PR
     const activeBranch = getActiveFixForBranch(body.branch);
@@ -805,7 +805,7 @@ export function registerRoutes(): void {
 
     // Run Claude in background
     try {
-      const claudeOutput = await applyFixWithClaude(worktreePath, body.comment);
+      const claudeOutput = await applyFixWithClaude(worktreePath, body.comment, body.userInstructions);
       const diff = getDiffInWorktree(worktreePath);
 
       if (!diff.trim()) {
