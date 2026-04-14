@@ -386,6 +386,44 @@ async function getChecksSummary(repoPath: string, sha: string): Promise<{
   }
 }
 
+interface GhCheckSuite {
+  id: number;
+  app: { name: string; slug: string } | null;
+  conclusion: string | null;
+  status: string;
+}
+
+interface GhCheckSuitesResponse {
+  total_count: number;
+  check_suites: GhCheckSuite[];
+}
+
+interface GhCheckRunFull {
+  id: number;
+  name: string;
+  status: "queued" | "in_progress" | "completed";
+  conclusion: string | null;
+  started_at: string | null;
+  completed_at: string | null;
+  html_url: string;
+  check_suite: { id: number };
+  output: { annotations_count: number };
+}
+
+interface GhCheckRunsFullResponse {
+  total_count: number;
+  check_runs: GhCheckRunFull[];
+}
+
+interface GhAnnotation {
+  path: string;
+  start_line: number;
+  end_line: number;
+  annotation_level: "notice" | "warning" | "failure";
+  message: string;
+  title: string | null;
+}
+
 export function registerRoutes(): void {
 
   // GET /api/config — settings for web UI (tokens omitted)
@@ -527,6 +565,120 @@ export function registerRoutes(): void {
       reviewers: Array.from(reviewerMap.values()),
       checksSummary,
     });
+  });
+
+  // GET /api/pulls/:number/checks?repo=owner/repo
+  addRoute("GET", "/api/pulls/:number/checks", async (_req, res, params, query) => {
+    const repo = requireRepo(query);
+    const prNumber = parseInt(params.number, 10);
+
+    // Get the PR head SHA
+    const pr = await ghAsync<{ head: { sha: string } }>(`/repos/${repo}/pulls/${prNumber}`);
+    const sha = pr.head.sha;
+
+    // Fetch suites and runs in parallel
+    const [suitesData, runsData] = await Promise.all([
+      ghAsync<GhCheckSuitesResponse>(`/repos/${repo}/commits/${sha}/check-suites?per_page=100`),
+      ghAsync<GhCheckRunsFullResponse>(`/repos/${repo}/commits/${sha}/check-runs?per_page=100`),
+    ]);
+
+    // Build suite name map
+    const suiteNameMap = new Map<number, string>();
+    for (const s of suitesData.check_suites) {
+      suiteNameMap.set(s.id, s.app?.name ?? "Unknown");
+    }
+
+    // Deduplicate runs: keep only the latest (highest id) per name per suite
+    const latestByKey = new Map<string, GhCheckRunFull>();
+    for (const run of runsData.check_runs) {
+      const key = `${run.check_suite.id}:${run.name}`;
+      const existing = latestByKey.get(key);
+      if (!existing || run.id > existing.id) {
+        latestByKey.set(key, run);
+      }
+    }
+    const dedupedRuns = Array.from(latestByKey.values());
+
+    // Fetch annotations for failed runs (in parallel, capped)
+    const failedRuns = dedupedRuns.filter(
+      (r) => r.status === "completed" && (r.conclusion === "failure" || r.conclusion === "timed_out"),
+    );
+    const annotationsByRunId = new Map<number, GhAnnotation[]>();
+    await Promise.all(
+      failedRuns.map(async (run) => {
+        if (run.output.annotations_count === 0) return;
+        try {
+          const annotations = await ghAsync<GhAnnotation[]>(
+            `/repos/${repo}/check-runs/${run.id}/annotations`,
+          );
+          annotationsByRunId.set(run.id, annotations);
+        } catch {
+          /* skip annotation fetch failures */
+        }
+      }),
+    );
+
+    // Sort helper: failure=0, pending=1, success=2
+    function sortOrder(run: GhCheckRunFull): number {
+      if (run.status !== "completed") return 1;
+      if (run.conclusion === "failure" || run.conclusion === "timed_out" || run.conclusion === "action_required") return 0;
+      return 2;
+    }
+
+    // Group runs by suite
+    const suiteRunsMap = new Map<number, GhCheckRunFull[]>();
+    for (const run of dedupedRuns) {
+      const suiteId = run.check_suite.id;
+      if (!suiteRunsMap.has(suiteId)) suiteRunsMap.set(suiteId, []);
+      suiteRunsMap.get(suiteId)!.push(run);
+    }
+
+    // Build response
+    const suites = Array.from(suiteRunsMap.entries()).map(([suiteId, runs]) => {
+      runs.sort((a, b) => sortOrder(a) - sortOrder(b));
+
+      const hasFailure = runs.some((r) => sortOrder(r) === 0);
+      const hasPending = runs.some((r) => r.status !== "completed");
+      const suiteConclusion = hasFailure ? "failure" : hasPending ? null : "success";
+
+      return {
+        id: suiteId,
+        name: suiteNameMap.get(suiteId) ?? "Unknown",
+        conclusion: suiteConclusion,
+        runs: runs.map((r) => {
+          const annotations = (annotationsByRunId.get(r.id) ?? []).map((a) => ({
+            path: a.path,
+            startLine: a.start_line,
+            endLine: a.end_line,
+            level: a.annotation_level,
+            message: a.message,
+            title: a.title,
+          }));
+          const startMs = r.started_at ? new Date(r.started_at).getTime() : null;
+          const endMs = r.completed_at ? new Date(r.completed_at).getTime() : null;
+          return {
+            id: r.id,
+            name: r.name,
+            status: r.status,
+            conclusion: r.conclusion,
+            startedAt: r.started_at,
+            completedAt: r.completed_at,
+            durationMs: startMs && endMs ? endMs - startMs : null,
+            htmlUrl: r.html_url,
+            annotations,
+          };
+        }),
+      };
+    });
+
+    // Sort suites: those with failures first
+    suites.sort((a, b) => {
+      const aFail = a.conclusion === "failure" ? 0 : 1;
+      const bFail = b.conclusion === "failure" ? 0 : 1;
+      return aFail - bFail;
+    });
+
+    json(res, suites);
   });
 
   // GET /api/pulls/:number/files?repo=owner/repo
