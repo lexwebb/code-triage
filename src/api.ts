@@ -1050,7 +1050,8 @@ export function registerRoutes(): void {
 
     // Run Claude in background
     try {
-      const claudeOutput = await applyFixWithClaude(worktreePath, body.comment, body.userInstructions);
+      const fixResult = await applyFixWithClaude(worktreePath, body.comment, body.userInstructions);
+      const claudeOutput = fixResult.message;
       const diff = getDiffInWorktree(worktreePath);
 
       if (!diff.trim()) {

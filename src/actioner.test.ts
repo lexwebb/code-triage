@@ -1,6 +1,43 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { clampEvalConcurrency, parseEvaluation } from "./actioner.js";
+import { clampEvalConcurrency, parseEvaluation, parseFixResponse } from "./actioner.js";
 import { log } from "./logger.js";
+
+describe("parseFixResponse", () => {
+  it("parses a fix action from CLI JSON output", () => {
+    const cliOutput = JSON.stringify({
+      type: "result",
+      subtype: "success",
+      result: JSON.stringify({ action: "fix", message: "Applied the guard clause" }),
+    });
+    const parsed = parseFixResponse(cliOutput);
+    expect(parsed).toEqual({ action: "fix", message: "Applied the guard clause" });
+  });
+
+  it("parses a questions action from CLI JSON output", () => {
+    const cliOutput = JSON.stringify({
+      type: "result",
+      subtype: "success",
+      result: JSON.stringify({ action: "questions", message: "Should I use Option A or B?" }),
+    });
+    const parsed = parseFixResponse(cliOutput);
+    expect(parsed).toEqual({ action: "questions", message: "Should I use Option A or B?" });
+  });
+
+  it("falls back to fix action when result is not valid JSON", () => {
+    const cliOutput = JSON.stringify({
+      type: "result",
+      subtype: "success",
+      result: "I made the changes as requested.",
+    });
+    const parsed = parseFixResponse(cliOutput);
+    expect(parsed).toEqual({ action: "fix", message: "I made the changes as requested." });
+  });
+
+  it("falls back to fix action when CLI output is not JSON at all", () => {
+    const parsed = parseFixResponse("Some plain text output from claude");
+    expect(parsed).toEqual({ action: "fix", message: "Some plain text output from claude" });
+  });
+});
 
 describe("clampEvalConcurrency", () => {
   it("clamps to 1–8 and floors", () => {

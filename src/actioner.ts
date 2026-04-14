@@ -289,11 +289,55 @@ export async function resolveThread(
   );
 }
 
-export async function applyFixWithClaude(worktreePath: string, comment: { path: string; line: number; body: string; diffHunk: string }, userInstructions?: string): Promise<string> {
-  const userBlock = userInstructions?.trim()
-    ? `\n\nAdditional instructions from the developer:\n${userInstructions.trim()}`
-    : "";
-  const fixPrompt = `Apply this CodeRabbit review suggestion. Make the minimal changes needed:
+export function parseFixResponse(rawOutput: string): { action: "fix" | "questions"; message: string } {
+  try {
+    const wrapper = JSON.parse(rawOutput) as { result?: string };
+    const resultStr = wrapper.result ?? rawOutput;
+    try {
+      const inner = JSON.parse(resultStr) as { action?: string; message?: string };
+      if (inner.action === "questions" && typeof inner.message === "string") {
+        return { action: "questions", message: inner.message };
+      }
+      return { action: "fix", message: inner.message ?? resultStr };
+    } catch {
+      return { action: "fix", message: resultStr };
+    }
+  } catch {
+    return { action: "fix", message: rawOutput };
+  }
+}
+
+const FIX_JSON_SCHEMA = JSON.stringify({
+  type: "object",
+  properties: {
+    action: { type: "string", enum: ["fix", "questions"] },
+    message: { type: "string" },
+  },
+  required: ["action", "message"],
+});
+
+export async function applyFixWithClaude(
+  worktreePath: string,
+  comment: { path: string; line: number; body: string; diffHunk: string },
+  userInstructions?: string,
+  options?: { sessionId?: string; resumeSessionId?: string; isLastTurn?: boolean },
+): Promise<{ action: "fix" | "questions"; message: string; rawOutput: string }> {
+  let prompt: string;
+  const args: string[] = [];
+
+  if (options?.resumeSessionId) {
+    // Follow-up turn: prompt is the user's message (passed as userInstructions)
+    prompt = userInstructions ?? "";
+    if (options.isLastTurn) {
+      prompt += "\n\nIMPORTANT: This is the final turn. You must now attempt the fix with what you know. Do not ask more questions. Respond with action \"fix\".";
+    }
+    args.push("-p", prompt, "--dangerously-skip-permissions", "--resume", options.resumeSessionId, "--output-format", "json", "--json-schema", FIX_JSON_SCHEMA);
+  } else {
+    // Initial turn
+    const userBlock = userInstructions?.trim()
+      ? `\n\nAdditional instructions from the developer:\n${userInstructions.trim()}`
+      : "";
+    prompt = `Apply this CodeRabbit review suggestion. Make the minimal changes needed.
 
 - File: ${comment.path}, line ${comment.line}
   Comment: ${comment.body.split("\n").slice(0, 10).join("\n  ")}
@@ -301,12 +345,19 @@ export async function applyFixWithClaude(worktreePath: string, comment: { path: 
 Diff context:
 ${comment.diffHunk}${userBlock}
 
-Make the changes directly. Do not explain, just fix the code.`;
+If the comment is ambiguous, the intended behavior is unclear, or there are multiple valid approaches, respond with action "questions" and ask what you need to know. Otherwise, make the changes directly and respond with action "fix".
+
+Respond as JSON: { "action": "fix" | "questions", "message": "..." }`;
+    args.push("-p", prompt, "--dangerously-skip-permissions", "--output-format", "json", "--json-schema", FIX_JSON_SCHEMA);
+    if (options?.sessionId) {
+      args.push("--session-id", options.sessionId);
+    }
+  }
 
   updateClaudeStats({ fixStarted: true });
-  let output: string;
+  let rawOutput: string;
   try {
-    output = await spawnTracked("claude", ["-p", fixPrompt, "--dangerously-skip-permissions"], {
+    rawOutput = await spawnTracked("claude", args, {
       cwd: worktreePath,
       stdio: ["pipe", "pipe", "pipe"],
       stderrToConsole: true,
@@ -314,6 +365,8 @@ Make the changes directly. Do not explain, just fix the code.`;
   } finally {
     updateClaudeStats({ fixFinished: true });
   }
-  return output;
+
+  const parsed = parseFixResponse(rawOutput);
+  return { ...parsed, rawOutput };
 }
 
