@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import { useShallow } from "zustand/react/shallow";
 import RepoFilter from "./components/RepoSelector";
 import PRList from "./components/PRList";
 import PRDetail from "./components/PRDetail";
@@ -25,7 +26,7 @@ import {
 } from "./store";
 
 function MutedReviewSection() {
-  const pulls = useAppStore(selectMutedReviewPulls);
+  const pulls = useAppStore(useShallow(selectMutedReviewPulls));
   if (pulls.length === 0) return null;
   return (
     <CollapsibleSection
@@ -70,8 +71,8 @@ export default function App() {
   const isWide = useAppStore((s) => s.isWide);
   const showSettings = useAppStore((s) => s.showSettings);
 
-  const filteredPulls = useAppStore(selectFilteredAuthored);
-  const filteredReviewPulls = useAppStore(selectFilteredReviewRequested);
+  const filteredPulls = useAppStore(useShallow(selectFilteredAuthored));
+  const filteredReviewPulls = useAppStore(useShallow(selectFilteredReviewRequested));
   const timerText = useAppStore(selectTimerText);
   const showNotifBanner = useAppStore(selectShowNotifBanner);
 
