@@ -177,6 +177,7 @@ export function serializeConfigForClient(c: Config): Record<string, unknown> {
     pollApiHeadroom: c.pollApiHeadroom ?? 0.35,
     pollRateLimitAware: c.pollRateLimitAware !== false,
     preferredEditor: c.preferredEditor ?? "vscode",
+    fixConversationMaxTurns: c.fixConversationMaxTurns ?? 5,
   };
 }
 
@@ -325,6 +326,8 @@ export function mergeConfigFromBody(body: Record<string, unknown>, previous: Con
       ? body.preferredEditor.trim()
       : (previous.preferredEditor ?? "vscode");
 
+  const fixConversationMaxTurns = toInt(body.fixConversationMaxTurns, previous.fixConversationMaxTurns ?? 5);
+
   return {
     root,
     port,
@@ -343,6 +346,7 @@ export function mergeConfigFromBody(body: Record<string, unknown>, previous: Con
     pollApiHeadroom,
     pollRateLimitAware,
     preferredEditor,
+    fixConversationMaxTurns,
   };
 }
 

@@ -44,6 +44,8 @@ export interface Config {
   pollRateLimitAware?: boolean;
   /** IDE to open files in from the web UI. Default "vscode". */
   preferredEditor?: string;
+  /** Max Q&A turns before Claude must attempt the fix (0 = unlimited). Default 5. */
+  fixConversationMaxTurns?: number;
 }
 
 const DEFAULTS: Config = {
@@ -56,6 +58,7 @@ const DEFAULTS: Config = {
   repoPollColdIntervalMinutes: 60,
   pollApiHeadroom: 0.35,
   pollRateLimitAware: true,
+  fixConversationMaxTurns: 5,
 };
 
 export function loadConfig(): Config {

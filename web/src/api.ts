@@ -70,6 +70,8 @@ export interface AppConfigPayload {
   pollRateLimitAware: boolean;
   /** IDE to open files in from the web UI. Default "vscode". */
   preferredEditor: string;
+  /** Max Q&A turns for conversational fixes (0 = unlimited). Default 5. */
+  fixConversationMaxTurns: number;
 }
 
 export interface ConfigGetResponse {
