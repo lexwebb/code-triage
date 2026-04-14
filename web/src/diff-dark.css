@@ -3,6 +3,7 @@
 
 /* Dark theme overrides scoped to .diff-dark wrapper */
 .diff-dark {
+  --diff-font-family: "Source Code Pro", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
   --diff-background-color: transparent;
   --diff-text-color: #d1d5db;
   --diff-code-insert-background-color: rgba(34, 197, 94, 0.1);
