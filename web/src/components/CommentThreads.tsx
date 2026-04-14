@@ -130,6 +130,7 @@ function EvalBadge({ action }: { action: string }) {
 }
 
 function ThreadStatusBadge({ status }: { status: string }) {
+  if (status === "evaluating") return <StatusBadge color="blue" className="animate-pulse">Evaluating...</StatusBadge>;
   if (status === "replied") return <StatusBadge color="green" icon={<Check size={12} />}>Replied</StatusBadge>;
   if (status === "dismissed") return <StatusBadge color="gray">Dismissed</StatusBadge>;
   if (status === "fixed") return <StatusBadge color="blue" icon={<Check size={12} />}>Fixed</StatusBadge>;
@@ -154,6 +155,7 @@ function ThreadItem({ thread, onSelectFile, repo, prNumber, branch, fixBlocked, 
   const eval_ = thread.root.evaluation;
   const status = thread.root.crStatus;
   const isActedOn = status === "replied" || status === "dismissed" || status === "fixed";
+  const isEvaluating = status === "evaluating";
   const [expanded, setExpanded] = useState(!thread.isResolved && !isActedOn);
   const [acting, setActing] = useState(false);
   const [showSuggestion, setShowSuggestion] = useState(false);
@@ -332,8 +334,12 @@ function ThreadItem({ thread, onSelectFile, repo, prNumber, branch, fixBlocked, 
           )}
         </span>
         <span className="flex items-center gap-2 shrink-0">
-          {isActedOn && <ThreadStatusBadge status={status!} />}
-          {!isActedOn && eval_ && <EvalBadge action={eval_.action} />}
+          {isEvaluating && <ThreadStatusBadge status="evaluating" />}
+          {!isEvaluating && isActedOn && <ThreadStatusBadge status={status!} />}
+          {!isEvaluating && !isActedOn && eval_ && <EvalBadge action={eval_.action} />}
+          {!isEvaluating && !isActedOn && !eval_ && thread.root.evalFailed && (
+            <StatusBadge color="gray" className="text-red-400">Eval failed</StatusBadge>
+          )}
           {thread.isResolved && <span className="text-green-500/70 text-xs font-sans">Resolved</span>}
           <span className="text-gray-600 text-xs">{expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}</span>
         </span>
@@ -452,7 +458,7 @@ function ThreadItem({ thread, onSelectFile, repo, prNumber, branch, fixBlocked, 
           )}
 
           {/* Action buttons */}
-          {!isActedOn && !thread.isResolved && (
+          {!isActedOn && !thread.isResolved && !isEvaluating && (
             <div className="flex items-center gap-2 mx-1 mt-2 pt-2 border-t border-gray-800">
               {eval_?.action === "reply" && eval_.reply && (
                 <Button variant="blue" size="xs" onClick={() => handleAction("reply")} disabled={acting || fixing}>

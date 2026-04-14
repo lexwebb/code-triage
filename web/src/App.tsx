@@ -211,6 +211,7 @@ export default function App() {
   flatPullsRef.current = flatPulls;
   const selectedPRRef = useRef(selectedPR);
   selectedPRRef.current = selectedPR;
+  const reloadCommentsRef = useRef<() => Promise<void>>(() => Promise.resolve());
 
   useEffect(() => {
     sessionStorage.setItem("code-triage:sidebar-collapsed", sidebarCollapsed ? "1" : "0");
@@ -461,6 +462,18 @@ export default function App() {
         if (data.status) applyPollStatus(data.status);
       } catch { /* ignore */ }
     });
+    es.addEventListener("eval-complete", (ev) => {
+      try {
+        const data = JSON.parse((ev as MessageEvent).data) as { repo?: string; prNumber?: number };
+        if (
+          data.repo && data.prNumber &&
+          selectedPRRef.current?.repo === data.repo &&
+          selectedPRRef.current?.number === data.prNumber
+        ) {
+          void reloadCommentsRef.current();
+        }
+      } catch { /* ignore */ }
+    });
     es.onerror = () => {
       /* browser auto-reconnects; keep quiet */
     };
@@ -517,6 +530,7 @@ export default function App() {
       console.error("Failed to reload comments:", err);
     }
   }
+  reloadCommentsRef.current = reloadComments;
 
   useNotifications(pulls, reviewPulls, handleSelectPR, reloadComments, pullFetchGeneration);
 
