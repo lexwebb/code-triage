@@ -271,6 +271,9 @@ export interface SettingsFormState {
   evalPromptAppendByRepoJson: string;
   evalClaudeExtraArgsJson: string;
   fixConversationMaxTurns: number;
+  linearApiKey: string;
+  hasLinearApiKey: boolean;
+  linearTeamKeys: string;
 }
 
 // ── Combined Store ──

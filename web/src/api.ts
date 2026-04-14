@@ -98,6 +98,12 @@ export interface AppConfigPayload {
   preferredEditor: string;
   /** Max Q&A turns for conversational fixes (0 = unlimited). Default 5. */
   fixConversationMaxTurns: number;
+  /** True when a Linear API key is stored in config (value not exposed). */
+  hasLinearApiKey: boolean;
+  /** Team keys to filter Linear queries. */
+  linearTeamKeys: string[];
+  /** Active ticket provider, if configured. */
+  ticketProvider?: "linear";
 }
 
 export interface ConfigGetResponse {

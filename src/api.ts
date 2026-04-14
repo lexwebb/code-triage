@@ -233,6 +233,9 @@ export function serializeConfigForClient(c: Config): Record<string, unknown> {
     pollRateLimitAware: c.pollRateLimitAware !== false,
     preferredEditor: c.preferredEditor ?? "vscode",
     fixConversationMaxTurns: c.fixConversationMaxTurns ?? 5,
+    hasLinearApiKey: Boolean(c.linearApiKey?.length),
+    linearTeamKeys: c.linearTeamKeys ?? [],
+    ticketProvider: c.ticketProvider ?? (c.linearApiKey ? "linear" : undefined),
   };
 }
 
