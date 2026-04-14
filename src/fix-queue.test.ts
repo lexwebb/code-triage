@@ -3,12 +3,41 @@ import { tmpdir } from "os";
 import { join } from "path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { closeStateDatabase, getStateDir, getRawSqlite, openStateDatabase } from "./db/client.js";
-import { enqueueFix, getFixQueue, dequeueNextFix, removeFromFixQueue } from "./fix-queue.js";
+import { enqueueFix, getFixQueue, dequeueNextFix, removeFromFixQueue, advanceQueue } from "./fix-queue.js";
+import { getAllFixJobStatuses, setFixJobStatus, getRepos } from "./server.js";
 
-vi.mock("./server.js", () => ({
-  sseBroadcast: vi.fn(),
-  getActiveFixForBranch: vi.fn(),
-  fixJobStatuses: new Map(),
+vi.mock("./server.js", () => {
+  const statuses = new Map();
+  return {
+    sseBroadcast: vi.fn(),
+    getActiveFixForBranch: vi.fn(() => undefined),
+    getFixJobStatus: vi.fn(),
+    setFixJobStatus: vi.fn(),
+    getRepos: vi.fn(() => []),
+    fixJobStatuses: statuses,
+    getAllFixJobStatuses: vi.fn(() => Array.from(statuses.values())),
+  };
+});
+
+vi.mock("./worktree.js", () => ({
+  createWorktree: vi.fn(() => "/tmp/fake-worktree"),
+  removeWorktree: vi.fn(),
+  getDiffInWorktree: vi.fn(() => ""),
+}));
+
+vi.mock("./actioner.js", () => ({
+  applyFixWithClaude: vi.fn(),
+}));
+
+vi.mock("./state.js", () => ({
+  loadState: vi.fn(() => ({ lastPoll: null, comments: {} })),
+  saveState: vi.fn(),
+  addFixJob: vi.fn(),
+  removeFixJob: vi.fn(),
+}));
+
+vi.mock("./config.js", () => ({
+  loadConfig: vi.fn(() => ({})),
 }));
 
 let testRoot: string;
@@ -113,5 +142,46 @@ describe("removeFromFixQueue", () => {
   it("returns false for non-existent item", () => {
     openStateDatabase();
     expect(removeFromFixQueue(999)).toBe(false);
+  });
+});
+
+describe("advanceQueue", () => {
+  it("does nothing when a fix is running", () => {
+    openStateDatabase();
+    enqueueFix(makeFixRequest(600));
+    vi.mocked(getAllFixJobStatuses).mockReturnValue([
+      { commentId: 99, repo: "a/b", prNumber: 1, path: "x.ts", startedAt: Date.now(), status: "running" },
+    ]);
+    advanceQueue();
+    expect(getFixQueue()).toHaveLength(1);
+  });
+
+  it("does nothing when a completed fix awaits review", () => {
+    openStateDatabase();
+    enqueueFix(makeFixRequest(601));
+    vi.mocked(getAllFixJobStatuses).mockReturnValue([
+      { commentId: 99, repo: "a/b", prNumber: 1, path: "x.ts", startedAt: Date.now(), status: "completed", diff: "..." },
+    ]);
+    advanceQueue();
+    expect(getFixQueue()).toHaveLength(1);
+  });
+
+  it("advances past failed/awaiting_response jobs and starts next fix", () => {
+    openStateDatabase();
+    enqueueFix(makeFixRequest(602));
+    vi.mocked(getAllFixJobStatuses).mockReturnValue([
+      { commentId: 99, repo: "a/b", prNumber: 1, path: "x.ts", startedAt: Date.now(), status: "failed", error: "boom" },
+    ]);
+    vi.mocked(getRepos).mockReturnValue([{ repo: "owner/repo", localPath: "/tmp/repo" } as unknown as ReturnType<typeof getRepos>[0]]);
+    advanceQueue();
+    expect(getFixQueue()).toHaveLength(0);
+    expect(setFixJobStatus).toHaveBeenCalledWith(expect.objectContaining({ commentId: 602, status: "running" }));
+  });
+
+  it("does nothing when queue is empty", () => {
+    openStateDatabase();
+    vi.mocked(getAllFixJobStatuses).mockReturnValue([]);
+    advanceQueue();
+    expect(getFixQueue()).toHaveLength(0);
   });
 });

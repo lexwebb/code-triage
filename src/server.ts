@@ -326,6 +326,10 @@ export function getFixJobStatus(commentId: number): FixJobStatus | undefined {
   return fixJobStatuses.get(commentId);
 }
 
+export function getAllFixJobStatuses(): FixJobStatus[] {
+  return Array.from(fixJobStatuses.values());
+}
+
 export interface HealthPayload {
   status: "ok";
   uptimeMs: number;
