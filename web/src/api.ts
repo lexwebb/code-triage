@@ -37,7 +37,7 @@ export interface FixJobStatus {
   prNumber: number;
   path: string;
   startedAt: number;
-  status: "running" | "completed" | "failed" | "awaiting_response";
+  status: "running" | "completed" | "failed" | "no_changes" | "awaiting_response";
   error?: string;
   diff?: string;
   branch?: string;
@@ -45,6 +45,7 @@ export interface FixJobStatus {
   originalComment?: { path: string; line: number; body: string; diffHunk: string };
   sessionId?: string;
   conversation?: Array<{ role: "claude" | "user"; message: string }>;
+  suggestedReply?: string;
 }
 
 /** Mirrors `GET /api/config` — safe for the browser (account tokens omitted). */
