@@ -295,6 +295,10 @@ export function clearFixJobStatus(commentId: number): void {
   broadcastPollStatus();
 }
 
+export function getFixJobStatus(commentId: number): FixJobStatus | undefined {
+  return fixJobStatuses.get(commentId);
+}
+
 export interface HealthPayload {
   status: "ok";
   uptimeMs: number;

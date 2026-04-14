@@ -1,4 +1,4 @@
-import { addRoute, json, getRepos, getBody, getPollState, getHealthPayload, setFixJobStatus, clearFixJobStatus, getActiveFixForBranch, getActiveFixForPR, subscribeSse, getListenPort, notifyConfigSaved } from "./server.js";
+import { addRoute, json, getRepos, getBody, getPollState, getHealthPayload, setFixJobStatus, clearFixJobStatus, getActiveFixForBranch, getActiveFixForPR, subscribeSse, getListenPort, notifyConfigSaved, getFixJobStatus } from "./server.js";
 import type { RepoInfo } from "./discovery.js";
 import { loadConfig, saveConfig, configExists, type Config } from "./config.js";
 import { loadState, markComment, patchCommentTriage, saveState, addFixJob as addFixJobState, removeFixJob as removeFixJobState, getFixJobs, getPendingTriageCountsByPr, needsEvaluation } from "./state.js";
@@ -1049,9 +1049,33 @@ export function registerRoutes(): void {
     json(res, { success: true, status: "running", branch: body.branch });
 
     // Run Claude in background
+    const sessionId = crypto.randomUUID();
     try {
-      const fixResult = await applyFixWithClaude(worktreePath, body.comment, body.userInstructions);
-      const claudeOutput = fixResult.message;
+      const result = await applyFixWithClaude(worktreePath, body.comment, body.userInstructions, { sessionId });
+
+      if (result.action === "questions") {
+        // Claude is asking questions — park the job
+        const conversation: Array<{ role: "claude" | "user"; message: string }> = [
+          { role: "claude", message: result.message },
+        ];
+        // Keep worktree alive, persist session info
+        const s = loadState();
+        const existingJob = getFixJobs(s).find((j) => j.commentId === body.commentId);
+        if (existingJob) {
+          existingJob.sessionId = sessionId;
+          existingJob.conversation = conversation;
+          saveState(s);
+        }
+        setFixJobStatus({
+          commentId: body.commentId, repo: body.repo, prNumber: body.prNumber,
+          path: body.comment.path, startedAt: Date.now(), status: "awaiting_response",
+          branch: body.branch, claudeOutput: result.rawOutput,
+          sessionId, conversation,
+        });
+        return;
+      }
+
+      // action === "fix" — check for diff as before
       const diff = getDiffInWorktree(worktreePath);
 
       if (!diff.trim()) {
@@ -1063,19 +1087,19 @@ export function registerRoutes(): void {
           commentId: body.commentId, repo: body.repo, prNumber: body.prNumber,
           path: body.comment.path, startedAt: Date.now(), status: "failed",
           error: "Claude made no changes",
-          claudeOutput,
+          claudeOutput: result.rawOutput,
         });
         return;
       }
 
-      // Mark completed with diff — keep worktree for apply/discard
       const s = loadState();
       removeFixJobState(s, body.commentId);
       saveState(s);
       setFixJobStatus({
         commentId: body.commentId, repo: body.repo, prNumber: body.prNumber,
         path: body.comment.path, startedAt: Date.now(), status: "completed",
-        diff, branch: body.branch, claudeOutput,
+        diff, branch: body.branch, claudeOutput: result.rawOutput,
+        conversation: [{ role: "claude", message: result.message }],
       });
     } catch (err) {
       removeWorktree(body.branch, repoInfo?.localPath);
@@ -1125,6 +1149,110 @@ export function registerRoutes(): void {
     } catch { /* ignore */ }
     if (body.commentId) clearFixJobStatus(body.commentId);
     json(res, { success: true });
+  });
+
+  // POST /api/actions/fix-reply — respond to Claude's questions and resume the fix session
+  addRoute("POST", "/api/actions/fix-reply", async (req, res) => {
+    const body = getBody<{ repo: string; commentId: number; message: string }>(req);
+
+    // Find the job — must be awaiting_response
+    const job = getFixJobStatus(body.commentId);
+    if (!job || job.status !== "awaiting_response") {
+      json(res, { error: "No fix job awaiting response for this comment" }, 400);
+      return;
+    }
+    if (!job.sessionId || !job.branch) {
+      json(res, { error: "Fix job missing session or branch info" }, 400);
+      return;
+    }
+
+    const repoInfo = getRepos().find((r) => r.repo === body.repo);
+    if (!repoInfo?.localPath) {
+      json(res, { error: "Repo local path not found" }, 400);
+      return;
+    }
+
+    // Append user message to conversation
+    const conversation = [...(job.conversation ?? []), { role: "user" as const, message: body.message }];
+
+    // Check turn limit
+    const config = loadConfig();
+    const maxTurns = config.fixConversationMaxTurns ?? 5;
+    const claudeTurnCount = conversation.filter((m) => m.role === "claude").length;
+    const isLastTurn = maxTurns > 0 && claudeTurnCount >= maxTurns - 1;
+
+    // Set status to running
+    setFixJobStatus({ ...job, status: "running", conversation });
+
+    // Respond immediately
+    json(res, { success: true, status: "running" });
+
+    // Resume Claude session in background
+    const worktreePath = getWorktreePath(job.branch, repoInfo.localPath);
+    try {
+      const result = await applyFixWithClaude(
+        worktreePath,
+        { path: job.path, line: 0, body: "", diffHunk: "" }, // not used for resume
+        body.message, // passed as userInstructions, used as the prompt for resume
+        { resumeSessionId: job.sessionId, isLastTurn },
+      );
+
+      const updatedConversation = [...conversation, { role: "claude" as const, message: result.message }];
+
+      if (result.action === "questions" && !isLastTurn) {
+        // More questions — update job
+        const s = loadState();
+        const persistedJob = getFixJobs(s).find((j) => j.commentId === body.commentId);
+        if (persistedJob) {
+          persistedJob.conversation = updatedConversation;
+          saveState(s);
+        }
+        setFixJobStatus({
+          ...job, status: "awaiting_response",
+          conversation: updatedConversation,
+          claudeOutput: result.rawOutput,
+        });
+        return;
+      }
+
+      // Claude answered "fix" or hit turn limit — check for diff
+      const diff = getDiffInWorktree(worktreePath);
+
+      if (!diff.trim()) {
+        removeWorktree(job.branch, repoInfo.localPath);
+        const s = loadState();
+        removeFixJobState(s, body.commentId);
+        saveState(s);
+        setFixJobStatus({
+          ...job, status: "failed",
+          error: isLastTurn && result.action === "questions"
+            ? "Claude could not complete the fix within the turn limit"
+            : "Claude made no changes",
+          conversation: updatedConversation,
+          claudeOutput: result.rawOutput,
+        });
+        return;
+      }
+
+      const s = loadState();
+      removeFixJobState(s, body.commentId);
+      saveState(s);
+      setFixJobStatus({
+        ...job, status: "completed",
+        diff, conversation: updatedConversation,
+        claudeOutput: result.rawOutput,
+      });
+    } catch (err) {
+      removeWorktree(job.branch, repoInfo.localPath);
+      const s = loadState();
+      removeFixJobState(s, body.commentId);
+      saveState(s);
+      setFixJobStatus({
+        ...job, status: "failed",
+        error: (err as Error).message,
+        conversation,
+      });
+    }
   });
 
   // GET /api/fix-jobs/recover — check for stale fix jobs from a previous session
