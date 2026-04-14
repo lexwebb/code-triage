@@ -1,52 +1,60 @@
-import { Fragment, useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
+import { parseDiff, Diff, Hunk, tokenize, getChangeKey } from "react-diff-view";
+import type { HunkData, ChangeData, ChangeEventArgs } from "react-diff-view";
+import { refractor } from "refractor/core";
+// refractor's exports map: "./*" -> "./lang/*.js", so "refractor/tsx" -> "lang/tsx.js"
+import tsxLang from "refractor/tsx";
+import tsLang from "refractor/typescript";
+import jsxLang from "refractor/jsx";
+import jsLang from "refractor/javascript";
+import pythonLang from "refractor/python";
+import goLang from "refractor/go";
+import rustLang from "refractor/rust";
+import javaLang from "refractor/java";
+import cssLang from "refractor/css";
+import jsonLang from "refractor/json";
+import yamlLang from "refractor/yaml";
+import bashLang from "refractor/bash";
+import sqlLang from "refractor/sql";
+import markdownLang from "refractor/markdown";
+import rubyLang from "refractor/ruby";
+import swiftLang from "refractor/swift";
+import kotlinLang from "refractor/kotlin";
+import cLang from "refractor/c";
+import cppLang from "refractor/cpp";
+import csharpLang from "refractor/csharp";
+import type { ReviewComment } from "../types";
 import { cn } from "../lib/utils";
-import hljs from "highlight.js";
-import "highlight.js/styles/github-dark.min.css";
 import { Button } from "./ui/button";
 import Comment from "./Comment";
 import { useAppStore } from "../store";
 
-interface DiffLine {
-  type: "add" | "remove" | "context" | "header";
-  content: string;
-  oldLine: number | null;
-  newLine: number | null;
-}
-
-function parsePatch(patch: string): DiffLine[] {
-  const lines = patch.split("\n");
-  const result: DiffLine[] = [];
-  let oldLine = 0;
-  let newLine = 0;
-
-  for (const line of lines) {
-    if (line.startsWith("@@")) {
-      const match = line.match(/@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
-      if (match) {
-        oldLine = parseInt(match[1], 10);
-        newLine = parseInt(match[2], 10);
-      }
-      result.push({ type: "header", content: line, oldLine: null, newLine: null });
-    } else if (line.startsWith("+")) {
-      result.push({ type: "add", content: line.slice(1), oldLine: null, newLine });
-      newLine++;
-    } else if (line.startsWith("-")) {
-      result.push({ type: "remove", content: line.slice(1), oldLine, newLine: null });
-      oldLine++;
-    } else {
-      result.push({ type: "context", content: line.startsWith(" ") ? line.slice(1) : line, oldLine, newLine });
-      oldLine++;
-      newLine++;
-    }
-  }
-
-  return result;
-}
+// Register languages with refractor
+refractor.register(tsxLang);
+refractor.register(tsLang);
+refractor.register(jsxLang);
+refractor.register(jsLang);
+refractor.register(pythonLang);
+refractor.register(goLang);
+refractor.register(rustLang);
+refractor.register(javaLang);
+refractor.register(cssLang);
+refractor.register(jsonLang);
+refractor.register(yamlLang);
+refractor.register(bashLang);
+refractor.register(sqlLang);
+refractor.register(markdownLang);
+refractor.register(rubyLang);
+refractor.register(swiftLang);
+refractor.register(kotlinLang);
+refractor.register(cLang);
+refractor.register(cppLang);
+refractor.register(csharpLang);
 
 function getLanguage(filename: string): string | undefined {
   const ext = filename.split(".").pop()?.toLowerCase();
   const map: Record<string, string> = {
-    ts: "typescript", tsx: "typescript", js: "javascript", jsx: "javascript",
+    ts: "typescript", tsx: "tsx", js: "javascript", jsx: "jsx",
     py: "python", rb: "ruby", go: "go", rs: "rust", java: "java",
     css: "css", html: "html", json: "json", yaml: "yaml", yml: "yaml",
     md: "markdown", sh: "bash", sql: "sql", swift: "swift", kt: "kotlin",
@@ -101,6 +109,67 @@ function InlineCommentBox({ onCancel }: { onCancel: () => void }) {
   );
 }
 
+function getLineFromChange(change: ChangeData): number | null {
+  if (change.type === "insert") return change.lineNumber;
+  if (change.type === "delete") return change.lineNumber;
+  if (change.type === "normal") return change.newLineNumber;
+  return null;
+}
+
+function isChangeForCommentingLine(
+  change: ChangeData,
+  commentingLine: { line: number; side: "LEFT" | "RIGHT" },
+): boolean {
+  if (commentingLine.side === "LEFT" && change.type === "delete") {
+    return change.lineNumber === commentingLine.line;
+  }
+  if (commentingLine.side === "RIGHT") {
+    if (change.type === "insert") return change.lineNumber === commentingLine.line;
+    if (change.type === "normal") return change.newLineNumber === commentingLine.line;
+  }
+  return false;
+}
+
+/** Build a widgets map for inline comments and the active comment box. */
+function buildWidgets(
+  hunks: HunkData[],
+  fileComments: ReviewComment[],
+  commentingLine: { line: number; side: "LEFT" | "RIGHT" } | null,
+  onCancelComment: () => void,
+): Record<string, React.ReactElement> {
+  const widgets: Record<string, React.ReactElement> = {};
+  const allChanges = hunks.flatMap((h) => h.changes);
+
+  // Group comments by line number
+  const commentsByLine: Record<number, typeof fileComments> = {};
+  for (const c of fileComments) {
+    if (!commentsByLine[c.line]) commentsByLine[c.line] = [];
+    commentsByLine[c.line].push(c);
+  }
+
+  for (const change of allChanges) {
+    const key = getChangeKey(change);
+    const lineNum = getLineFromChange(change);
+    const lineComments = lineNum ? commentsByLine[lineNum] : undefined;
+    const isCommentTarget = commentingLine && isChangeForCommentingLine(change, commentingLine);
+
+    if (lineComments || isCommentTarget) {
+      widgets[key] = (
+        <div className="bg-gray-900/50">
+          {lineComments?.map((comment) => (
+            <Comment key={comment.id} comment={comment} />
+          ))}
+          {isCommentTarget && (
+            <InlineCommentBox onCancel={onCancelComment} />
+          )}
+        </div>
+      );
+    }
+  }
+
+  return widgets;
+}
+
 export default function DiffView() {
   const selectedFile = useAppStore((s) => s.selectedFile);
   const files = useAppStore((s) => s.files);
@@ -109,123 +178,93 @@ export default function DiffView() {
   const detail = useAppStore((s) => s.detail);
   const commentingLine = useAppStore((s) => s.commentingLine);
   const setCommentingLine = useAppStore((s) => s.setCommentingLine);
+  const diffViewType = useAppStore((s) => s.diffViewType);
+  const setDiffViewType = useAppStore((s) => s.setDiffViewType);
 
   const file = files.find((f) => f.filename === selectedFile);
   const fileComments = comments.filter((c) => c.path === selectedFile);
 
-  const codeRef = useRef<HTMLTableElement>(null);
-
-  const patch = file?.patch;
-  const filename = file?.filename;
-
-  useEffect(() => {
-    if (codeRef.current) {
-      codeRef.current.querySelectorAll("code[data-highlight]").forEach((el) => {
-        hljs.highlightElement(el as HTMLElement);
-      });
-    }
-  }, [patch, filename]);
-
   if (!file || !selectedPR || !detail) return null;
-
-  const diffLines = parsePatch(file.patch);
-  const language = getLanguage(file.filename);
-
-  const commentsByLine: Record<number, typeof fileComments> = {};
-  for (const c of fileComments) {
-    if (!commentsByLine[c.line]) commentsByLine[c.line] = [];
-    commentsByLine[c.line].push(c);
-  }
-
   if (!file.patch) {
     return <div className="text-gray-500 text-sm p-4">No diff available for this file.</div>;
   }
 
+  // Prepend a minimal git diff header so parseDiff can parse a single-file patch
+  const diffText = `diff --git a/${file.filename} b/${file.filename}\n--- a/${file.filename}\n+++ b/${file.filename}\n${file.patch}`;
+  const [parsed] = parseDiff(diffText, { nearbySequences: "zip" });
+  const { hunks } = parsed;
+
+  const language = getLanguage(file.filename);
+  // eslint-disable-next-line react-hooks/rules-of-hooks
+  const tokens = useMemo(() => {
+    if (!language || !hunks.length) return undefined;
+    try {
+      return tokenize(hunks, {
+        highlight: true,
+        refractor,
+        language,
+      });
+    } catch {
+      return undefined;
+    }
+  }, [hunks, language]);
+
+  const widgets = buildWidgets(hunks, fileComments, commentingLine, () => setCommentingLine(null));
+
+  const handleGutterClick = ({ change }: ChangeEventArgs) => {
+    if (!change) return;
+    if (change.type === "delete") {
+      setCommentingLine({ line: change.lineNumber, side: "LEFT" });
+    } else if (change.type === "insert") {
+      setCommentingLine({ line: change.lineNumber, side: "RIGHT" });
+    } else if (change.type === "normal") {
+      setCommentingLine({ line: change.newLineNumber, side: "RIGHT" });
+    }
+  };
+
   return (
-    <div className="font-mono text-xs">
-      <div className="sticky top-0 bg-gray-900 border-b border-gray-800 px-4 py-2 text-sm text-gray-300">
-        {file.filename}
+    <div className="diff-dark">
+      <div className="sticky top-0 z-10 bg-gray-900 border-b border-gray-800 px-4 py-2 flex items-center justify-between">
+        <span className="text-sm text-gray-300 font-mono">{file.filename}</span>
+        <div className="flex items-center gap-0.5 bg-gray-800 rounded-lg p-0.5">
+          <button
+            className={cn(
+              "px-2 py-0.5 text-xs rounded-md transition-colors",
+              diffViewType === "unified"
+                ? "bg-gray-700 text-white"
+                : "text-gray-400 hover:text-gray-300",
+            )}
+            onClick={() => setDiffViewType("unified")}
+          >
+            Unified
+          </button>
+          <button
+            className={cn(
+              "px-2 py-0.5 text-xs rounded-md transition-colors",
+              diffViewType === "split"
+                ? "bg-gray-700 text-white"
+                : "text-gray-400 hover:text-gray-300",
+            )}
+            onClick={() => setDiffViewType("split")}
+          >
+            Split
+          </button>
+        </div>
       </div>
-      <table ref={codeRef} className="w-full border-collapse">
-        <tbody>
-          {diffLines.map((line, i) => {
-            if (line.type === "header") {
-              return (
-                <tr key={i} className="bg-blue-500/10">
-                  <td colSpan={3} className="px-4 py-1 text-blue-400 select-none">
-                    {line.content}
-                  </td>
-                </tr>
-              );
-            }
-
-            const bgClass =
-              line.type === "add"
-                ? "bg-green-500/10"
-                : line.type === "remove"
-                  ? "bg-red-500/10"
-                  : "";
-
-            const textClass =
-              line.type === "add"
-                ? "text-green-300"
-                : line.type === "remove"
-                  ? "text-red-300"
-                  : "text-gray-300";
-
-            const prefix = line.type === "add" ? "+" : line.type === "remove" ? "-" : " ";
-            const lineNum = line.newLine ?? line.oldLine ?? 0;
-            const lineComments = lineNum ? commentsByLine[lineNum] || [] : [];
-            const side = line.type === "remove" ? "LEFT" as const : "RIGHT" as const;
-            const isCommenting = commentingLine?.line === lineNum && commentingLine?.side === side;
-
-            return (
-              <Fragment key={i}>
-                <tr className={cn(bgClass, "group")}>
-                  <td
-                    className="w-12 text-right pr-2 text-gray-600 select-none align-top cursor-pointer relative"
-                    onClick={() => line.oldLine ? setCommentingLine({ line: line.oldLine, side: "LEFT" }) : undefined}
-                    title={line.oldLine ? "Click to comment on this line" : undefined}
-                  >
-                    {line.oldLine ?? ""}
-                    {line.oldLine && (
-                      <span className="absolute left-0 top-0 text-blue-500/40 group-hover:text-blue-400 text-xs transition-colors">+</span>
-                    )}
-                  </td>
-                  <td
-                    className="w-12 text-right pr-2 text-gray-600 select-none align-top cursor-pointer relative"
-                    onClick={() => line.newLine ? setCommentingLine({ line: line.newLine, side: "RIGHT" }) : undefined}
-                    title={line.newLine ? "Click to comment on this line" : undefined}
-                  >
-                    {line.newLine ?? ""}
-                    {line.newLine && (
-                      <span className="absolute left-0 top-0 text-blue-500/40 group-hover:text-blue-400 text-xs transition-colors">+</span>
-                    )}
-                  </td>
-                  <td className={cn("pl-4 pr-4 whitespace-pre", textClass)}>
-                    <span className="select-none text-gray-600 mr-2">{prefix}</span>
-                    <code data-highlight className={language ? `language-${language}` : ""}>
-                      {line.content}
-                    </code>
-                    {lineComments.map((comment) => (
-                      <Comment key={comment.id} comment={comment} />
-                    ))}
-                  </td>
-                </tr>
-                {isCommenting && (
-                  <tr>
-                    <td colSpan={3} className="p-0">
-                      <InlineCommentBox
-                        onCancel={() => setCommentingLine(null)}
-                      />
-                    </td>
-                  </tr>
-                )}
-              </Fragment>
-            );
-          })}
-        </tbody>
-      </table>
+      <Diff
+        viewType={diffViewType}
+        diffType={parsed.type}
+        hunks={hunks}
+        tokens={tokens}
+        widgets={widgets}
+        gutterEvents={{ onClick: handleGutterClick }}
+      >
+        {(hunks) =>
+          hunks.map((hunk) => (
+            <Hunk key={hunk.content} hunk={hunk} />
+          ))
+        }
+      </Diff>
     </div>
   );
 }
