@@ -12,6 +12,7 @@ import CommentThreads from "./components/CommentThreads";
 import PROverview from "./components/PROverview";
 import { useNotifications, requestNotificationPermission, isPRMuted } from "./useNotifications";
 import FixJobsBanner from "./components/FixJobsBanner";
+import ChecksPanel from "./components/ChecksPanel";
 import SettingsView from "./components/SettingsView";
 import KeyboardShortcutsModal from "./components/KeyboardShortcutsModal";
 import type { FixJobStatus, PollStatus } from "./api";
@@ -94,7 +95,7 @@ export default function App() {
   const [loadingPR, setLoadingPR] = useState(false);
   const [loading, setLoading] = useState(() => !loadCache(CACHE_KEY_PULLS));
   const [error, setError] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<"overview" | "threads" | "files">("threads");
+  const [activeTab, setActiveTab] = useState<"overview" | "threads" | "files" | "checks">("threads");
   const [fixJobs, setFixJobs] = useState<FixJobStatus[]>([]);
   const [refreshing, setRefreshing] = useState(false);
   const [nextPollDeadline, setNextPollDeadline] = useState(0);
@@ -729,10 +730,13 @@ export default function App() {
                 const pct = used / pollMeta.rateLimitLimit;
                 return (
                   <div className="flex flex-col gap-0.5">
-                    <div className="flex items-center justify-between">
-                      <span className="text-gray-600">{pollMeta.rateLimitRemaining}/{pollMeta.rateLimitLimit}</span>
+                    <div className="flex items-center gap-1.5 text-gray-600">
+                      <span>{pollMeta.rateLimitRemaining}/{pollMeta.rateLimitLimit}</span>
                       {pollMeta.rateLimitResetAt && pct >= 0.5 && (
-                        <span className="text-gray-600">resets {formatDurationUntil(pollMeta.rateLimitResetAt, rateLimitNow)}</span>
+                        <span className="text-gray-600/60">·</span>
+                      )}
+                      {pollMeta.rateLimitResetAt && pct >= 0.5 && (
+                        <span>resets {formatDurationUntil(pollMeta.rateLimitResetAt, rateLimitNow)}</span>
                       )}
                     </div>
                     <span className="w-full h-1.5 bg-gray-800 rounded-full overflow-hidden">
@@ -835,6 +839,11 @@ export default function App() {
                   { id: "overview" as const, label: "Overview" },
                   { id: "threads" as const, label: `Review (${prComments.filter((c) => c.inReplyToId === null).length})` },
                   { id: "files" as const, label: `Files (${prFiles.length})` },
+                  { id: "checks" as const, label: prDetail.checksSummary
+                    ? prDetail.checksSummary.failure > 0
+                      ? `Checks (${prDetail.checksSummary.failure}/${prDetail.checksSummary.total})`
+                      : `Checks (${prDetail.checksSummary.total})`
+                    : "Checks" },
                 ]).map((tab) => (
                   <button
                     key={tab.id}
@@ -846,7 +855,16 @@ export default function App() {
                         : "text-gray-500 hover:text-gray-300"
                     }`}
                   >
-                    {tab.label}
+                    <span className="flex items-center gap-1.5">
+                      {tab.id === "checks" && prDetail?.checksSummary && (
+                        <span className={`inline-block w-2 h-2 rounded-full ${
+                          prDetail.checksSummary.failure > 0 ? "bg-red-400" :
+                          prDetail.checksSummary.pending > 0 ? "bg-yellow-400" :
+                          "bg-green-400"
+                        }`} />
+                      )}
+                      {tab.label}
+                    </span>
                   </button>
                 ))}
               </div>
@@ -901,6 +919,14 @@ export default function App() {
                     )}
                   </div>
                 </>
+              )}
+
+              {activeTab === "checks" && selectedPR && (
+                <ChecksPanel
+                  prNumber={selectedPR.number}
+                  repo={selectedPR.repo}
+                  onSelectFile={(f) => { setActiveTab("files"); setSelectedFile(f); }}
+                />
               )}
             </>
           ) : (
