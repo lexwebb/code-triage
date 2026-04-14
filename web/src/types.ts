@@ -43,6 +43,12 @@ export interface PullRequestDetail extends PullRequest {
   deletions: number;
   changedFiles: number;
   reviewers: Reviewer[];
+  checksSummary: {
+    total: number;
+    success: number;
+    failure: number;
+    pending: number;
+  } | null;
 }
 
 export interface PullFile {
@@ -78,6 +84,34 @@ export interface ReviewComment {
   snoozeUntil?: string | null;
   priority?: number | null;
   triageNote?: string | null;
+}
+
+export interface CheckAnnotation {
+  path: string;
+  startLine: number;
+  endLine: number;
+  level: "notice" | "warning" | "failure";
+  message: string;
+  title: string | null;
+}
+
+export interface CheckRun {
+  id: number;
+  name: string;
+  status: "queued" | "in_progress" | "completed";
+  conclusion: string | null;
+  startedAt: string | null;
+  completedAt: string | null;
+  durationMs: number | null;
+  htmlUrl: string;
+  annotations: CheckAnnotation[];
+}
+
+export interface CheckSuite {
+  id: number;
+  name: string;
+  conclusion: string | null;
+  runs: CheckRun[];
 }
 
 export interface CrWatchState {
