@@ -1,4 +1,7 @@
 import { addRoute, json, getRepos, getBody, getPollState, getHealthPayload, setFixJobStatus, clearFixJobStatus, getActiveFixForBranch, getActiveFixForPR, subscribeSse, getListenPort, notifyConfigSaved, getFixJobStatus } from "./server.js";
+import { getVapidKeys } from "./vapid.js";
+import { savePushSubscription, deletePushSubscription, mutePR as dbMutePR, unmutePR as dbUnmutePR, getMutedPRs as dbGetMutedPRs } from "./push-db.js";
+import { sendTestPush } from "./push.js";
 import type { RepoInfo } from "./discovery.js";
 import { loadConfig, saveConfig, configExists, type Config } from "./config.js";
 import { loadState, markComment, patchCommentTriage, saveState, addFixJob as addFixJobState, removeFixJob as removeFixJobState, getFixJobs, getPendingTriageCountsByPr, needsEvaluation } from "./state.js";
@@ -57,17 +60,62 @@ interface GhPull {
   mergeable_state: string;
 }
 
+interface GhCommitStatus {
+  id: number;
+  state: "success" | "failure" | "pending" | "error";
+  context: string;
+  description: string | null;
+  target_url: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 interface GhCombinedStatus {
   state: "success" | "failure" | "pending" | "error";
+  statuses: GhCommitStatus[];
 }
 
 async function getPrStatus(repoPath: string, sha: string): Promise<"success" | "failure" | "pending"> {
   try {
-    const status = await ghAsync<GhCombinedStatus>(`/repos/${repoPath}/commits/${sha}/status`);
-    if (status.state === "success") return "success";
-    if (status.state === "failure" || status.state === "error") return "failure";
+    const [statusData, checksSummary] = await Promise.all([
+      ghAsync<GhCombinedStatus>(`/repos/${repoPath}/commits/${sha}/status`).catch(() => null),
+      getChecksSummaryFromRuns(repoPath, sha),
+    ]);
+
+    // Combine both systems: any failure → failure, any pending → pending, else success
+    const statusState = statusData?.state ?? null;
+    const hasStatuses = (statusData?.statuses?.length ?? 0) > 0;
+
+    if (statusState === "failure" || statusState === "error") return "failure";
+    if (checksSummary && checksSummary.failure > 0) return "failure";
+
+    if (statusState === "pending" && hasStatuses) return "pending";
+    if (checksSummary && checksSummary.pending > 0) return "pending";
+
+    // If at least one system reports success, call it success
+    if (statusState === "success" || (checksSummary && checksSummary.success > 0)) return "success";
   } catch { /* ignore */ }
   return "pending";
+}
+
+/** Check runs only (no commit statuses) — used by getPrStatus to avoid double-counting */
+async function getChecksSummaryFromRuns(repoPath: string, sha: string): Promise<{
+  success: number; failure: number; pending: number;
+} | null> {
+  try {
+    const data = await ghAsync<GhCheckRunsResponse>(
+      `/repos/${repoPath}/commits/${sha}/check-runs?per_page=100`,
+    );
+    const runs = data.check_runs;
+    if (runs.length === 0) return null;
+    let success = 0, failure = 0, pending = 0;
+    for (const r of runs) {
+      if (r.status !== "completed") pending++;
+      else if (r.conclusion === "success" || r.conclusion === "skipped" || r.conclusion === "neutral") success++;
+      else failure++;
+    }
+    return { success, failure, pending };
+  } catch { return null; }
 }
 
 function openTopLevelUnresolvedCount(
@@ -78,7 +126,7 @@ function openTopLevelUnresolvedCount(
 }
 
 /** One pass per repo: single list of open PRs, then authored + review-requested rows (halves REST vs two endpoints). */
-async function buildPullSidebarLists(targetRepos: RepoInfo[]): Promise<{
+export async function buildPullSidebarLists(targetRepos: RepoInfo[]): Promise<{
   authored: Array<Record<string, unknown>>;
   reviewRequested: Array<Record<string, unknown>>;
   /** True when GET /user failed and we have no cached login (sidebar lists are empty). */
@@ -376,11 +424,15 @@ async function getChecksSummary(repoPath: string, sha: string): Promise<{
   pending: number;
 } | null> {
   try {
-    const data = await ghAsync<GhCheckRunsResponse>(
-      `/repos/${repoPath}/commits/${sha}/check-runs?per_page=100`,
-    );
-    const runs = data.check_runs;
-    if (runs.length === 0) return null;
+    const [runsData, statusData] = await Promise.all([
+      ghAsync<GhCheckRunsResponse>(
+        `/repos/${repoPath}/commits/${sha}/check-runs?per_page=100`,
+      ),
+      ghAsync<GhCombinedStatus>(`/repos/${repoPath}/commits/${sha}/status`).catch(() => null),
+    ]);
+    const runs = runsData.check_runs;
+    const statuses = statusData?.statuses ?? [];
+    if (runs.length === 0 && statuses.length === 0) return null;
 
     let success = 0;
     let failure = 0;
@@ -394,7 +446,20 @@ async function getChecksSummary(repoPath: string, sha: string): Promise<{
         failure++;
       }
     }
-    return { total: runs.length, success, failure, pending };
+    // Deduplicate commit statuses: keep latest per context
+    const latestByContext = new Map<string, GhCommitStatus>();
+    for (const s of statuses) {
+      const existing = latestByContext.get(s.context);
+      if (!existing || s.id > existing.id) {
+        latestByContext.set(s.context, s);
+      }
+    }
+    for (const s of latestByContext.values()) {
+      if (s.state === "success") success++;
+      else if (s.state === "failure" || s.state === "error") failure++;
+      else pending++;
+    }
+    return { total: runs.length + latestByContext.size, success, failure, pending };
   } catch {
     return null;
   }
@@ -593,10 +658,11 @@ export function registerRoutes(): void {
       sha = pr.head.sha;
     }
 
-    // Fetch suites and runs in parallel (per_page=100; repos with >100 check runs will be truncated)
-    const [suitesData, runsData] = await Promise.all([
+    // Fetch suites, runs, and commit statuses in parallel
+    const [suitesData, runsData, statusData] = await Promise.all([
       ghAsync<GhCheckSuitesResponse>(`/repos/${repo}/commits/${sha}/check-suites?per_page=100`),
       ghAsync<GhCheckRunsFullResponse>(`/repos/${repo}/commits/${sha}/check-runs?per_page=100`),
+      ghAsync<GhCombinedStatus>(`/repos/${repo}/commits/${sha}/status`).catch(() => null),
     ]);
 
     // Build suite name map
@@ -688,11 +754,49 @@ export function registerRoutes(): void {
       };
     });
 
-    // Sort suites: those with failures first
+    // Include commit statuses (older GitHub CI API) as a synthetic suite
+    if (statusData?.statuses?.length) {
+      const latestByContext = new Map<string, GhCommitStatus>();
+      for (const s of statusData.statuses) {
+        const existing = latestByContext.get(s.context);
+        if (!existing || s.id > existing.id) {
+          latestByContext.set(s.context, s);
+        }
+      }
+      const statusRuns = Array.from(latestByContext.values());
+      const hasFailure = statusRuns.some((s) => s.state === "failure" || s.state === "error");
+      const hasPending = statusRuns.some((s) => s.state === "pending");
+      const statusConclusion = hasFailure ? "failure" : hasPending ? null : "success";
+
+      function statusSortOrder(s: GhCommitStatus): number {
+        if (s.state === "failure" || s.state === "error") return 0;
+        if (s.state === "pending") return 1;
+        return 2;
+      }
+
+      statusRuns.sort((a, b) => statusSortOrder(a) - statusSortOrder(b));
+      suites.push({
+        id: -1,
+        name: "Commit Statuses",
+        conclusion: statusConclusion,
+        runs: statusRuns.map((s) => ({
+          id: s.id,
+          name: s.context,
+          status: s.state === "pending" ? ("in_progress" as const) : ("completed" as const),
+          conclusion: s.state === "pending" ? null : s.state === "error" ? "failure" : s.state,
+          startedAt: s.created_at,
+          completedAt: s.state !== "pending" ? s.updated_at : null,
+          durationMs: null,
+          htmlUrl: s.target_url ?? "",
+          annotations: [],
+        })),
+      });
+    }
+
+    // Sort suites: those with failures first, then pending
     suites.sort((a, b) => {
-      const aFail = a.conclusion === "failure" ? 0 : 1;
-      const bFail = b.conclusion === "failure" ? 0 : 1;
-      return aFail - bFail;
+      const order = (c: string | null) => c === "failure" ? 0 : c === null ? 1 : 2;
+      return order(a.conclusion) - order(b.conclusion);
     });
 
     json(res, suites);
@@ -1339,5 +1443,68 @@ export function registerRoutes(): void {
     } catch (err) {
       json(res, { error: `Comment failed: ${(err as Error).message}` }, 500);
     }
+  });
+
+  // ── Push notification endpoints ──
+
+  addRoute("GET", "/api/push/vapid-public-key", (_req, res) => {
+    const keys = getVapidKeys();
+    json(res, { publicKey: keys.publicKey });
+  });
+
+  addRoute("POST", "/api/push/subscribe", async (req, res) => {
+    const body = await getBody(req) as { endpoint?: string; keys?: { p256dh?: string; auth?: string } };
+    if (!body.endpoint || !body.keys?.p256dh || !body.keys?.auth) {
+      res.writeHead(400);
+      json(res, { error: "Missing endpoint or keys" });
+      return;
+    }
+    savePushSubscription({
+      endpoint: body.endpoint,
+      keys: { p256dh: body.keys.p256dh, auth: body.keys.auth },
+    });
+    json(res, { ok: true });
+  });
+
+  addRoute("DELETE", "/api/push/unsubscribe", async (req, res) => {
+    const body = await getBody(req) as { endpoint?: string };
+    if (!body.endpoint) {
+      res.writeHead(400);
+      json(res, { error: "Missing endpoint" });
+      return;
+    }
+    deletePushSubscription(body.endpoint);
+    json(res, { ok: true });
+  });
+
+  addRoute("POST", "/api/push/mute", async (req, res) => {
+    const body = await getBody(req) as { repo?: string; number?: number };
+    if (!body.repo || typeof body.number !== "number") {
+      res.writeHead(400);
+      json(res, { error: "Missing repo or number" });
+      return;
+    }
+    dbMutePR(body.repo, body.number);
+    json(res, { ok: true });
+  });
+
+  addRoute("DELETE", "/api/push/mute", async (req, res) => {
+    const body = await getBody(req) as { repo?: string; number?: number };
+    if (!body.repo || typeof body.number !== "number") {
+      res.writeHead(400);
+      json(res, { error: "Missing repo or number" });
+      return;
+    }
+    dbUnmutePR(body.repo, body.number);
+    json(res, { ok: true });
+  });
+
+  addRoute("GET", "/api/push/muted", (_req, res) => {
+    json(res, { muted: dbGetMutedPRs() });
+  });
+
+  addRoute("POST", "/api/push/test", (_req, res) => {
+    sendTestPush();
+    json(res, { ok: true });
   });
 }

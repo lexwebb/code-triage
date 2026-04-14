@@ -2,11 +2,10 @@ import type { PullRequest } from "../types";
 import { cn } from "../lib/utils";
 import { Check, X, Circle } from "lucide-react";
 import { StatusBadge } from "./ui/status-badge";
+import { useAppStore } from "../store";
 
 interface PRListProps {
   pulls: PullRequest[];
-  selectedPR: { number: number; repo: string } | null;
-  onSelectPR: (number: number, repo: string) => void;
   showRepo: boolean;
 }
 
@@ -37,7 +36,10 @@ function StatusIcon({ pr }: { pr: PullRequest }) {
   );
 }
 
-export default function PRList({ pulls, selectedPR, onSelectPR, showRepo }: PRListProps) {
+export default function PRList({ pulls, showRepo }: PRListProps) {
+  const selectedPR = useAppStore((s) => s.selectedPR);
+  const selectPR = useAppStore((s) => s.selectPR);
+  const setMobileDrawerOpen = useAppStore((s) => s.setMobileDrawerOpen);
   if (pulls.length === 0) {
     return (
       <div className="p-4 text-gray-500 text-sm">
@@ -68,7 +70,7 @@ export default function PRList({ pulls, selectedPR, onSelectPR, showRepo }: PRLi
           <button
             key={key}
             type="button"
-            onClick={() => onSelectPR(pr.number, pr.repo)}
+            onClick={() => { void selectPR(pr.number, pr.repo); setMobileDrawerOpen(false); }}
             className={cn("text-left px-4 py-3 border-b border-gray-800 hover:bg-gray-800/50 transition-colors rounded-none focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-inset", bgClass)}
           >
             <div className="flex items-center justify-between">

@@ -1,9 +1,8 @@
-interface RepoFilterProps {
-  filter: string;
-  onFilterChange: (filter: string) => void;
-}
+import { useAppStore } from "../store";
 
-export default function RepoFilter({ filter, onFilterChange }: RepoFilterProps) {
+export default function RepoFilter() {
+  const filter = useAppStore((s) => s.repoFilter);
+  const onFilterChange = useAppStore((s) => s.setRepoFilter);
   return (
     <div className="px-4 py-2 border-b border-gray-800">
       <input

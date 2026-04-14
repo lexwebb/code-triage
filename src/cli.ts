@@ -3,7 +3,6 @@ import { parseArgs } from "util";
 import { execSync, execFileSync } from "child_process";
 import { loadState, saveState, needsEvaluation, getCommentsByStatus, compactCommentHistory } from "./state.js";
 import { fetchNewComments, fetchNewCommentsBatch, getGitHubLogin } from "./poller.js";
-import { notifyNewComments } from "./notifier.js";
 import { clampEvalConcurrency, killAllChildren } from "./actioner.js";
 import { enqueueMany, recoverQueue, startWorker, stopWorker } from "./eval-queue.js";
 import { cleanupAllWorktrees, pruneOrphanedWorktrees } from "./worktree.js";
@@ -17,7 +16,9 @@ import {
   setProcessing,
   cleanup as cleanupTerminal,
 } from "./terminal.js";
-import { startServer, updateRepos, updatePollState, triggerTestNotification, sseBroadcast, setConfigSavedHandler, loadPersistedFixJobResults } from "./server.js";
+import { startServer, updateRepos, updatePollState, sseBroadcast, setConfigSavedHandler, loadPersistedFixJobResults } from "./server.js";
+import { initPush, processPolledData, startReviewReminder, sendTestPush } from "./push.js";
+import { buildPullSidebarLists } from "./api.js";
 import { discoverRepos, type RepoInfo } from "./discovery.js";
 import { filterRepoPathsWithPushAccess, loadCachedPushAccess } from "./github-batching.js";
 import { loadConfig, saveConfig, configExists, type Config } from "./config.js";
@@ -294,6 +295,8 @@ if (isDev) {
 
 startServer(port, repos);
 loadPersistedFixJobResults();
+initPush();
+const stopReviewReminder = startReviewReminder();
 
 // Prune any orphaned worktrees from previous crashed sessions
 {
@@ -427,15 +430,13 @@ async function poll(): Promise<void> {
       for (const repoInfo of repos) {
         if (!reposToPoll.includes(repoInfo.repo)) continue;
         try {
-          const { comments, pullsByNumber } = batch.get(repoInfo.repo) ?? {
+          const { comments } = batch.get(repoInfo.repo) ?? {
             comments: [],
-            pullsByNumber: {},
           };
           const hadActivity = comments.length > 0;
           pollOutcomes.push({ repo: repoInfo.repo, hadActivity });
 
           if (comments.length > 0) {
-            notifyNewComments(comments, pullsByNumber);
             enqueueMany(comments, repoInfo.repo, state);
           }
         } catch (err) {
@@ -447,7 +448,7 @@ async function poll(): Promise<void> {
       for (const repoInfo of repos) {
         if (!reposToPoll.includes(repoInfo.repo)) continue;
         try {
-          const { comments, pullsByNumber } = await fetchNewComments(
+          const { comments } = await fetchNewComments(
             repoInfo.repo,
             (id) => needsEvaluation(state, id, repoInfo.repo),
             pollReviewRequested,
@@ -456,7 +457,6 @@ async function poll(): Promise<void> {
           const hadActivity = comments.length > 0;
           pollOutcomes.push({ repo: repoInfo.repo, hadActivity });
           if (comments.length > 0) {
-            notifyNewComments(comments, pullsByNumber);
             enqueueMany(comments, repoInfo.repo, state);
           }
         } catch (e2) {
@@ -474,6 +474,26 @@ async function poll(): Promise<void> {
     setStatus(`[${now}] Analyzed ${reposToPoll.length} of ${allRepoPaths.length} repo(s).`);
     updatePollState({ lastPoll: Date.now(), polling: false, lastPollError: null });
     sseBroadcast("poll", { ok: true, at: Date.now() });
+    // Feed poll data to push notification module
+    try {
+      const lists = await buildPullSidebarLists(repos);
+      processPolledData({
+        authored: lists.authored.map((p) => ({
+          repo: p.repo as string,
+          number: p.number as number,
+          title: p.title as string,
+          checksStatus: p.checksStatus as string,
+          openComments: p.openComments as number,
+        })),
+        reviewRequested: lists.reviewRequested.map((p) => ({
+          repo: p.repo as string,
+          number: p.number as number,
+          title: p.title as string,
+          checksStatus: p.checksStatus as string,
+          openComments: p.openComments as number,
+        })),
+      });
+    } catch { /* push notification failure should not break poll */ }
     if (Number.isFinite(commentRetentionDays) && commentRetentionDays > 0) {
       compactCommentHistory(commentRetentionDays);
     }
@@ -559,6 +579,7 @@ function shutdown(): void {
   shuttingDown = true;
   cleanupTerminal();
   console.log("\n\nShutting down code-triage...");
+  stopReviewReminder();
   if (pollTimer) clearTimeout(pollTimer);
   killAllChildren();
   void stopWorker();
@@ -586,7 +607,7 @@ registerHotkeys([
   { key: "c", label: "Clear state", handler: clearState },
   { key: "s", label: "Status", handler: () => { printStatus(); } },
   { key: "p", label: "List PRs", handler: () => { listPRs(); } },
-  { key: "n", label: "Test notif", handler: () => { triggerTestNotification(); console.log("\n  Test notification triggered.\n"); } },
+  { key: "n", label: "Test notif", handler: () => { sendTestPush(); console.log("\n  Test notification triggered.\n"); } },
   { key: "q", label: "Quit", handler: shutdown },
 ]);
 

@@ -1,15 +1,12 @@
-import type { PullFile, ReviewComment } from "../types";
 import { cn } from "../lib/utils";
 import { MessageSquare } from "lucide-react";
+import { useAppStore } from "../store";
 
-interface FileListProps {
-  files: PullFile[];
-  selectedFile: string | null;
-  onSelectFile: (filename: string) => void;
-  comments: ReviewComment[];
-}
-
-export default function FileList({ files, selectedFile, onSelectFile, comments }: FileListProps) {
+export default function FileList() {
+  const files = useAppStore((s) => s.files);
+  const selectedFile = useAppStore((s) => s.selectedFile);
+  const selectFile = useAppStore((s) => s.selectFile);
+  const comments = useAppStore((s) => s.comments);
   const commentsByFile: Record<string, number> = {};
   for (const c of comments) {
     commentsByFile[c.path] = (commentsByFile[c.path] || 0) + 1;
@@ -24,7 +21,7 @@ export default function FileList({ files, selectedFile, onSelectFile, comments }
         {files.map((file) => (
           <button
             key={file.filename}
-            onClick={() => onSelectFile(file.filename)}
+            onClick={() => selectFile(file.filename)}
             className={cn("w-full text-left px-6 py-1.5 text-sm hover:bg-gray-800/50 flex items-center justify-between", selectedFile === file.filename ? "bg-gray-800/70 text-white" : "text-gray-300")}
           >
             <span className="font-mono text-xs truncate">{file.filename}</span>

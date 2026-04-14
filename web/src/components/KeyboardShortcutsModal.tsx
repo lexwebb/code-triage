@@ -4,13 +4,11 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { useAppStore } from "../store";
 
-interface KeyboardShortcutsModalProps {
-  open: boolean;
-  onClose: () => void;
-}
-
-export default function KeyboardShortcutsModal({ open, onClose }: KeyboardShortcutsModalProps) {
+export default function KeyboardShortcutsModal() {
+  const open = useAppStore((s) => s.shortcutsOpen);
+  const onClose = () => useAppStore.getState().toggleShortcuts();
   return (
     <Dialog
       open={open}

@@ -2,14 +2,12 @@ import ReactMarkdown from "react-markdown";
 import { cn } from "../lib/utils";
 import remarkGfm from "remark-gfm";
 import rehypeRaw from "rehype-raw";
-import type { PullRequestDetail } from "../types";
 import { Checkbox } from "./ui/checkbox";
+import { useAppStore } from "../store";
 
-interface PROverviewProps {
-  pr: PullRequestDetail;
-}
-
-export default function PROverview({ pr }: PROverviewProps) {
+export default function PROverview() {
+  const pr = useAppStore((s) => s.detail);
+  if (!pr) return null;
   return (
     <div className="flex-1 overflow-y-auto p-6">
       {pr.body ? (

@@ -1,7 +1,6 @@
-import { useEffect, useLayoutEffect, useRef, useState, type MutableRefObject } from "react";
+import React, { useEffect, useLayoutEffect, useRef } from "react";
 import type { ReviewComment } from "../types";
-import { api } from "../api";
-import type { FixJobStatus } from "../api";
+import { useAppStore } from "../store";
 import Comment from "./Comment";
 import { Check, ChevronRight, ChevronDown, HelpCircle } from "lucide-react";
 import { IconButton } from "./ui/icon-button";
@@ -20,24 +19,6 @@ type ThreadKeyActions = {
   fix: () => void;
   reEvaluate: () => void;
 };
-
-interface CommentThreadsProps {
-  comments: ReviewComment[];
-  onSelectFile: (filename: string) => void;
-  repo: string;
-  prNumber: number;
-  branch: string;
-  fixJobs: FixJobStatus[];
-  onCommentAction: () => void;
-  onFixStarted: (job: FixJobStatus) => void;
-  /** When true, thread hotkeys are disabled (e.g. shortcuts modal open). */
-  globalModalOpen?: boolean;
-  onOpenShortcutsHelp?: () => void;
-  /** Absolute local path to the repo root (for IDE links). */
-  repoLocalPath?: string;
-  /** User's preferred editor key (e.g. "vscode", "cursor"). */
-  preferredEditor?: string;
-}
 
 const EDITOR_LABELS: Record<string, string> = {
   vscode: "VS Code",
@@ -138,31 +119,24 @@ function ThreadStatusBadge({ status }: { status: string }) {
   return null;
 }
 
-function FixConversation({ job, repo, onJobAction }: {
-  job: FixJobStatus;
-  repo: string;
-  onJobAction: () => void;
-}) {
-  const [reply, setReply] = useState("");
-  const [sending, setSending] = useState(false);
+function FixConversation({ commentId, repo }: { commentId: number; repo: string }) {
+  const replyText = useAppStore((s) => s.replyText[commentId] ?? "");
+  const sending = useAppStore((s) => s.acting[commentId] ?? false);
+  const setReplyText = useAppStore((s) => s.setReplyText);
+  const sendReply = useAppStore((s) => s.sendReply);
+  const jobs = useAppStore((s) => s.jobs);
 
-  async function handleSend() {
-    if (!reply.trim() || sending) return;
-    setSending(true);
-    try {
-      await api.fixReply(repo, job.commentId, reply.trim());
-      setReply("");
-      onJobAction();
-    } catch (err) {
-      console.error("Fix reply failed:", err);
-    } finally {
-      setSending(false);
-    }
-  }
+  const job = jobs.find((j) => j.commentId === commentId);
+  if (!job) return null;
 
   const conversation = job.conversation ?? [];
   const claudeTurns = conversation.filter((m) => m.role === "claude").length;
   const isRunning = job.status === "running";
+
+  async function handleSend() {
+    if (!replyText.trim() || sending) return;
+    await sendReply(repo, commentId, replyText.trim());
+  }
 
   return (
     <div className="mx-1 mt-2 p-2 bg-indigo-950/20 rounded border border-indigo-500/30 space-y-2">
@@ -183,8 +157,8 @@ function FixConversation({ job, repo, onJobAction }: {
       {job.status === "awaiting_response" && (
         <div className="flex gap-2 items-end">
           <textarea
-            value={reply}
-            onChange={(e) => setReply(e.target.value)}
+            value={replyText}
+            onChange={(e) => setReplyText(commentId, e.target.value)}
             onKeyDown={(e) => {
               if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
                 void handleSend();
@@ -197,7 +171,7 @@ function FixConversation({ job, repo, onJobAction }: {
             className="flex-1 text-xs bg-gray-950 border border-gray-700 rounded px-2 py-1 text-gray-300 placeholder-gray-600 focus:outline-none focus:border-indigo-500 resize-y"
           />
           <div className="flex flex-col items-end gap-1">
-            <Button variant="blue" size="xs" onClick={() => void handleSend()} disabled={sending || !reply.trim()}>
+            <Button variant="blue" size="xs" onClick={() => void handleSend()} disabled={sending || !replyText.trim()}>
               {sending ? "Sending..." : "Send"}
             </Button>
             <span className="text-[10px] text-gray-600">Turn {claudeTurns}</span>
@@ -208,94 +182,77 @@ function FixConversation({ job, repo, onJobAction }: {
   );
 }
 
-function ThreadItem({ thread, onSelectFile, repo, prNumber, branch, fixBlocked, fixJobs, onCommentAction, onFixStarted, isFocused, registerRowEl, threadActionsRef, repoLocalPath, preferredEditor }: {
+function ThreadItem({ rootId, thread, fixBlocked, isFocused, registerRowEl, threadActionsRef }: {
+  rootId: number;
   thread: Thread;
-  onSelectFile: (f: string) => void;
-  repo: string;
-  prNumber: number;
-  branch: string;
   fixBlocked: boolean;
-  fixJobs?: FixJobStatus[];
-  onCommentAction: () => void;
-  onFixStarted: (job: FixJobStatus) => void;
   isFocused: boolean;
   registerRowEl: (id: number, el: HTMLDivElement | null) => void;
-  threadActionsRef: MutableRefObject<Map<number, ThreadKeyActions>>;
-  repoLocalPath?: string;
-  preferredEditor?: string;
+  threadActionsRef: React.RefObject<Map<number, ThreadKeyActions>>;
 }) {
+  const selectedPR = useAppStore((s) => s.selectedPR);
+  const repos = useAppStore((s) => s.repos);
+  const preferredEditor = useAppStore((s) => s.preferredEditor);
+  const jobs = useAppStore((s) => s.jobs);
+  const expanded = useAppStore((s) => s.expandedThreads.has(rootId));
+  const acting = useAppStore((s) => s.actingThreads.has(rootId));
+  const fixing = useAppStore((s) => s.fixingThreads.has(rootId));
+  const fixError = useAppStore((s) => s.fixErrors[rootId] ?? null);
+  const fixModalOpen = useAppStore((s) => s.fixModalOpenThreads.has(rootId));
+  const fixInstructions = useAppStore((s) => s.threadFixInstructions[rootId] ?? "");
+  const reEvaluating = useAppStore((s) => s.reEvaluatingThreads.has(rootId));
+  const showSuggestion = useAppStore((s) => s.showSuggestionThreads.has(rootId));
+  const triageBusy = useAppStore((s) => s.triageBusyThreads.has(rootId));
+  const noteDraft = useAppStore((s) => s.noteDrafts[rootId] ?? "");
+  const priorityDraft = useAppStore((s) => s.priorityDrafts[rootId] ?? "");
+  const toggleExpanded = useAppStore((s) => s.toggleThreadExpanded);
+  const replyToComment = useAppStore((s) => s.replyToComment);
+  const resolveComment = useAppStore((s) => s.resolveComment);
+  const dismissComment = useAppStore((s) => s.dismissComment);
+  const reEvaluateComment = useAppStore((s) => s.reEvaluateComment);
+  const updateCommentTriage = useAppStore((s) => s.updateCommentTriage);
+  const startFix = useAppStore((s) => s.startFix);
+  const setFixModalOpen = useAppStore((s) => s.setFixModalOpen);
+  const setFixInstructions = useAppStore((s) => s.setThreadFixInstructions);
+  const setShowSuggestion = useAppStore((s) => s.setShowSuggestion);
+  const setNoteDraft = useAppStore((s) => s.setNoteDraft);
+  const setPriorityDraft = useAppStore((s) => s.setPriorityDraft);
+  const selectFile = useAppStore((s) => s.selectFile);
+  const setActiveTab = useAppStore((s) => s.setActiveTab);
+
+  const repo = selectedPR?.repo ?? "";
+  const repoLocalPath = repos.find((r) => r.repo === selectedPR?.repo)?.localPath;
+
   const eval_ = thread.root.evaluation;
   const status = thread.root.crStatus;
   const isActedOn = status === "replied" || status === "dismissed" || status === "fixed";
   const isEvaluating = status === "evaluating";
-  const [expanded, setExpanded] = useState(!thread.isResolved && !isActedOn);
-  const [acting, setActing] = useState(false);
-  const [showSuggestion, setShowSuggestion] = useState(false);
-  const [triageBusy, setTriageBusy] = useState(false);
-  const [noteDraft, setNoteDraft] = useState(thread.root.triageNote ?? "");
-  const [priorityDraft, setPriorityDraft] = useState(
-    thread.root.priority != null ? String(thread.root.priority) : "",
-  );
 
-  useEffect(() => {
-    setNoteDraft(thread.root.triageNote ?? "");
-  }, [thread.root.triageNote, thread.root.id]);
-
-  useEffect(() => {
-    setPriorityDraft(thread.root.priority != null ? String(thread.root.priority) : "");
-  }, [thread.root.priority, thread.root.id]);
-
-  const fixJob = fixJobs?.find((j) => j.commentId === thread.root.id);
+  const fixJob = jobs.find((j) => j.commentId === thread.root.id);
   const isAwaitingResponse = fixJob?.status === "awaiting_response";
   const isFixRunning = fixJob?.status === "running";
 
-  // Fix with Claude state
-  const [fixing, setFixing] = useState(false);
-  const [fixError, setFixError] = useState<string | null>(null);
-  const [fixModalOpen, setFixModalOpen] = useState(false);
-  const [fixInstructions, setFixInstructions] = useState("");
-  const [reEvaluating, setReEvaluating] = useState(false);
+  // Sync triage note / priority drafts when thread data changes
+  useEffect(() => {
+    setNoteDraft(rootId, thread.root.triageNote ?? "");
+  }, [thread.root.triageNote, rootId, setNoteDraft]);
 
-  async function handleReEvaluate() {
-    setReEvaluating(true);
-    try {
-      await api.reEvaluate(repo, thread.root.id, prNumber);
-      onCommentAction();
-    } catch (err) {
-      console.error("Re-evaluate failed:", err);
-    } finally {
-      setReEvaluating(false);
-    }
+  useEffect(() => {
+    setPriorityDraft(rootId, thread.root.priority != null ? String(thread.root.priority) : "");
+  }, [thread.root.priority, rootId, setPriorityDraft]);
+
+  function handleAction(action: "reply" | "resolve" | "dismiss") {
+    if (action === "reply") void replyToComment(rootId);
+    else if (action === "resolve") void resolveComment(rootId);
+    else void dismissComment(rootId);
   }
 
-  async function handleAction(action: "reply" | "resolve" | "dismiss") {
-    setActing(true);
-    try {
-      if (action === "reply") {
-        await api.replyToComment(repo, thread.root.id, prNumber);
-      } else if (action === "resolve") {
-        await api.resolveComment(repo, thread.root.id, prNumber);
-      } else {
-        await api.dismissComment(repo, thread.root.id, prNumber);
-      }
-      onCommentAction();
-    } catch (err) {
-      console.error("Action failed:", err);
-    } finally {
-      setActing(false);
-    }
+  function handleReEvaluate() {
+    void reEvaluateComment(rootId);
   }
 
-  async function pushTriage(patch: { snoozeUntil?: string | null; priority?: number | null; triageNote?: string | null }) {
-    setTriageBusy(true);
-    try {
-      await api.updateCommentTriage(repo, thread.root.id, prNumber, patch);
-      onCommentAction();
-    } catch (err) {
-      console.error("Triage update failed:", err);
-    } finally {
-      setTriageBusy(false);
-    }
+  function pushTriage(patch: { snoozeUntil?: string | null; priority?: number | null; triageNote?: string | null }) {
+    void updateCommentTriage(rootId, patch);
   }
 
   function isoAfterMs(ms: number): string {
@@ -309,55 +266,26 @@ function ThreadItem({ thread, onSelectFile, repo, prNumber, branch, fixBlocked, 
     return d.toISOString();
   }
 
-  async function handleFixWithClaude(userInstructions?: string) {
-    setFixModalOpen(false);
-    setFixing(true);
-    setFixError(null);
-
-    // Optimistic update — immediately show as running
-    onFixStarted({
-      commentId: thread.root.id,
-      repo,
-      prNumber,
+  function handleFixWithClaude(userInstructions?: string) {
+    setFixModalOpen(rootId, false);
+    void startFix(rootId, {
       path: thread.root.path,
-      startedAt: Date.now(),
-      status: "running",
-      branch,
-      originalComment: {
-        path: thread.root.path,
-        line: thread.root.line,
-        body: thread.root.body,
-        diffHunk: thread.root.diffHunk,
-      },
-    });
-
-    try {
-      const result = await api.fixWithClaude(repo, thread.root.id, prNumber, branch, {
-        path: thread.root.path,
-        line: thread.root.line,
-        body: thread.root.body,
-        diffHunk: thread.root.diffHunk,
-      }, userInstructions || undefined);
-      if (!result.success) {
-        setFixError(result.error ?? "Failed to start fix");
-      }
-    } catch (err) {
-      setFixError((err as Error).message);
-    } finally {
-      setFixing(false);
-    }
+      line: thread.root.line,
+      body: thread.root.body,
+      diffHunk: thread.root.diffHunk,
+    }, userInstructions || undefined);
   }
 
   useLayoutEffect(() => {
     const id = thread.root.id;
     const actions = threadActionsRef.current;
     actions.set(id, {
-      toggleExpand: () => setExpanded((x) => !x),
-      reply: () => { void handleAction("reply"); },
-      resolve: () => { void handleAction("resolve"); },
-      dismiss: () => { void handleAction("dismiss"); },
-      fix: () => { setFixModalOpen(true); },
-      reEvaluate: () => { void handleReEvaluate(); },
+      toggleExpand: () => toggleExpanded(id),
+      reply: () => handleAction("reply"),
+      resolve: () => handleAction("resolve"),
+      dismiss: () => handleAction("dismiss"),
+      fix: () => setFixModalOpen(id, true),
+      reEvaluate: () => handleReEvaluate(),
     });
     return () => {
       actions.delete(id);
@@ -374,12 +302,12 @@ function ThreadItem({ thread, onSelectFile, repo, prNumber, branch, fixBlocked, 
       <div className={cn("border rounded-lg overflow-hidden", thread.isResolved || isActedOn ? "border-gray-800/50 opacity-70" : "border-gray-800")}>
       <button
         type="button"
-        onClick={() => setExpanded(!expanded)}
+        onClick={() => toggleExpanded(rootId)}
         className="w-full px-3 py-1.5 bg-gray-800/50 text-left text-xs font-mono flex items-center justify-between hover:bg-gray-800/80 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/80 focus-visible:ring-inset"
       >
         <span className="flex items-center gap-2 min-w-0 flex-wrap">
           <span
-            onClick={(e) => { e.stopPropagation(); onSelectFile(thread.root.path); }}
+            onClick={(e) => { e.stopPropagation(); setActiveTab("files"); selectFile(thread.root.path); }}
             className="text-blue-400 hover:text-blue-300 shrink-0"
           >
             {thread.root.path}:{thread.root.line}
@@ -436,11 +364,11 @@ function ThreadItem({ thread, onSelectFile, repo, prNumber, branch, fixBlocked, 
             )}
             <textarea
               value={noteDraft}
-              onChange={(e) => setNoteDraft(e.target.value)}
+              onChange={(e) => setNoteDraft(rootId, e.target.value)}
               onBlur={() => {
                 const cur = thread.root.triageNote ?? "";
                 if (noteDraft !== cur) {
-                  void pushTriage({ triageNote: noteDraft });
+                  pushTriage({ triageNote: noteDraft });
                 }
               }}
               placeholder="Private note (not sent to GitHub)…"
@@ -453,17 +381,17 @@ function ThreadItem({ thread, onSelectFile, repo, prNumber, branch, fixBlocked, 
               <input
                 type="number"
                 value={priorityDraft}
-                onChange={(e) => setPriorityDraft(e.target.value)}
+                onChange={(e) => setPriorityDraft(rootId, e.target.value)}
                 onBlur={() => {
                   const raw = priorityDraft.trim();
                   if (raw === "") {
-                    if (thread.root.priority != null) void pushTriage({ priority: null });
+                    if (thread.root.priority != null) pushTriage({ priority: null });
                     return;
                   }
                   const n = Number(raw);
                   if (!Number.isFinite(n)) return;
                   const rounded = Math.round(n);
-                  if (rounded !== thread.root.priority) void pushTriage({ priority: rounded });
+                  if (rounded !== thread.root.priority) pushTriage({ priority: rounded });
                 }}
                 placeholder="0"
                 disabled={triageBusy}
@@ -473,7 +401,7 @@ function ThreadItem({ thread, onSelectFile, repo, prNumber, branch, fixBlocked, 
               <button
                 type="button"
                 disabled={triageBusy}
-                onClick={() => void pushTriage({ snoozeUntil: isoAfterMs(3600000) })}
+                onClick={() => pushTriage({ snoozeUntil: isoAfterMs(3600000) })}
                 className="text-xs px-2 py-0.5 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded disabled:opacity-50"
               >
                 1h
@@ -481,7 +409,7 @@ function ThreadItem({ thread, onSelectFile, repo, prNumber, branch, fixBlocked, 
               <button
                 type="button"
                 disabled={triageBusy}
-                onClick={() => void pushTriage({ snoozeUntil: isoAfterMs(4 * 3600000) })}
+                onClick={() => pushTriage({ snoozeUntil: isoAfterMs(4 * 3600000) })}
                 className="text-xs px-2 py-0.5 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded disabled:opacity-50"
               >
                 4h
@@ -489,7 +417,7 @@ function ThreadItem({ thread, onSelectFile, repo, prNumber, branch, fixBlocked, 
               <button
                 type="button"
                 disabled={triageBusy}
-                onClick={() => void pushTriage({ snoozeUntil: isoTomorrowMorning() })}
+                onClick={() => pushTriage({ snoozeUntil: isoTomorrowMorning() })}
                 className="text-xs px-2 py-0.5 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded disabled:opacity-50"
               >
                 Tomorrow 9:00
@@ -497,7 +425,7 @@ function ThreadItem({ thread, onSelectFile, repo, prNumber, branch, fixBlocked, 
               <button
                 type="button"
                 disabled={triageBusy || !thread.root.snoozeUntil}
-                onClick={() => void pushTriage({ snoozeUntil: null })}
+                onClick={() => pushTriage({ snoozeUntil: null })}
                 className="text-xs px-2 py-0.5 bg-gray-800 hover:bg-gray-700 text-gray-400 rounded disabled:opacity-40"
               >
                 Clear snooze
@@ -508,7 +436,7 @@ function ThreadItem({ thread, onSelectFile, repo, prNumber, branch, fixBlocked, 
           {eval_ && !isActedOn && (
             <div className="mx-1 mt-2">
               <button
-                onClick={() => setShowSuggestion(!showSuggestion)}
+                onClick={() => setShowSuggestion(rootId, !showSuggestion)}
                 className="text-xs text-gray-400 hover:text-gray-300 flex items-center gap-1"
               >
                 <span>{showSuggestion ? <ChevronDown size={14} /> : <ChevronRight size={14} />}</span>
@@ -529,13 +457,13 @@ function ThreadItem({ thread, onSelectFile, repo, prNumber, branch, fixBlocked, 
           {fixError && (
             <div className="mx-1 mt-2 p-2 bg-red-500/10 border border-red-500/30 rounded text-xs text-red-400">
               {fixError}
-              <button onClick={() => setFixError(null)} className="ml-2 text-gray-500 hover:text-gray-300">dismiss</button>
+              <button onClick={() => useAppStore.setState((s) => ({ fixErrors: { ...s.fixErrors, [rootId]: null } }))} className="ml-2 text-gray-500 hover:text-gray-300">dismiss</button>
             </div>
           )}
 
           {/* Fix conversation */}
           {fixJob && (fixJob.status === "awaiting_response" || (fixJob.status === "running" && fixJob.conversation?.length)) && (
-            <FixConversation job={fixJob} repo={repo} onJobAction={onCommentAction} />
+            <FixConversation commentId={rootId} repo={repo} />
           )}
 
           {/* Action buttons */}
@@ -550,7 +478,7 @@ function ThreadItem({ thread, onSelectFile, repo, prNumber, branch, fixBlocked, 
                 <Button
                   variant="orange"
                   size="xs"
-                  onClick={() => setFixModalOpen(true)}
+                  onClick={() => setFixModalOpen(rootId, true)}
                   disabled={acting || fixing || fixBlocked}
                   title={fixBlocked ? "A fix is already running on this PR" : undefined}
                 >
@@ -578,7 +506,7 @@ function ThreadItem({ thread, onSelectFile, repo, prNumber, branch, fixBlocked, 
         </div>
       )}
       {/* Fix with Claude modal */}
-      <Dialog open={fixModalOpen} onOpenChange={(open) => { if (!open) { setFixModalOpen(false); setFixInstructions(""); } }}>
+      <Dialog open={fixModalOpen} onOpenChange={(open) => { if (!open) { setFixModalOpen(rootId, false); setFixInstructions(rootId, ""); } }}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle>Fix with Claude</DialogTitle>
@@ -594,24 +522,24 @@ function ThreadItem({ thread, onSelectFile, repo, prNumber, branch, fixBlocked, 
             rows={3}
             placeholder="e.g. Use a guard clause instead of nesting, keep the existing error message..."
             value={fixInstructions}
-            onChange={(e) => setFixInstructions(e.target.value)}
+            onChange={(e) => setFixInstructions(rootId, e.target.value)}
             onKeyDown={(e) => {
               if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-                void handleFixWithClaude(fixInstructions);
-                setFixInstructions("");
+                handleFixWithClaude(fixInstructions);
+                setFixInstructions(rootId, "");
               }
             }}
             autoFocus
           />
           <DialogFooter>
             <button
-              onClick={() => { setFixModalOpen(false); setFixInstructions(""); }}
+              onClick={() => { setFixModalOpen(rootId, false); setFixInstructions(rootId, ""); }}
               className="text-xs px-4 py-1.5 bg-gray-700 hover:bg-gray-600 text-gray-300 rounded transition-colors"
             >
               Cancel
             </button>
             <button
-              onClick={() => { void handleFixWithClaude(fixInstructions); setFixInstructions(""); }}
+              onClick={() => { handleFixWithClaude(fixInstructions); setFixInstructions(rootId, ""); }}
               className="text-xs px-4 py-1.5 bg-orange-600 hover:bg-orange-500 text-white rounded transition-colors"
             >
               Start Fix
@@ -625,13 +553,30 @@ function ThreadItem({ thread, onSelectFile, repo, prNumber, branch, fixBlocked, 
   );
 }
 
-export default function CommentThreads({ comments, onSelectFile, repo, prNumber, branch, fixJobs, onCommentAction, onFixStarted, globalModalOpen = false, onOpenShortcutsHelp, repoLocalPath, preferredEditor }: CommentThreadsProps) {
-  const [selected, setSelected] = useState<Set<number>>(new Set());
-  const [batching, setBatching] = useState(false);
-  const [filterText, setFilterText] = useState("");
-  const [filterAction, setFilterAction] = useState<"all" | "fix" | "reply" | "resolve">("all");
-  const [showSnoozed, setShowSnoozed] = useState(false);
-  const [focusedIdx, setFocusedIdx] = useState<number | null>(null);
+export default function CommentThreads() {
+  const comments = useAppStore((s) => s.comments);
+  const selectedPR = useAppStore((s) => s.selectedPR);
+  const jobs = useAppStore((s) => s.jobs);
+  const shortcutsOpen = useAppStore((s) => s.shortcutsOpen);
+  const toggleShortcuts = useAppStore((s) => s.toggleShortcuts);
+  const filterText = useAppStore((s) => s.threadFilterText);
+  const filterAction = useAppStore((s) => s.threadFilterAction);
+  const showSnoozed = useAppStore((s) => s.threadShowSnoozed);
+  const focusedIdx = useAppStore((s) => s.threadFocusedIdx);
+  const selected = useAppStore((s) => s.threadSelected);
+  const batching = useAppStore((s) => s.threadBatching);
+  const setFilterText = useAppStore((s) => s.setThreadFilterText);
+  const setFilterAction = useAppStore((s) => s.setThreadFilterAction);
+  const setShowSnoozed = useAppStore((s) => s.setThreadShowSnoozed);
+  const setFocusedIdx = useAppStore((s) => s.setThreadFocusedIdx);
+  const toggleThreadSelected = useAppStore((s) => s.toggleThreadSelected);
+  const selectAllThreads = useAppStore((s) => s.selectAllThreads);
+  const clearThreadSelected = useAppStore((s) => s.clearThreadSelected);
+  const batchAction = useAppStore((s) => s.batchAction);
+
+  const repo = selectedPR?.repo ?? "";
+  const prNumber = selectedPR?.number ?? 0;
+
   const threadActionsRef = useRef(new Map<number, ThreadKeyActions>());
   const rowElsRef = useRef(new Map<number, HTMLDivElement>());
   const threadsRef = useRef<Thread[]>([]);
@@ -649,8 +594,8 @@ export default function CommentThreads({ comments, onSelectFile, repo, prNumber,
     return true;
   });
 
-  threadsRef.current = threads;
-  focusedIdxRef.current = focusedIdx;
+  useEffect(() => { threadsRef.current = threads; });
+  useEffect(() => { focusedIdxRef.current = focusedIdx; });
 
   function registerRowEl(id: number, el: HTMLDivElement | null) {
     if (el) {
@@ -661,12 +606,12 @@ export default function CommentThreads({ comments, onSelectFile, repo, prNumber,
   }
 
   useEffect(() => {
-    setFocusedIdx((i) => {
-      if (i === null) return null;
-      if (threads.length === 0) return null;
-      return Math.min(i, threads.length - 1);
-    });
-  }, [threads.length]);
+    const cur = focusedIdxRef.current;
+    if (cur === null) return;
+    if (threads.length === 0) { setFocusedIdx(null); return; }
+    const clamped = Math.min(cur, threads.length - 1);
+    if (clamped !== cur) setFocusedIdx(clamped);
+  }, [threads.length, setFocusedIdx]);
 
   useEffect(() => {
     const list = threadsRef.current;
@@ -677,7 +622,7 @@ export default function CommentThreads({ comments, onSelectFile, repo, prNumber,
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (globalModalOpen) return;
+      if (shortcutsOpen) return;
       const tgt = e.target;
       if (tgt instanceof HTMLInputElement || tgt instanceof HTMLTextAreaElement || tgt instanceof HTMLSelectElement) {
         return;
@@ -688,20 +633,18 @@ export default function CommentThreads({ comments, onSelectFile, repo, prNumber,
 
       if (e.key === "j" && !e.ctrlKey && !e.metaKey && !e.altKey) {
         e.preventDefault();
-        setFocusedIdx((i) => {
-          if (list.length === 0) return null;
-          if (i === null) return 0;
-          return Math.min(list.length - 1, i + 1);
-        });
+        const i = focusedIdxRef.current;
+        if (list.length === 0) { setFocusedIdx(null); return; }
+        if (i === null) { setFocusedIdx(0); return; }
+        setFocusedIdx(Math.min(list.length - 1, i + 1));
         return;
       }
       if (e.key === "k" && !e.ctrlKey && !e.metaKey && !e.altKey) {
         e.preventDefault();
-        setFocusedIdx((i) => {
-          if (list.length === 0) return null;
-          if (i === null) return 0;
-          return Math.max(0, i - 1);
-        });
+        const i = focusedIdxRef.current;
+        if (list.length === 0) { setFocusedIdx(null); return; }
+        if (i === null) { setFocusedIdx(0); return; }
+        setFocusedIdx(Math.max(0, i - 1));
         return;
       }
 
@@ -744,48 +687,27 @@ export default function CommentThreads({ comments, onSelectFile, repo, prNumber,
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [globalModalOpen]);
+  }, [shortcutsOpen, setFocusedIdx]);
 
   if (threads.length === 0) return null;
 
   const openCount = threads.filter((t) => !t.isResolved).length;
   const resolvedCount = threads.filter((t) => t.isResolved).length;
-  const hasRunningFix = fixJobs.some((j) => j.repo === repo && j.prNumber === prNumber && j.status === "running");
+  const hasRunningFix = jobs.some((j) => j.repo === repo && j.prNumber === prNumber && j.status === "running");
 
   const actionableThreads = threads.filter((t) => !t.isResolved && !(t.root.crStatus === "replied" || t.root.crStatus === "dismissed" || t.root.crStatus === "fixed"));
   const allSelected = actionableThreads.length > 0 && actionableThreads.every((t) => selected.has(t.root.id));
 
-  function toggleSelect(id: number) {
-    setSelected((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) { next.delete(id); } else { next.add(id); }
-      return next;
-    });
-  }
-
   function toggleSelectAll() {
     if (allSelected) {
-      setSelected(new Set());
+      clearThreadSelected();
     } else {
-      setSelected(new Set(actionableThreads.map((t) => t.root.id)));
+      selectAllThreads(actionableThreads.map((t) => t.root.id));
     }
   }
 
-  async function handleBatchAction(action: "reply" | "resolve" | "dismiss") {
-    const items = threads
-      .filter((t) => selected.has(t.root.id))
-      .map((t) => ({ repo, commentId: t.root.id, prNumber }));
-    if (items.length === 0) return;
-    setBatching(true);
-    try {
-      await api.batchAction(action, items);
-      setSelected(new Set());
-      onCommentAction();
-    } catch (err) {
-      console.error("Batch action failed:", err);
-    } finally {
-      setBatching(false);
-    }
+  function handleBatchAction(action: "reply" | "resolve" | "dismiss") {
+    void batchAction(action);
   }
 
   const filteredCount = threads.length;
@@ -837,15 +759,13 @@ export default function CommentThreads({ comments, onSelectFile, repo, prNumber,
               Snoozed
             </label>
             <div className="flex items-center gap-1 shrink-0 text-xs text-gray-600">
-              {onOpenShortcutsHelp && (
-                <IconButton
-                  description="All keyboard shortcuts"
-                  icon={<HelpCircle size={14} />}
-                  onClick={() => onOpenShortcutsHelp()}
-                  size="sm"
-                  className="text-blue-400/90 hover:text-blue-300"
-                />
-              )}
+              <IconButton
+                description="All keyboard shortcuts"
+                icon={<HelpCircle size={14} />}
+                onClick={() => toggleShortcuts()}
+                size="sm"
+                className="text-blue-400/90 hover:text-blue-300"
+              />
               <details className="text-xs">
                 <summary className="cursor-pointer hover:text-gray-400 select-none">Keys</summary>
                 <div className="mt-1 pl-2 text-[10px] text-gray-500 space-y-0.5 font-sans normal-case tracking-normal">
@@ -890,26 +810,18 @@ export default function CommentThreads({ comments, onSelectFile, repo, prNumber,
                   {isActionable && (
                     <Checkbox
                       checked={selected.has(thread.root.id)}
-                      onCheckedChange={() => toggleSelect(thread.root.id)}
+                      onCheckedChange={() => toggleThreadSelected(thread.root.id)}
                       className="mt-2 shrink-0"
                     />
                   )}
                   <div className={isActionable ? "flex-1 min-w-0" : "flex-1 min-w-0 pl-5"}>
                     <ThreadItem
+                      rootId={thread.root.id}
                       thread={thread}
-                      onSelectFile={onSelectFile}
-                      repo={repo}
-                      prNumber={prNumber}
-                      branch={branch}
                       fixBlocked={hasRunningFix}
-                      fixJobs={fixJobs}
-                      onCommentAction={onCommentAction}
-                      onFixStarted={onFixStarted}
                       isFocused={focusedIdx === idx}
                       registerRowEl={registerRowEl}
                       threadActionsRef={threadActionsRef}
-                      repoLocalPath={repoLocalPath}
-                      preferredEditor={preferredEditor}
                     />
                   </div>
                 </div>

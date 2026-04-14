@@ -80,6 +80,14 @@ function ensureSchema(raw: Database.Database): void {
       created_at   TEXT NOT NULL,
       updated_at   TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS push_subscriptions (
+      endpoint TEXT PRIMARY KEY,
+      keys_json TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS muted_prs (
+      pr_key TEXT PRIMARY KEY
+    );
   `);
   raw.prepare("INSERT OR IGNORE INTO meta (id, last_poll) VALUES (1, NULL)").run();
   migrateCommentsColumns(raw);

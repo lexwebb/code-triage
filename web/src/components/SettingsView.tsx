@@ -1,182 +1,38 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
-import type { AppConfigPayload } from "../api";
+import { useAppStore } from "../store";
 import { Checkbox } from "./ui/checkbox";
 
-type AccountRow = {
-  name: string;
-  orgs: string;
-  token: string;
-  hasToken: boolean;
-};
-
-function payloadToForm(c: AppConfigPayload): {
-  root: string;
-  port: number;
-  interval: number;
-  evalConcurrency: number;
-  pollReviewRequested: boolean;
-  commentRetentionDays: number;
-  repoPollStaleAfterDays: number;
-  repoPollColdIntervalMinutes: number;
-  pollApiHeadroom: number;
-  pollRateLimitAware: boolean;
-  preferredEditor: string;
-  ignoredBots: string;
-  githubToken: string;
-  hasGithubToken: boolean;
-  accounts: AccountRow[];
-  evalPromptAppend: string;
-  evalPromptAppendByRepoJson: string;
-  evalClaudeExtraArgsJson: string;
-  fixConversationMaxTurns: number;
-} {
-  return {
-    root: c.root,
-    port: c.port,
-    interval: c.interval,
-    evalConcurrency: c.evalConcurrency,
-    pollReviewRequested: c.pollReviewRequested,
-    commentRetentionDays: c.commentRetentionDays,
-    repoPollStaleAfterDays: c.repoPollStaleAfterDays ?? 7,
-    repoPollColdIntervalMinutes: c.repoPollColdIntervalMinutes ?? 60,
-    pollApiHeadroom: c.pollApiHeadroom ?? 0.35,
-    pollRateLimitAware: c.pollRateLimitAware !== false,
-    preferredEditor: c.preferredEditor ?? "vscode",
-    ignoredBots: (c.ignoredBots ?? []).join("\n"),
-    githubToken: "",
-    hasGithubToken: Boolean(c.hasGithubToken),
-    accounts: (c.accounts ?? []).map((a) => ({
-      name: a.name,
-      orgs: a.orgs.join(", "),
-      token: "",
-      hasToken: a.hasToken,
-    })),
-    evalPromptAppend: c.evalPromptAppend ?? "",
-    evalPromptAppendByRepoJson: JSON.stringify(c.evalPromptAppendByRepo ?? {}, null, 2),
-    evalClaudeExtraArgsJson: JSON.stringify(c.evalClaudeExtraArgs ?? [], null, 2),
-    fixConversationMaxTurns: c.fixConversationMaxTurns ?? 5,
-  };
-}
-
 export default function SettingsView({
-  initial,
-  listenPort,
   mode,
-  onCancel,
-  onSave,
 }: {
-  initial: AppConfigPayload;
-  listenPort: number;
   mode: "setup" | "settings";
-  onCancel?: () => void;
-  onSave: (body: Record<string, unknown>) => Promise<{ restartRequired: boolean }>;
 }) {
-  const [form, setForm] = useState(() => payloadToForm(initial));
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [restartHint, setRestartHint] = useState(false);
+  const form = useAppStore((s) => s.settingsForm);
+  const saving = useAppStore((s) => s.settingsSaving);
+  const error = useAppStore((s) => s.settingsError);
+  const restartHint = useAppStore((s) => s.settingsRestartHint);
+  const listenPort = useAppStore((s) => s.settingsConfig?.listenPort ?? 3100);
+  const updateField = useAppStore((s) => s.updateSettingsField);
+  const submit = useAppStore((s) => s.submitSettings);
+  const closeSettings = useAppStore((s) => s.closeSettings);
 
-  useEffect(() => {
-    setForm(payloadToForm(initial));
-  }, [initial]);
+  if (form === null) return null;
 
   const title = mode === "setup" ? "Welcome — configure Code Triage" : "Settings";
 
-  const update = useCallback(<K extends keyof ReturnType<typeof payloadToForm>>(key: K, v: ReturnType<typeof payloadToForm>[K]) => {
-    setForm((f) => ({ ...f, [key]: v }));
-  }, []);
-
-  const parseJsonField = useCallback((raw: string, label: string): unknown => {
-    const t = raw.trim();
-    if (!t) return label.includes("Args") ? [] : {};
-    try {
-      return JSON.parse(t) as unknown;
-    } catch {
-      throw new Error(`${label} must be valid JSON`);
-    }
-  }, []);
-
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setError(null);
-    setSaving(true);
-    try {
-      let evalPromptAppendByRepo: Record<string, string>;
-      const repoObj = parseJsonField(form.evalPromptAppendByRepoJson, "Per-repo prompt map");
-      if (repoObj !== null && typeof repoObj === "object" && !Array.isArray(repoObj)) {
-        evalPromptAppendByRepo = {};
-        for (const [k, v] of Object.entries(repoObj)) {
-          if (typeof v === "string") evalPromptAppendByRepo[k] = v;
-        }
-      } else {
-        throw new Error("Per-repo prompt map must be a JSON object");
-      }
-
-      const argsParsed = parseJsonField(form.evalClaudeExtraArgsJson, "Claude extra args");
-      if (!Array.isArray(argsParsed)) throw new Error("Claude extra args must be a JSON array of strings");
-      const evalClaudeExtraArgs = argsParsed.filter((x): x is string => typeof x === "string");
-
-      const ignoredBots = form.ignoredBots
-        .split("\n")
-        .map((s) => s.trim())
-        .filter(Boolean);
-
-      const accounts = form.accounts.map((a) => ({
-        name: a.name.trim(),
-        orgs: a.orgs.split(",").map((o) => o.trim()).filter(Boolean),
-        token: a.token.trim(),
-      }));
-
-      const body: Record<string, unknown> = {
-        root: form.root.trim(),
-        port: form.port,
-        interval: form.interval,
-        evalConcurrency: form.evalConcurrency,
-        pollReviewRequested: form.pollReviewRequested,
-        commentRetentionDays: form.commentRetentionDays,
-        repoPollStaleAfterDays: form.repoPollStaleAfterDays,
-        repoPollColdIntervalMinutes: form.repoPollColdIntervalMinutes,
-        pollApiHeadroom: form.pollApiHeadroom,
-        pollRateLimitAware: form.pollRateLimitAware,
-        preferredEditor: form.preferredEditor,
-        ignoredBots,
-        accounts,
-        evalPromptAppend: form.evalPromptAppend.trim() || undefined,
-        evalPromptAppendByRepo,
-        evalClaudeExtraArgs,
-        fixConversationMaxTurns: form.fixConversationMaxTurns,
-      };
-      const gt = form.githubToken.trim();
-      if (gt) {
-        body.githubToken = gt;
-      } else if (!form.hasGithubToken) {
-        body.githubToken = "";
-      }
-
-      const result = await onSave(body);
-      if (result.restartRequired) setRestartHint(true);
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setSaving(false);
-    }
+    await submit();
   };
 
   const addAccount = () => {
-    setForm((f) => ({
-      ...f,
-      accounts: [...f.accounts, { name: "", orgs: "", token: "", hasToken: false }],
-    }));
+    updateField("accounts", [...form.accounts, { name: "", orgs: "", token: "", hasToken: false }]);
   };
 
   const removeAccount = (i: number) => {
-    setForm((f) => ({
-      ...f,
-      accounts: f.accounts.filter((_, j) => j !== i),
-    }));
+    updateField("accounts", form.accounts.filter((_, j) => j !== i));
   };
 
-  const portMismatch = useMemo(() => form.port !== listenPort, [form.port, listenPort]);
+  const portMismatch = form.port !== listenPort;
 
   return (
     <div className="min-h-full bg-gray-950 text-gray-200 flex flex-col">
@@ -185,10 +41,10 @@ export default function SettingsView({
           <img src="/logo.png" alt="" className="w-8 h-8 rounded-md" />
           <h1 className="text-lg font-semibold text-white">{title}</h1>
         </div>
-        {mode === "settings" && onCancel && (
+        {mode === "settings" && (
           <button
             type="button"
-            onClick={onCancel}
+            onClick={closeSettings}
             className="text-sm text-gray-500 hover:text-gray-300"
           >
             Close
@@ -224,7 +80,7 @@ export default function SettingsView({
               required
               className="w-full rounded-md border border-gray-700 bg-gray-900 px-3 py-2 text-sm font-mono"
               value={form.root}
-              onChange={(e) => update("root", e.target.value)}
+              onChange={(e) => updateField("root", e.target.value)}
               placeholder="~/src"
             />
           </label>
@@ -233,7 +89,7 @@ export default function SettingsView({
             <select
               className="w-full rounded-md border border-gray-700 bg-gray-900 px-3 py-2 text-sm"
               value={form.preferredEditor}
-              onChange={(e) => update("preferredEditor", e.target.value)}
+              onChange={(e) => updateField("preferredEditor", e.target.value)}
             >
               <option value="vscode">VS Code</option>
               <option value="cursor">Cursor</option>
@@ -254,7 +110,7 @@ export default function SettingsView({
                 max={65535}
                 className="w-full rounded-md border border-gray-700 bg-gray-900 px-3 py-2 text-sm"
                 value={form.port}
-                onChange={(e) => update("port", parseInt(e.target.value, 10) || 3100)}
+                onChange={(e) => updateField("port", parseInt(e.target.value, 10) || 3100)}
               />
               {portMismatch && (
                 <span className="text-xs text-amber-600">Server is on port {listenPort} until you restart.</span>
@@ -268,7 +124,7 @@ export default function SettingsView({
                 min={1}
                 className="w-full rounded-md border border-gray-700 bg-gray-900 px-3 py-2 text-sm"
                 value={form.interval}
-                onChange={(e) => update("interval", parseInt(e.target.value, 10) || 1)}
+                onChange={(e) => updateField("interval", parseInt(e.target.value, 10) || 1)}
               />
             </label>
           </div>
@@ -285,7 +141,7 @@ export default function SettingsView({
                 max={8}
                 className="w-full rounded-md border border-gray-700 bg-gray-900 px-3 py-2 text-sm"
                 value={form.evalConcurrency}
-                onChange={(e) => update("evalConcurrency", parseInt(e.target.value, 10) || 2)}
+                onChange={(e) => updateField("evalConcurrency", parseInt(e.target.value, 10) || 2)}
               />
             </label>
             <label className="block space-y-1">
@@ -295,14 +151,14 @@ export default function SettingsView({
                 min={0}
                 className="w-full rounded-md border border-gray-700 bg-gray-900 px-3 py-2 text-sm"
                 value={form.commentRetentionDays}
-                onChange={(e) => update("commentRetentionDays", parseInt(e.target.value, 10) || 0)}
+                onChange={(e) => updateField("commentRetentionDays", parseInt(e.target.value, 10) || 0)}
               />
             </label>
           </div>
           <label className="flex items-center gap-2 cursor-pointer">
             <Checkbox
               checked={form.pollReviewRequested}
-              onCheckedChange={(v) => update("pollReviewRequested", v === true)}
+              onCheckedChange={(v) => updateField("pollReviewRequested", v === true)}
             />
             <span className="text-sm text-gray-300">Poll review-requested PRs (not your authored)</span>
           </label>
@@ -314,7 +170,7 @@ export default function SettingsView({
                 min={0}
                 className="w-full rounded-md border border-gray-700 bg-gray-900 px-3 py-2 text-sm"
                 value={form.repoPollStaleAfterDays}
-                onChange={(e) => update("repoPollStaleAfterDays", Math.max(0, parseInt(e.target.value, 10) || 0))}
+                onChange={(e) => updateField("repoPollStaleAfterDays", Math.max(0, parseInt(e.target.value, 10) || 0))}
               />
             </label>
             <label className="block space-y-1">
@@ -324,7 +180,7 @@ export default function SettingsView({
                 min={1}
                 className="w-full rounded-md border border-gray-700 bg-gray-900 px-3 py-2 text-sm"
                 value={form.repoPollColdIntervalMinutes}
-                onChange={(e) => update("repoPollColdIntervalMinutes", Math.max(1, parseInt(e.target.value, 10) || 60))}
+                onChange={(e) => updateField("repoPollColdIntervalMinutes", Math.max(1, parseInt(e.target.value, 10) || 60))}
               />
             </label>
           </div>
@@ -342,14 +198,14 @@ export default function SettingsView({
                 className="w-full rounded-md border border-gray-700 bg-gray-900 px-3 py-2 text-sm"
                 value={form.pollApiHeadroom}
                 onChange={(e) =>
-                  update("pollApiHeadroom", Math.min(0.95, Math.max(0, parseFloat(e.target.value) || 0)))
+                  updateField("pollApiHeadroom", Math.min(0.95, Math.max(0, parseFloat(e.target.value) || 0)))
                 }
               />
             </label>
             <label className="flex items-end gap-2 cursor-pointer pb-2">
               <Checkbox
                 checked={form.pollRateLimitAware}
-                onCheckedChange={(v) => update("pollRateLimitAware", v === true)}
+                onCheckedChange={(v) => updateField("pollRateLimitAware", v === true)}
               />
               <span className="text-sm text-gray-300">Slow polling when GitHub quota is tight</span>
             </label>
@@ -365,7 +221,7 @@ export default function SettingsView({
           <textarea
             className="w-full min-h-[88px] rounded-md border border-gray-700 bg-gray-900 px-3 py-2 text-sm font-mono"
             value={form.ignoredBots}
-            onChange={(e) => update("ignoredBots", e.target.value)}
+            onChange={(e) => updateField("ignoredBots", e.target.value)}
             placeholder="some-bot[bot]"
           />
         </section>
@@ -388,7 +244,7 @@ export default function SettingsView({
               className="w-full rounded-md border border-gray-700 bg-gray-900 px-3 py-2 text-sm font-mono"
               value={form.githubToken}
               placeholder={form.hasGithubToken ? "••••••••" : "optional if env or gh CLI is configured"}
-              onChange={(e) => update("githubToken", e.target.value)}
+              onChange={(e) => updateField("githubToken", e.target.value)}
             />
           </label>
           {form.hasGithubToken && (
@@ -396,8 +252,8 @@ export default function SettingsView({
               type="button"
               className="text-xs text-red-400 hover:text-red-300"
               onClick={() => {
-                update("hasGithubToken", false);
-                update("githubToken", "");
+                updateField("hasGithubToken", false);
+                updateField("githubToken", "");
               }}
             >
               Remove saved token
@@ -434,7 +290,7 @@ export default function SettingsView({
                       onChange={(e) => {
                         const na = [...form.accounts];
                         na[i] = { ...na[i]!, name: e.target.value };
-                        update("accounts", na);
+                        updateField("accounts", na);
                       }}
                     />
                   </label>
@@ -446,7 +302,7 @@ export default function SettingsView({
                       onChange={(e) => {
                         const na = [...form.accounts];
                         na[i] = { ...na[i]!, orgs: e.target.value };
-                        update("accounts", na);
+                        updateField("accounts", na);
                       }}
                     />
                   </label>
@@ -464,7 +320,7 @@ export default function SettingsView({
                       onChange={(e) => {
                         const na = [...form.accounts];
                         na[i] = { ...na[i]!, token: e.target.value };
-                        update("accounts", na);
+                        updateField("accounts", na);
                       }}
                     />
                   </label>
@@ -485,7 +341,7 @@ export default function SettingsView({
                 max={50}
                 className="w-full rounded-md border border-gray-700 bg-gray-900 px-3 py-2 text-sm"
                 value={form.fixConversationMaxTurns}
-                onChange={(e) => update("fixConversationMaxTurns", parseInt(e.target.value, 10) || 0)}
+                onChange={(e) => updateField("fixConversationMaxTurns", parseInt(e.target.value, 10) || 0)}
               />
             </label>
           </div>
@@ -497,7 +353,7 @@ export default function SettingsView({
             <textarea
               className="w-full min-h-[88px] rounded-md border border-gray-700 bg-gray-900 px-3 py-2 text-sm"
               value={form.evalPromptAppend}
-              onChange={(e) => update("evalPromptAppend", e.target.value)}
+              onChange={(e) => updateField("evalPromptAppend", e.target.value)}
             />
           </label>
           <label className="block space-y-1">
@@ -505,7 +361,7 @@ export default function SettingsView({
             <textarea
               className="w-full min-h-[120px] rounded-md border border-gray-700 bg-gray-900 px-3 py-2 text-sm font-mono"
               value={form.evalPromptAppendByRepoJson}
-              onChange={(e) => update("evalPromptAppendByRepoJson", e.target.value)}
+              onChange={(e) => updateField("evalPromptAppendByRepoJson", e.target.value)}
             />
           </label>
           <label className="block space-y-1">
@@ -513,7 +369,7 @@ export default function SettingsView({
             <textarea
               className="w-full min-h-[72px] rounded-md border border-gray-700 bg-gray-900 px-3 py-2 text-sm font-mono"
               value={form.evalClaudeExtraArgsJson}
-              onChange={(e) => update("evalClaudeExtraArgsJson", e.target.value)}
+              onChange={(e) => updateField("evalClaudeExtraArgsJson", e.target.value)}
               placeholder='["--model","opus"]'
             />
           </label>
@@ -527,8 +383,8 @@ export default function SettingsView({
           >
             {saving ? "Saving…" : "Save"}
           </button>
-          {mode === "settings" && onCancel && (
-            <button type="button" onClick={onCancel} className="rounded-md border border-gray-700 px-5 py-2.5 text-sm text-gray-300 hover:bg-gray-800">
+          {mode === "settings" && (
+            <button type="button" onClick={closeSettings} className="rounded-md border border-gray-700 px-5 py-2.5 text-sm text-gray-300 hover:bg-gray-800">
               Cancel
             </button>
           )}

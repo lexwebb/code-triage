@@ -23,6 +23,19 @@ async function postJSON<T>(path: string, body: Record<string, unknown>): Promise
   return data as T;
 }
 
+async function deleteJSON<T>(path: string, body: Record<string, unknown>): Promise<T> {
+  const res = await fetch(`${BASE}${path}`, {
+    method: "DELETE",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const data = (await res.json().catch(() => ({}))) as { error?: string };
+  if (!res.ok) {
+    throw new Error(typeof data.error === "string" ? data.error : `API error: ${res.status}`);
+  }
+  return data as T;
+}
+
 function repoQuery(repo?: string): string {
   return repo ? `?repo=${encodeURIComponent(repo)}` : "";
 }
@@ -98,7 +111,6 @@ export interface PollStatus {
   pollPaused?: boolean;
   pollPausedReason?: string | null;
   fixJobs: FixJobStatus[];
-  testNotification: boolean;
   rateLimited?: boolean;
   rateLimitResetAt?: number | null;
   /** From GitHub `X-RateLimit-Remaining` / `X-RateLimit-Limit` when present. */
@@ -174,4 +186,14 @@ export const api = {
   getConfig: () => fetchJSON<ConfigGetResponse>("/api/config"),
   saveConfig: (body: Record<string, unknown>) =>
     postJSON<{ ok: boolean; restartRequired: boolean }>("/api/config", body),
+  getVapidPublicKey: () => fetchJSON<{ publicKey: string }>("/api/push/vapid-public-key"),
+  subscribePush: (sub: { endpoint: string; keys: { p256dh: string; auth: string } }) =>
+    postJSON<{ ok: boolean }>("/api/push/subscribe", sub),
+  unsubscribePush: (endpoint: string) =>
+    deleteJSON<{ ok: boolean }>("/api/push/unsubscribe", { endpoint }),
+  mutePR: (repo: string, number: number) =>
+    postJSON<{ ok: boolean }>("/api/push/mute", { repo, number }),
+  unmutePR: (repo: string, number: number) =>
+    deleteJSON<{ ok: boolean }>("/api/push/mute", { repo, number }),
+  getMutedPRs: () => fetchJSON<{ muted: string[] }>("/api/push/muted"),
 };
