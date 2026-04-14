@@ -2,7 +2,7 @@ import React from "react";
 import { cn } from "../lib/utils";
 import type { FixJobStatus } from "../api";
 import { useAppStore } from "../store";
-import { Clock, Check, X, HelpCircle } from "lucide-react";
+import { Clock, Check, X, HelpCircle, ListOrdered } from "lucide-react";
 import { IconButton } from "./ui/icon-button";
 import { Button } from "./ui/button";
 
@@ -340,8 +340,10 @@ export default function FixJobsBanner() {
   const fixJobs = useAppStore((s) => s.jobs);
   const selectedJobId = useAppStore((s) => s.selectedJobId);
   const setSelectedJobId = useAppStore((s) => s.setSelectedJobId);
+  const queue = useAppStore((s) => s.queue);
+  const cancelQueued = useAppStore((s) => s.cancelQueued);
 
-  if (fixJobs.length === 0) return null;
+  if (fixJobs.length === 0 && queue.length === 0) return null;
 
   const running = fixJobs.filter((j) => j.status === "running").length;
   const awaiting = fixJobs.filter((j) => j.status === "awaiting_response").length;
@@ -359,10 +361,29 @@ export default function FixJobsBanner() {
           {completed > 0 && <span className="text-green-400">{completed} ready</span>}
           {failed > 0 && <span className="text-red-400">{failed} failed</span>}
           {noChanges > 0 && <span className="text-blue-400">{noChanges} no changes</span>}
+          {queue.length > 0 && <span className="text-gray-400">{queue.length} queued</span>}
         </div>
         <div className="max-h-40 overflow-y-auto">
           {fixJobs.map((job) => (
             <JobRow key={job.commentId} job={job} onSelect={() => setSelectedJobId(job.commentId)} />
+          ))}
+          {queue.map((q) => (
+            <div
+              key={`q-${q.commentId}`}
+              className="flex items-center gap-3 px-4 py-1.5 text-xs text-gray-400"
+            >
+              <span className="flex items-center gap-1 text-gray-500">
+                <ListOrdered size={12} /> queued
+              </span>
+              <span className="text-gray-400 font-mono">{q.repo.split("/")[1]}#{q.prNumber}</span>
+              <span className="text-gray-500 truncate flex-1">{q.path}</span>
+              <button
+                className="text-gray-600 hover:text-red-400 transition-colors"
+                onClick={(e) => { e.stopPropagation(); cancelQueued(q.commentId); }}
+              >
+                Cancel
+              </button>
+            </div>
           ))}
         </div>
       </div>

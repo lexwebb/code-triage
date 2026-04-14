@@ -80,6 +80,28 @@ function ensureSchema(raw: Database.Database): void {
       created_at   TEXT NOT NULL,
       updated_at   TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS push_subscriptions (
+      endpoint TEXT PRIMARY KEY,
+      keys_json TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS muted_prs (
+      pr_key TEXT PRIMARY KEY
+    );
+    CREATE TABLE IF NOT EXISTS fix_queue (
+      id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+      comment_id         INTEGER NOT NULL UNIQUE,
+      repo               TEXT NOT NULL,
+      pr_number          INTEGER NOT NULL,
+      branch             TEXT NOT NULL,
+      path               TEXT NOT NULL,
+      line               INTEGER NOT NULL,
+      body               TEXT NOT NULL,
+      diff_hunk          TEXT NOT NULL,
+      user_instructions  TEXT,
+      queued_at          TEXT NOT NULL,
+      position           INTEGER NOT NULL
+    );
   `);
   raw.prepare("INSERT OR IGNORE INTO meta (id, last_poll) VALUES (1, NULL)").run();
   migrateCommentsColumns(raw);

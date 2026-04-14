@@ -2,6 +2,7 @@ import { getRawSqlite, openStateDatabase } from "./db/client.js";
 import { loadState, markEvaluating, needsEvaluation, saveState, markEvalFailed, markCommentWithEvaluation } from "./state.js";
 import { evaluateComment, clampEvalConcurrency } from "./actioner.js";
 import { updateClaudeStats, sseBroadcast, broadcastPollStatus } from "./server.js";
+import { notifyEvalComplete } from "./push.js";
 import { loadConfig } from "./config.js";
 import { runWithConcurrency } from "./run-with-concurrency.js";
 import type { CrComment, CrWatchState } from "./types.js";
@@ -187,6 +188,17 @@ export async function drainOnce(concurrency?: number): Promise<void> {
           commentId: item.commentId,
         });
         broadcastPollStatus();
+        if (evaluation) {
+          notifyEvalComplete({
+            repo: item.repo,
+            prNumber: item.prNumber,
+            commentId: item.commentId,
+            path: item.comment.path,
+            line: item.comment.line,
+            action: evaluation.action,
+            summary: evaluation.summary,
+          });
+        }
       } catch (err) {
         updateClaudeStats({ evalFinished: true });
         console.error(`Eval failed for ${item.commentKey}: ${(err as Error).message}`);

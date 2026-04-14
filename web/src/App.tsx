@@ -82,8 +82,7 @@ export default function App() {
   const fetchPulls = useAppStore((s) => s.fetchPulls);
   const setActiveTab = useAppStore((s) => s.setActiveTab);
   const handlePopState = useAppStore((s) => s.handlePopState);
-  const requestPermission = useAppStore((s) => s.requestPermission);
-  const testNotification = useAppStore((s) => s.testNotification);
+  const subscribePush = useAppStore((s) => s.subscribePush);
   const toggleSidebar = useAppStore((s) => s.toggleSidebar);
   const setMobileDrawerOpen = useAppStore((s) => s.setMobileDrawerOpen);
   const openSettings = useAppStore((s) => s.openSettings);
@@ -104,12 +103,12 @@ export default function App() {
       s.startRateLimitPoller(),
       s.initMediaQuery(),
       s.initKeyboardListener(),
-      s.startReminderInterval(),
       s.checkPermissionPeriodically(),
     ];
 
     void s.fetchInitialStatus();
-    void s.initializeBaseline();
+    void s.loadMutedPRs();
+    void s.subscribePush();
 
     return () => {
       for (const fn of teardowns) fn();
@@ -161,11 +160,11 @@ export default function App() {
       {showNotifBanner && (
         <div className="bg-blue-600/90 px-4 py-2 flex items-center justify-between shrink-0">
           <span className="text-sm text-white">
-            Enable notifications to get alerted when PRs need your attention.
+            Enable push notifications to get alerted when PRs need your attention.
           </span>
           <div className="flex items-center gap-2">
             <button
-              onClick={() => void requestPermission()}
+              onClick={() => void subscribePush()}
               className="text-sm px-3 py-1 bg-white/20 hover:bg-white/30 text-white rounded transition-colors"
             >
               Turn on notifications
@@ -260,7 +259,7 @@ export default function App() {
                 description={`Test notification (permission: ${permission})`}
                 icon={<Bell size={14} />}
                 size="sm"
-                onClick={testNotification}
+                onClick={() => void fetch("/api/push/test", { method: "POST" })}
               />
               <IconButton
                 description="Refresh lists and reset adaptive poll schedule"

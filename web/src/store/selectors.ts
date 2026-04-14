@@ -39,7 +39,7 @@ export function selectTimerText(s: AppStore) {
 }
 
 export function selectShowNotifBanner(s: AppStore) {
-  return s.permission === "default";
+  return s.permission === "default" || (s.permission === "granted" && !s.pushSubscribed);
 }
 
 export function formatDurationUntil(targetMs: number, nowMs: number): string {

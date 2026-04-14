@@ -182,10 +182,11 @@ function FixConversation({ commentId, repo }: { commentId: number; repo: string 
   );
 }
 
-function ThreadItem({ rootId, thread, fixBlocked, isFocused, registerRowEl, threadActionsRef }: {
+function ThreadItem({ rootId, thread, fixBlocked, queuedCommentIds, isFocused, registerRowEl, threadActionsRef }: {
   rootId: number;
   thread: Thread;
   fixBlocked: boolean;
+  queuedCommentIds: number[];
   isFocused: boolean;
   registerRowEl: (id: number, el: HTMLDivElement | null) => void;
   threadActionsRef: React.RefObject<Map<number, ThreadKeyActions>>;
@@ -197,6 +198,7 @@ function ThreadItem({ rootId, thread, fixBlocked, isFocused, registerRowEl, thre
   const expanded = useAppStore((s) => s.expandedThreads.has(rootId));
   const acting = useAppStore((s) => s.actingThreads.has(rootId));
   const fixing = useAppStore((s) => s.fixingThreads.has(rootId));
+  const isQueued = queuedCommentIds.includes(rootId);
   const fixError = useAppStore((s) => s.fixErrors[rootId] ?? null);
   const fixModalOpen = useAppStore((s) => s.fixModalOpenThreads.has(rootId));
   const fixInstructions = useAppStore((s) => s.threadFixInstructions[rootId] ?? "");
@@ -479,10 +481,10 @@ function ThreadItem({ rootId, thread, fixBlocked, isFocused, registerRowEl, thre
                   variant="orange"
                   size="xs"
                   onClick={() => setFixModalOpen(rootId, true)}
-                  disabled={acting || fixing || fixBlocked}
-                  title={fixBlocked ? "A fix is already running on this PR" : undefined}
+                  disabled={acting || fixing || isQueued}
+                  title={isQueued ? "Already queued for fixing" : fixBlocked ? "Will be queued" : undefined}
                 >
-                  {fixing ? "Starting fix..." : fixBlocked ? "Fix running..." : "Fix with Claude"}
+                  {fixing ? "Starting fix..." : isQueued ? "Queued" : fixBlocked ? "Queue Fix" : "Fix with Claude"}
                 </Button>
               )}
               <Button variant="green" size="xs" onClick={() => handleAction("resolve")} disabled={acting || fixing}>
@@ -555,7 +557,6 @@ function ThreadItem({ rootId, thread, fixBlocked, isFocused, registerRowEl, thre
 
 export default function CommentThreads() {
   const comments = useAppStore((s) => s.comments);
-  const selectedPR = useAppStore((s) => s.selectedPR);
   const jobs = useAppStore((s) => s.jobs);
   const shortcutsOpen = useAppStore((s) => s.shortcutsOpen);
   const toggleShortcuts = useAppStore((s) => s.toggleShortcuts);
@@ -573,9 +574,6 @@ export default function CommentThreads() {
   const selectAllThreads = useAppStore((s) => s.selectAllThreads);
   const clearThreadSelected = useAppStore((s) => s.clearThreadSelected);
   const batchAction = useAppStore((s) => s.batchAction);
-
-  const repo = selectedPR?.repo ?? "";
-  const prNumber = selectedPR?.number ?? 0;
 
   const threadActionsRef = useRef(new Map<number, ThreadKeyActions>());
   const rowElsRef = useRef(new Map<number, HTMLDivElement>());
@@ -689,11 +687,13 @@ export default function CommentThreads() {
     return () => window.removeEventListener("keydown", onKey);
   }, [shortcutsOpen, setFocusedIdx]);
 
+  const queue = useAppStore((s) => s.queue);
+
   if (threads.length === 0) return null;
 
   const openCount = threads.filter((t) => !t.isResolved).length;
   const resolvedCount = threads.filter((t) => t.isResolved).length;
-  const hasRunningFix = jobs.some((j) => j.repo === repo && j.prNumber === prNumber && j.status === "running");
+  const hasActiveFix = jobs.some((j) => j.status === "running" || j.status === "completed");
 
   const actionableThreads = threads.filter((t) => !t.isResolved && !(t.root.crStatus === "replied" || t.root.crStatus === "dismissed" || t.root.crStatus === "fixed"));
   const allSelected = actionableThreads.length > 0 && actionableThreads.every((t) => selected.has(t.root.id));
@@ -818,7 +818,8 @@ export default function CommentThreads() {
                     <ThreadItem
                       rootId={thread.root.id}
                       thread={thread}
-                      fixBlocked={hasRunningFix}
+                      fixBlocked={hasActiveFix}
+                      queuedCommentIds={queue.map((q) => q.commentId)}
                       isFocused={focusedIdx === idx}
                       registerRowEl={registerRowEl}
                       threadActionsRef={threadActionsRef}

@@ -2,29 +2,16 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   getHealthPayload,
   getPollState,
-  triggerTestNotification,
   updatePollState,
   updateRepos,
 } from "./server.js";
 
-describe("getPollState", () => {
+describe("getHealthPayload", () => {
   afterEach(() => {
     vi.restoreAllMocks();
   });
 
-  it("does not consume test notification when consumeTestNotification is false", () => {
-    triggerTestNotification();
-    const a = getPollState({ consumeTestNotification: false });
-    expect(a.testNotification).toBe(false);
-    const b = getPollState({ consumeTestNotification: true });
-    expect(b.testNotification).toBe(true);
-    const c = getPollState({ consumeTestNotification: true });
-    expect(c.testNotification).toBe(false);
-  });
-});
-
-describe("getHealthPayload", () => {
-  it("includes lastPollError and never consumes test notification", () => {
+  it("includes lastPollError", () => {
     updateRepos([{ repo: "a/b", localPath: "/x" }]);
     updatePollState({
       lastPoll: 1000,
@@ -33,13 +20,16 @@ describe("getHealthPayload", () => {
       polling: false,
       lastPollError: "GitHub timeout",
     });
-    triggerTestNotification();
     const h = getHealthPayload();
     expect(h.status).toBe("ok");
     expect(h.repos).toBe(1);
     expect(h.lastPollError).toBe("GitHub timeout");
     expect(h.fixJobsRunning).toBe(0);
-    const p = getPollState({ consumeTestNotification: true });
-    expect(p.testNotification).toBe(true);
+  });
+
+  it("getPollState returns poll fields", () => {
+    const p = getPollState();
+    expect(typeof p.polling).toBe("boolean");
+    expect(Array.isArray(p.fixJobs)).toBe(true);
   });
 });

@@ -9,6 +9,7 @@ import type {
 } from "../types";
 import type {
   FixJobStatus,
+  QueuedFixItem,
   AppConfigPayload,
   ConfigGetResponse,
   PollStatus,
@@ -182,12 +183,15 @@ export interface PollStatusSlice {
 
 export interface FixJobsSlice {
   jobs: FixJobStatus[];
+  queue: QueuedFixItem[];
   replyText: Record<number, string>;
   noChangesReply: Record<number, string>;
   acting: Record<number, boolean>;
   selectedJobId: number | null;
 
   setJobs: (jobs: FixJobStatus[]) => void;
+  setQueue: (items: QueuedFixItem[]) => void;
+  cancelQueued: (commentId: number) => Promise<void>;
   setReplyText: (commentId: number, text: string) => void;
   setNoChangesReply: (commentId: number, text: string) => void;
   setSelectedJobId: (id: number | null) => void;
@@ -203,25 +207,15 @@ export interface FixJobsSlice {
 export interface NotificationsSlice {
   mutedPRs: Set<string>;
   permission: NotificationPermission;
-  initialized: boolean;
-  commentBaselineReady: boolean;
-  _previousReviewPRKeys: Set<string>;
-  _previousCommentKeys: Set<string>;
-  _previousPendingKeys: Set<string>;
-  _previousChecksStatus: Map<string, string>;
-  _previousOpenComments: Map<string, number>;
-  _lastReviewReminder: number;
-  _reminderInterval: ReturnType<typeof setInterval> | null;
-  _permissionInterval: ReturnType<typeof setInterval> | null;
+  pushSubscribed: boolean;
 
-  initializeBaseline: () => Promise<void>;
-  diffAndNotify: () => Promise<void>;
+  subscribePush: () => Promise<void>;
+  unsubscribePush: () => Promise<void>;
   mutePR: (repo: string, number: number) => void;
   unmutePR: (repo: string, number: number) => void;
   isPRMuted: (repo: string, number: number) => boolean;
   requestPermission: () => Promise<void>;
-  testNotification: () => void;
-  startReminderInterval: () => () => void;
+  loadMutedPRs: () => Promise<void>;
   checkPermissionPeriodically: () => () => void;
 }
 

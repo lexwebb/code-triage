@@ -1,5 +1,5 @@
 import { api } from "../api";
-import type { PollStatus } from "../api";
+import type { PollStatus, QueuedFixItem } from "../api";
 import type { SliceCreator, PollStatusSlice } from "./types";
 
 export const createPollStatusSlice: SliceCreator<PollStatusSlice> = (set, get) => ({
@@ -37,6 +37,13 @@ export const createPollStatusSlice: SliceCreator<PollStatusSlice> = (set, get) =
       } catch { /* ignore */ }
     });
 
+    es.addEventListener("fix-queue", (ev) => {
+      try {
+        const data = JSON.parse((ev as MessageEvent).data) as QueuedFixItem[];
+        get().setQueue(data);
+      } catch { /* ignore */ }
+    });
+
     es.addEventListener("eval-complete", (ev) => {
       try {
         const data = JSON.parse((ev as MessageEvent).data) as { repo?: string; prNumber?: number };
@@ -68,12 +75,13 @@ export const createPollStatusSlice: SliceCreator<PollStatusSlice> = (set, get) =
       const status = await api.getPollStatus();
       get().applyPollStatus(status);
     } catch { /* ignore */ }
+    try {
+      const queue = await api.getFixQueue();
+      get().setQueue(queue);
+    } catch { /* ignore */ }
   },
 
   applyPollStatus: (status: PollStatus) => {
-    const prevJobs = get().jobs;
-    const prevJobMap = new Map(prevJobs.map((j) => [j.commentId, j.status]));
-
     set({
       nextPollDeadline: status.nextPoll,
       pullsRefreshing: status.polling,
@@ -96,35 +104,8 @@ export const createPollStatusSlice: SliceCreator<PollStatusSlice> = (set, get) =
 
     get().setJobs(status.fixJobs);
 
-    // Fire browser notifications for fix job state transitions
-    for (const job of status.fixJobs) {
-      const prev = prevJobMap.get(job.commentId);
-      if (prev !== "running") continue;
-      const repoShort = job.repo.split("/")[1] ?? job.repo;
-      if (job.status === "completed" && "Notification" in window && Notification.permission === "granted") {
-        new Notification(`Fix ready: ${repoShort}#${job.prNumber}`, {
-          body: `${job.path} — review and apply the changes`,
-        });
-      } else if (job.status === "no_changes" && "Notification" in window && Notification.permission === "granted") {
-        new Notification(`No changes needed: ${repoShort}#${job.prNumber}`, {
-          body: `${job.path} — review suggested reply`,
-        });
-      } else if (job.status === "failed" && "Notification" in window && Notification.permission === "granted") {
-        new Notification(`Fix failed: ${repoShort}#${job.prNumber}`, {
-          body: `${job.path} — ${job.error ?? "unknown error"}`,
-        });
-      }
-    }
-
-    // Test notification handling
-    if (status.testNotification) {
-      if ("Notification" in window && Notification.permission === "granted") {
-        new Notification("Code Triage — Test Notification", {
-          body: "Notifications are working!",
-          icon: "/logo.png",
-        });
-      }
-      void api.getPollStatus().catch(() => {});
+    if (status.fixQueue) {
+      get().setQueue(status.fixQueue);
     }
 
     // Refresh pulls if backend has new data

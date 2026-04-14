@@ -33,9 +33,34 @@ export const fixJobs = sqliteTable("fix_jobs", {
   conversationJson: text("conversation_json"),
 });
 
-/** Per-repo adaptive polling: last “interesting” activity vs last poll time. */
+/** Per-repo adaptive polling: last "interesting" activity vs last poll time. */
 export const repoPoll = sqliteTable("repo_poll", {
   repo: text("repo").primaryKey(),
   lastActivityMs: integer("last_activity_ms").notNull(),
   lastPollMs: integer("last_poll_ms").notNull(),
+});
+
+export const pushSubscriptions = sqliteTable("push_subscriptions", {
+  endpoint: text("endpoint").primaryKey(),
+  keysJson: text("keys_json").notNull(),
+  createdAt: text("created_at").notNull(),
+});
+
+export const mutedPrs = sqliteTable("muted_prs", {
+  prKey: text("pr_key").primaryKey(),
+});
+
+export const fixQueue = sqliteTable("fix_queue", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  commentId: integer("comment_id").notNull().unique(),
+  repo: text("repo").notNull(),
+  prNumber: integer("pr_number").notNull(),
+  branch: text("branch").notNull(),
+  path: text("path").notNull(),
+  line: integer("line").notNull(),
+  body: text("body").notNull(),
+  diffHunk: text("diff_hunk").notNull(),
+  userInstructions: text("user_instructions"),
+  queuedAt: text("queued_at").notNull(),
+  position: integer("position").notNull(),
 });

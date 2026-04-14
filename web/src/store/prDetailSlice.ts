@@ -1,4 +1,5 @@
 import { api } from "../api";
+import type { QueuedFixItem } from "../api";
 import { parseRoute, pushRoute } from "../router";
 import type { SliceCreator, PrDetailSlice } from "./types";
 
@@ -334,19 +335,31 @@ export const createPrDetailSlice: SliceCreator<PrDetailSlice> = (set, get) => ({
         pr.repo, commentId, pr.number, detail.branch, comment, userInstructions,
       );
       if (result.success) {
-        // Optimistic: add fix job
-        get().setJobs([
-          ...get().jobs.filter((j) => j.commentId !== commentId),
-          {
+        if (result.status === "queued") {
+          const queueItem: QueuedFixItem = {
             commentId,
             repo: pr.repo,
             prNumber: pr.number,
             path: comment.path,
-            startedAt: Date.now(),
-            status: "running",
-            branch: result.branch,
-          },
-        ]);
+            branch: detail.branch,
+            position: result.position ?? 0,
+            queuedAt: new Date().toISOString(),
+          };
+          set((s) => ({ queue: [...s.queue, queueItem] }));
+        } else {
+          get().setJobs([
+            ...get().jobs.filter((j) => j.commentId !== commentId),
+            {
+              commentId,
+              repo: pr.repo,
+              prNumber: pr.number,
+              path: comment.path,
+              startedAt: Date.now(),
+              status: "running",
+              branch: result.branch,
+            },
+          ]);
+        }
         set((s) => {
           const next = new Set(s.fixModalOpenThreads);
           next.delete(commentId);
