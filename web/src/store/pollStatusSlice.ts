@@ -53,6 +53,10 @@ export const createPollStatusSlice: SliceCreator<PollStatusSlice> = (set, get) =
       } catch { /* ignore */ }
     });
 
+    es.addEventListener("ticket-status", () => {
+      void get().fetchTickets();
+    });
+
     es.onerror = () => { /* browser auto-reconnects */ };
 
     set({ _eventSource: es });

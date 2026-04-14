@@ -148,6 +148,10 @@ export const createUiSlice: SliceCreator<UiSlice> = (set, get) => ({
         })),
       };
       if (form.githubToken) body.githubToken = form.githubToken;
+      if (form.linearApiKey) body.linearApiKey = form.linearApiKey;
+      body.linearTeamKeys = form.linearTeamKeys
+        ? form.linearTeamKeys.split(",").map((s: string) => s.trim()).filter(Boolean)
+        : [];
 
       const result = await s.saveConfig(body);
 

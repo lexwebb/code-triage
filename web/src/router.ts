@@ -7,6 +7,7 @@ export interface RouteState {
   repo: string | null;
   prNumber: number | null;
   file: string | null;
+  ticketId: string | null;
 }
 
 export function parseRoute(url: string = window.location.pathname + window.location.search): RouteState {
@@ -27,10 +28,19 @@ export function parseRoute(url: string = window.location.pathname + window.locat
     if (!isNaN(num)) prNumber = num;
   }
 
-  return { repo, prNumber, file };
+  let ticketId: string | null = null;
+  if (segments.length >= 2 && segments[0] === "tickets") {
+    ticketId = decodeURIComponent(segments[1]!);
+  }
+
+  return { repo, prNumber, file, ticketId };
 }
 
 export function buildPath(state: RouteState): string {
+  if (state.ticketId) {
+    return `/tickets/${encodeURIComponent(state.ticketId)}`;
+  }
+
   let path = "/";
 
   if (state.repo) {

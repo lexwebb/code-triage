@@ -43,6 +43,26 @@ describe("loadConfig", () => {
     const c = loadConfig();
     expect(c.port).toBe(3100);
   });
+
+  it("reads linear config fields", () => {
+    vi.mocked(existsSync).mockReturnValue(true);
+    vi.mocked(readFileSync).mockReturnValue(
+      JSON.stringify({ root: "/x", port: 3100, interval: 1, linearApiKey: "lin_api_test", linearTeamKeys: ["ENG"], ticketProvider: "linear" }),
+    );
+    const c = loadConfig();
+    expect(c.linearApiKey).toBe("lin_api_test");
+    expect(c.linearTeamKeys).toEqual(["ENG"]);
+    expect(c.ticketProvider).toBe("linear");
+  });
+
+  it("returns undefined for linear fields when not set", () => {
+    vi.mocked(existsSync).mockReturnValue(true);
+    vi.mocked(readFileSync).mockReturnValue(JSON.stringify({ root: "/x", port: 3100, interval: 1 }));
+    const c = loadConfig();
+    expect(c.linearApiKey).toBeUndefined();
+    expect(c.linearTeamKeys).toBeUndefined();
+    expect(c.ticketProvider).toBeUndefined();
+  });
 });
 
 describe("configExists", () => {

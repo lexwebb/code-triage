@@ -35,6 +35,10 @@ export const createAppSlice: SliceCreator<AppSlice> = (set, get) => ({
           if (v.behind > 0) set({ updateAvailable: v });
         }),
       ]);
+      // Fetch tickets if provider is configured
+      if (r.config.hasLinearApiKey) {
+        void get().fetchTickets();
+      }
     } catch (err) {
       set({ error: (err as Error).message, appGate: "ready" });
     }

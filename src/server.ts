@@ -8,6 +8,8 @@ import type { RepoInfo } from "./discovery.js";
 import { getRateLimitState } from "./exec.js";
 import { getRawSqlite, openStateDatabase } from "./db/client.js";
 import { getFixQueue } from "./fix-queue.js";
+import type { TicketIssue } from "./tickets/types.js";
+import type { LinkMap } from "./tickets/linker.js";
 
 declare module "http" {
   interface IncomingMessage {
@@ -329,6 +331,27 @@ export function getFixJobStatus(commentId: number): FixJobStatus | undefined {
 
 export function getAllFixJobStatuses(): FixJobStatus[] {
   return Array.from(fixJobStatuses.values());
+}
+
+interface TicketState {
+  myIssues: TicketIssue[];
+  repoLinkedIssues: TicketIssue[];
+  linkMap: LinkMap;
+}
+
+const ticketState: TicketState = {
+  myIssues: [],
+  repoLinkedIssues: [],
+  linkMap: { ticketToPRs: new Map(), prToTickets: new Map() },
+};
+
+export function updateTicketState(state: Partial<TicketState>): void {
+  Object.assign(ticketState, state);
+  sseBroadcast("ticket-status", { updated: true });
+}
+
+export function getTicketState(): TicketState {
+  return ticketState;
 }
 
 export interface HealthPayload {

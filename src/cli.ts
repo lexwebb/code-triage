@@ -17,7 +17,9 @@ import {
   setProcessing,
   cleanup as cleanupTerminal,
 } from "./terminal.js";
-import { startServer, updateRepos, updatePollState, sseBroadcast, setConfigSavedHandler, loadPersistedFixJobResults } from "./server.js";
+import { startServer, updateRepos, updatePollState, sseBroadcast, setConfigSavedHandler, loadPersistedFixJobResults, updateTicketState } from "./server.js";
+import { getTicketProvider, clearTicketProviderCache } from "./tickets/index.js";
+import { extractTicketIdentifiers, buildLinkMap, type LinkablePR } from "./tickets/linker.js";
 import { initPush, processPolledData, startReviewReminder, sendTestPush } from "./push.js";
 import { buildPullSidebarLists } from "./api.js";
 import { discoverRepos, type RepoInfo } from "./discovery.js";
@@ -345,6 +347,7 @@ function schedulePoll(reposPolledCount?: number): void {
 
 async function applyConfigReload(): Promise<void> {
   config = loadConfig();
+  clearTicketProviderCache();
   baseIntervalMs = config.interval * 60 * 1000;
   evalConcurrency = clampEvalConcurrency(config.evalConcurrency ?? 2);
   pollReviewRequested = config.pollReviewRequested === true;
@@ -480,6 +483,42 @@ async function poll(): Promise<void> {
     setStatus(`[${now}] Analyzed ${reposToPoll.length} of ${allRepoPaths.length} repo(s).`);
     updatePollState({ lastPoll: Date.now(), polling: false, lastPollError: null });
     sseBroadcast("poll", { ok: true, at: Date.now() });
+    // ── Ticket polling ──
+    try {
+      const provider = await getTicketProvider(config);
+      if (provider) {
+        const myIssues = await provider.fetchMyIssues();
+
+        // Build linkable PRs from the current PR data
+        const lists = await buildPullSidebarLists(repos);
+        const linkablePRs: LinkablePR[] = [...lists.authored, ...lists.reviewRequested].map((p) => ({
+          number: p.number as number,
+          repo: p.repo as string,
+          branch: p.branch as string,
+          title: p.title as string,
+          body: "",
+        }));
+
+        // Extract all candidate identifiers from PRs
+        const allIdentifiers = new Set(linkablePRs.flatMap(extractTicketIdentifiers));
+
+        // Fetch matching issues from provider (validates identifiers)
+        const repoLinkedIssues = allIdentifiers.size > 0
+          ? await provider.fetchIssuesByIdentifiers([...allIdentifiers])
+          : [];
+
+        // Build bidirectional link map
+        const validIds = new Set([
+          ...myIssues.map((i) => i.identifier),
+          ...repoLinkedIssues.map((i) => i.identifier),
+        ]);
+        const linkMap = buildLinkMap(linkablePRs, validIds);
+
+        updateTicketState({ myIssues, repoLinkedIssues, linkMap });
+      }
+    } catch (err) {
+      console.error(`\n  Ticket poll error: ${(err as Error).message}`);
+    }
     // Feed poll data to push notification module
     try {
       const lists = await buildPullSidebarLists(repos);

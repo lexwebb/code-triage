@@ -31,5 +31,8 @@ export function payloadToForm(c: AppConfigPayload): SettingsFormState {
       ? JSON.stringify(c.evalClaudeExtraArgs, null, 2)
       : "[]",
     fixConversationMaxTurns: c.fixConversationMaxTurns ?? 5,
+    linearApiKey: "",
+    hasLinearApiKey: Boolean(c.hasLinearApiKey),
+    linearTeamKeys: (c.linearTeamKeys ?? []).join(", "),
   };
 }

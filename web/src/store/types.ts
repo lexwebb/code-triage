@@ -271,6 +271,30 @@ export interface SettingsFormState {
   evalPromptAppendByRepoJson: string;
   evalClaudeExtraArgsJson: string;
   fixConversationMaxTurns: number;
+  linearApiKey: string;
+  hasLinearApiKey: boolean;
+  linearTeamKeys: string;
+}
+
+// ── Tickets Slice ──
+
+export interface TicketsSlice {
+  activeMode: "code-review" | "tickets";
+  myTickets: import("../types").TicketIssue[];
+  repoLinkedTickets: (import("../types").TicketIssue & { linkedPRs: Array<{ number: number; repo: string; title: string }> })[];
+  selectedTicket: string | null;
+  ticketDetail: import("../types").TicketIssueDetail | null;
+  ticketsLoading: boolean;
+  ticketDetailLoading: boolean;
+  ticketsError: string | null;
+  prToTickets: Record<string, string[]>;
+
+  setActiveMode: (mode: "code-review" | "tickets") => void;
+  fetchTickets: () => Promise<void>;
+  selectTicket: (id: string) => Promise<void>;
+  clearTicket: () => void;
+  navigateToLinkedPR: (number: number, repo: string) => void;
+  navigateToLinkedTicket: (identifier: string) => void;
 }
 
 // ── Combined Store ──
@@ -281,6 +305,7 @@ export type AppStore = AppSlice &
   PollStatusSlice &
   FixJobsSlice &
   NotificationsSlice &
-  UiSlice;
+  UiSlice &
+  TicketsSlice;
 
 export type SliceCreator<T> = StateCreator<AppStore, [["zustand/subscribeWithSelector", never]], [], T>;
