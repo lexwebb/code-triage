@@ -1,0 +1,77 @@
+/* react-diff-view base styles */
+@import "react-diff-view/style/index.css";
+
+/* Dark theme overrides scoped to .diff-dark wrapper */
+.diff-dark {
+  --diff-background-color: transparent;
+  --diff-text-color: #d1d5db;
+  --diff-code-insert-background-color: rgba(34, 197, 94, 0.1);
+  --diff-code-delete-background-color: rgba(239, 68, 68, 0.1);
+  --diff-code-insert-text-color: #86efac;
+  --diff-code-delete-text-color: #fca5a5;
+  --diff-gutter-insert-background-color: rgba(34, 197, 94, 0.15);
+  --diff-gutter-delete-background-color: rgba(239, 68, 68, 0.15);
+  --diff-gutter-color: #6b7280;
+  --diff-hunk-header-background-color: rgba(59, 130, 246, 0.1);
+  --diff-hunk-header-color: #60a5fa;
+  --diff-selection-background-color: rgba(59, 130, 246, 0.3);
+  --diff-omit-gutter-line-color: transparent;
+}
+
+/* Ensure diff table fills width and uses monospace */
+.diff-dark .diff {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 0.75rem;
+  line-height: 1.5;
+}
+
+/* Gutter hover for "click to comment" affordance */
+.diff-dark .diff-gutter:hover {
+  cursor: pointer;
+  background-color: rgba(59, 130, 246, 0.2);
+}
+
+/* Prism/refractor dark syntax colors (One Dark inspired) */
+.diff-dark .token.comment,
+.diff-dark .token.prolog,
+.diff-dark .token.doctype,
+.diff-dark .token.cdata {
+  color: #7c8594;
+}
+.diff-dark .token.punctuation {
+  color: #abb2bf;
+}
+.diff-dark .token.property,
+.diff-dark .token.tag,
+.diff-dark .token.boolean,
+.diff-dark .token.number,
+.diff-dark .token.constant,
+.diff-dark .token.symbol {
+  color: #d19a66;
+}
+.diff-dark .token.selector,
+.diff-dark .token.attr-name,
+.diff-dark .token.string,
+.diff-dark .token.char,
+.diff-dark .token.builtin {
+  color: #98c379;
+}
+.diff-dark .token.operator,
+.diff-dark .token.entity,
+.diff-dark .token.url {
+  color: #56b6c2;
+}
+.diff-dark .token.atrule,
+.diff-dark .token.attr-value,
+.diff-dark .token.keyword {
+  color: #c678dd;
+}
+.diff-dark .token.function,
+.diff-dark .token.class-name {
+  color: #61afef;
+}
+.diff-dark .token.regex,
+.diff-dark .token.important,
+.diff-dark .token.variable {
+  color: #e06c75;
+}
