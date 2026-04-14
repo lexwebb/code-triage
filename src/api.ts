@@ -346,6 +346,46 @@ function requireRepo(query: URLSearchParams): string {
   return repo;
 }
 
+interface GhCheckRunsResponse {
+  total_count: number;
+  check_runs: Array<{
+    id: number;
+    status: string;
+    conclusion: string | null;
+  }>;
+}
+
+async function getChecksSummary(repoPath: string, sha: string): Promise<{
+  total: number;
+  success: number;
+  failure: number;
+  pending: number;
+} | null> {
+  try {
+    const data = await ghAsync<GhCheckRunsResponse>(
+      `/repos/${repoPath}/commits/${sha}/check-runs?per_page=100`,
+    );
+    const runs = data.check_runs;
+    if (runs.length === 0) return null;
+
+    let success = 0;
+    let failure = 0;
+    let pending = 0;
+    for (const r of runs) {
+      if (r.status !== "completed") {
+        pending++;
+      } else if (r.conclusion === "success" || r.conclusion === "skipped" || r.conclusion === "neutral") {
+        success++;
+      } else {
+        failure++;
+      }
+    }
+    return { total: runs.length, success, failure, pending };
+  } catch {
+    return null;
+  }
+}
+
 export function registerRoutes(): void {
 
   // GET /api/config — settings for web UI (tokens omitted)
@@ -465,6 +505,8 @@ export function registerRoutes(): void {
       reviewerMap.set(r.user.login, { login: r.user.login, avatar: r.user.avatar_url, state: r.state });
     }
 
+    const checksSummary = await getChecksSummary(repo, pr.head.sha);
+
     json(res, {
       number: pr.number,
       title: pr.title,
@@ -483,6 +525,7 @@ export function registerRoutes(): void {
       changedFiles: pr.changed_files,
       repo,
       reviewers: Array.from(reviewerMap.values()),
+      checksSummary,
     });
   });
 
