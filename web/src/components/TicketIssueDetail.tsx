@@ -1,4 +1,50 @@
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import rehypeRaw from "rehype-raw";
+import { Checkbox } from "./ui/checkbox";
 import { useAppStore } from "../store";
+
+function TicketMarkdown({ children }: { children: string }) {
+  return (
+    <ReactMarkdown
+      remarkPlugins={[remarkGfm]}
+      rehypePlugins={[rehypeRaw]}
+      components={{
+        a: ({ children, href, ...props }) => (
+          <a href={href} target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:text-blue-300 underline" {...props}>{children}</a>
+        ),
+        code: ({ children, className, ...props }) => {
+          const isBlock = className?.startsWith("language-");
+          if (isBlock) return <code className={className} {...props}>{children}</code>;
+          return <code className="bg-gray-800 px-1 py-0.5 rounded text-pink-300 text-sm" {...props}>{children}</code>;
+        },
+        pre: ({ children, ...props }) => (
+          <pre className="bg-gray-800 rounded p-3 my-3 overflow-x-auto text-sm" {...props}>{children}</pre>
+        ),
+        p: ({ children, ...props }) => <p className="my-2" {...props}>{children}</p>,
+        ul: ({ children, ...props }) => <ul className="list-disc list-inside my-2 space-y-1" {...props}>{children}</ul>,
+        ol: ({ children, ...props }) => <ol className="list-decimal list-inside my-2 space-y-1" {...props}>{children}</ol>,
+        blockquote: ({ children, ...props }) => (
+          <blockquote className="border-l-2 border-gray-600 pl-3 my-2 text-gray-400 italic" {...props}>{children}</blockquote>
+        ),
+        h1: ({ children, ...props }) => <h1 className="text-xl font-bold mt-6 mb-2 text-white" {...props}>{children}</h1>,
+        h2: ({ children, ...props }) => <h2 className="text-lg font-semibold mt-5 mb-2 text-white" {...props}>{children}</h2>,
+        h3: ({ children, ...props }) => <h3 className="text-base font-semibold mt-4 mb-1 text-white" {...props}>{children}</h3>,
+        hr: ({ ...props }) => <hr className="border-gray-700 my-4" {...props} />,
+        table: ({ children, ...props }) => <table className="border-collapse my-3 text-sm w-full" {...props}>{children}</table>,
+        th: ({ children, ...props }) => <th className="border border-gray-700 px-3 py-1.5 bg-gray-800 text-left font-medium" {...props}>{children}</th>,
+        td: ({ children, ...props }) => <td className="border border-gray-700 px-3 py-1.5" {...props}>{children}</td>,
+        img: ({ alt, src, ...props }) => <img alt={alt} src={src} className="max-w-full rounded my-2" {...props} />,
+        input: ({ type, checked, ...props }) => {
+          if (type === "checkbox") return <Checkbox checked={checked ?? false} disabled className="mr-1.5 inline-flex align-text-bottom" />;
+          return <input type={type} {...props} />;
+        },
+      }}
+    >
+      {children}
+    </ReactMarkdown>
+  );
+}
 
 const PRIORITY_LABELS: Record<number, string> = {
   0: "None",
@@ -75,8 +121,8 @@ export function TicketIssueDetail() {
       {ticketDetail.description && (
         <div className="px-6 py-4 border-b border-zinc-800">
           <h2 className="text-xs font-semibold text-zinc-400 uppercase tracking-wider mb-2">Description</h2>
-          <div className="prose prose-invert prose-sm max-w-none text-zinc-300 whitespace-pre-wrap">
-            {ticketDetail.description}
+          <div className="text-sm text-gray-300 leading-relaxed max-w-3xl markdown-body">
+            <TicketMarkdown>{ticketDetail.description}</TicketMarkdown>
           </div>
         </div>
       )}
@@ -115,7 +161,9 @@ export function TicketIssueDetail() {
                   <span className="font-medium text-zinc-300">{comment.author.name}</span>
                   <span>{new Date(comment.createdAt).toLocaleDateString()}</span>
                 </div>
-                <div className="text-sm text-zinc-300 whitespace-pre-wrap">{comment.body}</div>
+                <div className="text-sm text-gray-300 leading-relaxed markdown-body">
+                  <TicketMarkdown>{comment.body}</TicketMarkdown>
+                </div>
               </div>
             ))}
           </div>

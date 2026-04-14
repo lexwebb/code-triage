@@ -28,6 +28,11 @@ export const createTicketsSlice: SliceCreator<TicketsSlice> = (set, get) => ({
         prToTickets: linkMap.prToTickets,
         ticketsLoading: false,
       });
+
+      // Auto-select first ticket if none selected
+      if (!get().selectedTicket && mine.length > 0) {
+        void get().selectTicket(mine[0]!.id);
+      }
     } catch (err) {
       set({ ticketsError: (err as Error).message, ticketsLoading: false });
     }
