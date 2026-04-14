@@ -1,6 +1,7 @@
 import { addRoute, json, getRepos, getBody, getPollState, getHealthPayload, setFixJobStatus, clearFixJobStatus, getActiveFixForBranch, getActiveFixForPR, subscribeSse, getListenPort, notifyConfigSaved, getFixJobStatus } from "./server.js";
 import { getVapidKeys } from "./vapid.js";
 import { savePushSubscription, deletePushSubscription, mutePR as dbMutePR, unmutePR as dbUnmutePR, getMutedPRs as dbGetMutedPRs } from "./push-db.js";
+import { sendTestPush } from "./push.js";
 import type { RepoInfo } from "./discovery.js";
 import { loadConfig, saveConfig, configExists, type Config } from "./config.js";
 import { loadState, markComment, patchCommentTriage, saveState, addFixJob as addFixJobState, removeFixJob as removeFixJobState, getFixJobs, getPendingTriageCountsByPr, needsEvaluation } from "./state.js";
@@ -1500,5 +1501,10 @@ export function registerRoutes(): void {
 
   addRoute("GET", "/api/push/muted", (_req, res) => {
     json(res, { muted: dbGetMutedPRs() });
+  });
+
+  addRoute("POST", "/api/push/test", (_req, res) => {
+    sendTestPush();
+    json(res, { ok: true });
   });
 }
