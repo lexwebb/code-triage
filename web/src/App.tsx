@@ -392,6 +392,13 @@ export default function App() {
             body: `${job.path} — review and apply the changes`,
           });
         }
+      } else if (prev === "running" && job.status === "no_changes") {
+        const repoShort = job.repo.split("/")[1] ?? job.repo;
+        if ("Notification" in window && Notification.permission === "granted") {
+          new Notification(`No changes needed: ${repoShort}#${job.prNumber}`, {
+            body: `${job.path} — review suggested reply`,
+          });
+        }
       } else if (prev === "running" && job.status === "failed") {
         const repoShort = job.repo.split("/")[1] ?? job.repo;
         if ("Notification" in window && Notification.permission === "granted") {

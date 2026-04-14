@@ -132,6 +132,15 @@ export function commitAndPushWorktree(worktreePath: string, message: string, bra
     encoding: "utf-8",
     cwd: worktreePath,
   });
+  // Pull --rebase before pushing so the fix commit lands on top of any new remote commits
+  try {
+    execFileSync("git", ["pull", "--rebase", "origin", branch ?? "HEAD"], {
+      encoding: "utf-8",
+      cwd: worktreePath,
+    });
+  } catch {
+    // If pull fails (e.g. no upstream, merge conflict), try pushing anyway — the push error is more actionable
+  }
   const pushArgs = branch ? ["push", "origin", `HEAD:${branch}`] : ["push"];
   execFileSync("git", pushArgs, {
     encoding: "utf-8",

@@ -17,7 +17,7 @@ import {
   setProcessing,
   cleanup as cleanupTerminal,
 } from "./terminal.js";
-import { startServer, updateRepos, updatePollState, triggerTestNotification, sseBroadcast, setConfigSavedHandler } from "./server.js";
+import { startServer, updateRepos, updatePollState, triggerTestNotification, sseBroadcast, setConfigSavedHandler, loadPersistedFixJobResults } from "./server.js";
 import { discoverRepos, type RepoInfo } from "./discovery.js";
 import { filterRepoPathsWithPushAccess, loadCachedPushAccess } from "./github-batching.js";
 import { loadConfig, saveConfig, configExists, type Config } from "./config.js";
@@ -293,6 +293,7 @@ if (isDev) {
 }
 
 startServer(port, repos);
+loadPersistedFixJobResults();
 
 // Prune any orphaned worktrees from previous crashed sessions
 {

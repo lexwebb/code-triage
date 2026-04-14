@@ -5,6 +5,7 @@ import { join, extname } from "path";
 import { fileURLToPath } from "url";
 import type { RepoInfo } from "./discovery.js";
 import { getRateLimitState } from "./exec.js";
+import { getRawSqlite, openStateDatabase } from "./db/client.js";
 
 declare module "http" {
   interface IncomingMessage {
@@ -264,8 +265,37 @@ export function subscribeSse(req: IncomingMessage, res: ServerResponse): void {
   });
 }
 
+function persistFixJobResult(job: FixJobStatus): void {
+  openStateDatabase();
+  const sqlite = getRawSqlite();
+  sqlite.prepare(
+    `INSERT INTO fix_job_results (comment_id, status_json, updated_at)
+     VALUES (?, ?, ?)
+     ON CONFLICT(comment_id) DO UPDATE SET status_json = excluded.status_json, updated_at = excluded.updated_at`,
+  ).run(job.commentId, JSON.stringify(job), new Date().toISOString());
+}
+
+function removePersistedFixJobResult(commentId: number): void {
+  openStateDatabase();
+  const sqlite = getRawSqlite();
+  sqlite.prepare("DELETE FROM fix_job_results WHERE comment_id = ?").run(commentId);
+}
+
+export function loadPersistedFixJobResults(): void {
+  openStateDatabase();
+  const sqlite = getRawSqlite();
+  const rows = sqlite.prepare("SELECT status_json FROM fix_job_results").all() as Array<{ status_json: string }>;
+  for (const row of rows) {
+    try {
+      const job = JSON.parse(row.status_json) as FixJobStatus;
+      fixJobStatuses.set(job.commentId, job);
+    } catch { /* ignore corrupt rows */ }
+  }
+}
+
 export function setFixJobStatus(job: FixJobStatus): void {
   fixJobStatuses.set(job.commentId, job);
+  try { persistFixJobResult(job); } catch { /* don't block SSE on DB write failure */ }
   sseBroadcast("fix-job", {
     commentId: job.commentId,
     repo: job.repo,
@@ -275,6 +305,8 @@ export function setFixJobStatus(job: FixJobStatus): void {
     error: job.error,
     sessionId: job.sessionId,
     conversation: job.conversation,
+    suggestedReply: job.suggestedReply,
+    claudeOutput: job.claudeOutput,
   });
   broadcastPollStatus();
 }
@@ -295,6 +327,7 @@ export function getActiveFixForPR(repo: string, prNumber: number): FixJobStatus 
 
 export function clearFixJobStatus(commentId: number): void {
   fixJobStatuses.delete(commentId);
+  try { removePersistedFixJobResult(commentId); } catch { /* ignore */ }
   broadcastPollStatus();
 }
 
