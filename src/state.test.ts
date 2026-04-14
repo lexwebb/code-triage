@@ -3,7 +3,7 @@ import { tmpdir } from "os";
 import { join } from "path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { closeStateDatabase, getStateDir } from "./db/client.js";
-import { compactCommentHistory, isNewComment, loadState, markComment, markCommentWithEvaluation, needsEvaluation, markEvaluating, markEvalFailed, patchCommentTriage, saveState } from "./state.js";
+import { compactCommentHistory, loadState, markComment, markCommentWithEvaluation, needsEvaluation, markEvaluating, markEvalFailed, patchCommentTriage, saveState } from "./state.js";
 
 let testRoot: string;
 
@@ -41,20 +41,6 @@ describe("state persistence", () => {
     expect(again.lastPoll).toBe("2026-04-13T12:00:00.000Z");
     expect(again.comments["owner/repo:42"]?.status).toBe("pending");
     expect(again.comments["owner/repo:42"]?.prNumber).toBe(7);
-  });
-
-  it("isNewComment matches prefixed keys and legacy numeric keys", () => {
-    let s = loadState();
-    expect(isNewComment(s, 10, "a/b")).toBe(true);
-    markComment(s, 10, "pending", 1, "a/b");
-    saveState(s);
-    s = loadState();
-    expect(isNewComment(s, 10, "a/b")).toBe(false);
-    expect(isNewComment(s, 10)).toBe(true);
-    markComment(s, 10, "pending", 1);
-    saveState(s);
-    s = loadState();
-    expect(isNewComment(s, 10)).toBe(false);
   });
 
   it("compactCommentHistory removes only old terminal statuses", () => {

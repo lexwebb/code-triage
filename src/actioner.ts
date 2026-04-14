@@ -1,11 +1,9 @@
 import { spawn, type ChildProcess } from "child_process";
-import { markComment, markCommentWithEvaluation, saveState } from "./state.js";
 import { ghPost, ghGraphQL } from "./exec.js";
 import { log } from "./logger.js";
 import { updateClaudeStats } from "./server.js";
-import { runWithConcurrency } from "./run-with-concurrency.js";
 import { loadConfig } from "./config.js";
-import type { CrComment, CrWatchState, Evaluation, PrInfo, SpawnOptions } from "./types.js";
+import type { CrComment, Evaluation, SpawnOptions } from "./types.js";
 
 const EVAL_CONCURRENCY_MIN = 1;
 const EVAL_CONCURRENCY_MAX = 8;
@@ -319,57 +317,3 @@ Make the changes directly. Do not explain, just fix the code.`;
   return output;
 }
 
-export async function analyzeComments(
-  comments: CrComment[],
-  pullsByNumber: Record<number, PrInfo>,
-  state: CrWatchState,
-  repoPath: string,
-  dryRun: boolean,
-  evalConcurrency = 2,
-): Promise<void> {
-  const byPr: Record<number, CrComment[]> = {};
-  for (const c of comments) {
-    if (!byPr[c.prNumber]) byPr[c.prNumber] = [];
-    byPr[c.prNumber].push(c);
-  }
-
-  const tasks: Array<{ comment: CrComment; prNumber: number }> = [];
-  for (const [prNum, prComments] of Object.entries(byPr)) {
-    const prNumber = Number(prNum);
-    const pr = pullsByNumber[prNumber];
-    log.info(`Analyzing PR #${prNum}: ${pr?.title || "Unknown"}`);
-    for (const comment of prComments) {
-      tasks.push({ comment, prNumber });
-    }
-  }
-
-  if (dryRun) {
-    for (const { comment, prNumber } of tasks) {
-      log.info(`[dry-run] Would evaluate comment ${comment.id} with Claude.`);
-      markComment(state, comment.id, "pending", prNumber, repoPath);
-      saveState(state);
-    }
-    return;
-  }
-
-  const cap = clampEvalConcurrency(evalConcurrency);
-  updateClaudeStats({ evalConcurrencyCap: cap });
-  await runWithConcurrency(tasks, cap, async ({ comment, prNumber }) => {
-    log.info(`Evaluating: ${comment.path}:${comment.line}`);
-    updateClaudeStats({ evalStarted: true });
-    let evaluation: Evaluation;
-    try {
-      evaluation = await evaluateComment(comment, repoPath);
-    } catch (err) {
-      log.error(`Error evaluating comment ${comment.id}: ${(err as Error).message}`);
-      markComment(state, comment.id, "pending", prNumber, repoPath);
-      saveState(state);
-      updateClaudeStats({ evalFinished: true });
-      return;
-    }
-    updateClaudeStats({ evalFinished: true });
-    log.info(`Result: ${evaluation.action} — ${evaluation.summary}`);
-    markCommentWithEvaluation(state, comment.id, "pending", prNumber, evaluation, repoPath);
-    saveState(state);
-  });
-}

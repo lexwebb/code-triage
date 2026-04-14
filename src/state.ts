@@ -219,13 +219,6 @@ export function markEvalFailed(state: CrWatchState, commentId: number, repo?: st
   }
 }
 
-export function isNewComment(state: CrWatchState, commentId: number, repo?: string): boolean {
-  const prefixedKey = commentKey(commentId, repo);
-  if (state.comments[prefixedKey]) return false;
-  if (state.comments[String(commentId)]) return false;
-  return true;
-}
-
 export function getCommentsByStatus(state: CrWatchState, status: CommentStatus) {
   return Object.entries(state.comments)
     .filter(([, v]) => v.status === status)
