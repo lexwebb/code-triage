@@ -49,3 +49,18 @@ export const pushSubscriptions = sqliteTable("push_subscriptions", {
 export const mutedPrs = sqliteTable("muted_prs", {
   prKey: text("pr_key").primaryKey(),
 });
+
+export const fixQueue = sqliteTable("fix_queue", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  commentId: integer("comment_id").notNull().unique(),
+  repo: text("repo").notNull(),
+  prNumber: integer("pr_number").notNull(),
+  branch: text("branch").notNull(),
+  path: text("path").notNull(),
+  line: integer("line").notNull(),
+  body: text("body").notNull(),
+  diffHunk: text("diff_hunk").notNull(),
+  userInstructions: text("user_instructions"),
+  queuedAt: text("queued_at").notNull(),
+  position: integer("position").notNull(),
+});
