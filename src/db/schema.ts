@@ -29,6 +29,8 @@ export const fixJobs = sqliteTable("fix_jobs", {
   path: text("path").notNull(),
   worktreePath: text("worktree_path").notNull(),
   startedAt: text("started_at").notNull(),
+  sessionId: text("session_id"),
+  conversationJson: text("conversation_json"),
 });
 
 /** Per-repo adaptive polling: last “interesting” activity vs last poll time. */

@@ -31,6 +31,8 @@ export interface FixJobRecord {
   path: string;
   worktreePath: string;
   startedAt: string;
+  sessionId?: string;
+  conversation?: Array<{ role: "claude" | "user"; message: string }>;
 }
 
 export interface CrWatchState {

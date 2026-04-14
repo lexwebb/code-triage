@@ -76,6 +76,8 @@ export function loadState(): CrWatchState {
     path: r.path,
     worktreePath: r.worktreePath,
     startedAt: r.startedAt,
+    ...(r.sessionId != null ? { sessionId: r.sessionId } : {}),
+    ...(r.conversationJson ? { conversation: JSON.parse(r.conversationJson) as Array<{ role: "claude" | "user"; message: string }> } : {}),
   }));
 
   const state: CrWatchState = { lastPoll, comments };

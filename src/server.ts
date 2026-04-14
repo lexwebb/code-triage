@@ -197,11 +197,13 @@ export interface FixJobStatus {
   prNumber: number;
   path: string;
   startedAt: number;
-  status: "running" | "completed" | "failed";
+  status: "running" | "completed" | "failed" | "awaiting_response";
   error?: string;
   diff?: string;
   branch?: string;
   claudeOutput?: string;
+  sessionId?: string;
+  conversation?: Array<{ role: "claude" | "user"; message: string }>;
 }
 
 const fixJobStatuses = new Map<number, FixJobStatus>();

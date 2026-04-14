@@ -78,6 +78,18 @@ function ensureSchema(raw: Database.Database): void {
   `);
   raw.prepare("INSERT OR IGNORE INTO meta (id, last_poll) VALUES (1, NULL)").run();
   migrateCommentsColumns(raw);
+  migrateFixJobsColumns(raw);
+}
+
+function migrateFixJobsColumns(raw: Database.Database): void {
+  const cols = raw.prepare("PRAGMA table_info(fix_jobs)").all() as { name: string }[];
+  const names = new Set(cols.map((c) => c.name));
+  if (!names.has("session_id")) {
+    try { raw.exec("ALTER TABLE fix_jobs ADD COLUMN session_id TEXT"); } catch { /* already exists */ }
+  }
+  if (!names.has("conversation_json")) {
+    try { raw.exec("ALTER TABLE fix_jobs ADD COLUMN conversation_json TEXT"); } catch { /* already exists */ }
+  }
 }
 
 function migrateCommentsColumns(raw: Database.Database): void {
@@ -122,8 +134,8 @@ export function writeStateToDb(raw: Database.Database, state: CrWatchState): voi
      VALUES (@comment_key, @comment_id, @repo, @pr_number, @status, @timestamp, @evaluation_json, @snooze_until, @priority, @triage_note, @eval_failed)`,
   );
   const insertJob = raw.prepare(
-    `INSERT INTO fix_jobs (comment_id, repo, pr_number, branch, path, worktree_path, started_at)
-     VALUES (@comment_id, @repo, @pr_number, @branch, @path, @worktree_path, @started_at)`,
+    `INSERT INTO fix_jobs (comment_id, repo, pr_number, branch, path, worktree_path, started_at, session_id, conversation_json)
+     VALUES (@comment_id, @repo, @pr_number, @branch, @path, @worktree_path, @started_at, @session_id, @conversation_json)`,
   );
 
   const run = raw.transaction(() => {
@@ -154,6 +166,8 @@ export function writeStateToDb(raw: Database.Database, state: CrWatchState): voi
         path: j.path,
         worktree_path: j.worktreePath,
         started_at: j.startedAt,
+        session_id: j.sessionId ?? null,
+        conversation_json: j.conversation ? JSON.stringify(j.conversation) : null,
       });
     }
   });
