@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { useShallow } from "zustand/react/shallow";
+import { updateFaviconBadge, updateTitleBadge } from "./lib/tab-badge";
 import RepoFilter from "./components/RepoSelector";
 import PRList from "./components/PRList";
 import PRDetail from "./components/PRDetail";
@@ -86,6 +87,23 @@ export default function App() {
   const toggleSidebar = useAppStore((s) => s.toggleSidebar);
   const setMobileDrawerOpen = useAppStore((s) => s.setMobileDrawerOpen);
   const openSettings = useAppStore((s) => s.openSettings);
+
+  // ── Tab badge: favicon + title ──
+  const jobs = useAppStore((s) => s.jobs);
+  const authored = useAppStore((s) => s.authored);
+  const reviewRequested = useAppStore((s) => s.reviewRequested);
+
+  useEffect(() => {
+    const actionableJobs = jobs.filter((j) =>
+      j.status === "completed" || j.status === "awaiting_response" || j.status === "failed" || j.status === "no_changes",
+    ).length;
+    const pendingTriage = [...authored, ...reviewRequested].reduce(
+      (sum, pr) => sum + (pr.pendingTriage ?? 0), 0,
+    );
+    const count = pendingTriage + actionableJobs;
+    updateTitleBadge(count);
+    void updateFaviconBadge(count);
+  }, [jobs, authored, reviewRequested]);
 
   // ── Mount: initialize app ──
   useEffect(() => {
