@@ -2,6 +2,8 @@ import React, { useState } from "react";
 import type { FixJobStatus } from "../api";
 import { api } from "../api";
 import { Clock, Check, X } from "lucide-react";
+import { IconButton } from "./ui/icon-button";
+import { Button } from "./ui/button";
 
 interface FixJobsBannerProps {
   fixJobs: FixJobStatus[];
@@ -66,7 +68,7 @@ function JobModal({ job, onClose, onJobAction }: { job: FixJobStatus; onClose: (
             <h3 className="text-sm font-semibold text-white">Fix Job Details</h3>
             <span className="text-xs text-gray-500">{repoShort}#{job.prNumber} — {job.path}</span>
           </div>
-          <button onClick={onClose} className="text-gray-500 hover:text-gray-300 px-2"><X size={16} /></button>
+          <IconButton description="Close" icon={<X size={16} />} onClick={onClose} size="sm" />
         </div>
 
         {/* Info */}
@@ -156,27 +158,21 @@ function JobModal({ job, onClose, onJobAction }: { job: FixJobStatus; onClose: (
         {/* Actions */}
         {job.status === "completed" && (
           <div className="px-4 py-3 border-t border-gray-800 flex items-center justify-end gap-2">
-            <button
-              onClick={handleDiscard}
-              disabled={acting}
-              className="text-xs px-4 py-1.5 bg-gray-700 hover:bg-gray-600 disabled:bg-gray-800 text-gray-300 rounded transition-colors"
-            >
+            <Button variant="gray" size="xs" onClick={handleDiscard} disabled={acting}>
               Discard
-            </button>
-            <button
-              onClick={handleApply}
-              disabled={acting}
-              className="text-xs px-4 py-1.5 bg-green-600 hover:bg-green-500 disabled:bg-green-800 disabled:text-gray-400 text-white rounded transition-colors"
-            >
+            </Button>
+            <Button variant="green" size="xs" onClick={handleApply} disabled={acting}>
               {acting ? "Pushing..." : "Apply & Push"}
-            </button>
+            </Button>
           </div>
         )}
 
         {job.status === "failed" && (
           <div className="px-4 py-3 border-t border-gray-800 flex items-center justify-end gap-2">
             {job.originalComment && job.branch && (
-              <button
+              <Button
+                variant="orange"
+                size="xs"
                 onClick={async () => {
                   if (!job.branch || !job.originalComment) return;
                   setActing(true);
@@ -191,17 +187,13 @@ function JobModal({ job, onClose, onJobAction }: { job: FixJobStatus; onClose: (
                   }
                 }}
                 disabled={acting}
-                className="text-xs px-4 py-1.5 bg-orange-600 hover:bg-orange-500 disabled:bg-orange-800 disabled:text-gray-400 text-white rounded transition-colors"
               >
                 {acting ? "Retrying..." : "Retry Fix"}
-              </button>
+              </Button>
             )}
-            <button
-              onClick={onClose}
-              className="text-xs px-4 py-1.5 bg-gray-700 hover:bg-gray-600 text-gray-300 rounded transition-colors"
-            >
+            <Button variant="gray" size="xs" onClick={onClose}>
               Close
-            </button>
+            </Button>
           </div>
         )}
       </div>

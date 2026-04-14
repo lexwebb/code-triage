@@ -3,6 +3,7 @@ import hljs from "highlight.js";
 import "highlight.js/styles/github-dark.min.css";
 import type { ReviewComment } from "../types";
 import { api } from "../api";
+import { Button } from "./ui/button";
 import Comment from "./Comment";
 
 interface DiffViewProps {
@@ -100,13 +101,9 @@ function InlineCommentBox({ onSubmit, onCancel, submitting }: {
           >
             Cancel
           </button>
-          <button
-            onClick={() => text.trim() && onSubmit(text.trim())}
-            disabled={!text.trim() || submitting}
-            className="text-xs px-3 py-1 bg-blue-600 hover:bg-blue-500 disabled:bg-blue-800 disabled:text-gray-400 text-white rounded transition-colors"
-          >
+          <Button variant="blue" size="xs" onClick={() => text.trim() && onSubmit(text.trim())} disabled={!text.trim() || submitting}>
             {submitting ? "Posting..." : "Comment"}
-          </button>
+          </Button>
         </div>
       </div>
     </div>

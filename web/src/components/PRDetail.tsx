@@ -3,6 +3,8 @@ import type { PullRequestDetail, Reviewer } from "../types";
 import { api } from "../api";
 import { isPRMuted, mutePR, unmutePR } from "../useNotifications";
 import { Check, X, Clock, MessageSquare, Minus, Bell, BellOff, ArrowLeft, ExternalLink } from "lucide-react";
+import { Switch } from "./ui/switch";
+import { Button } from "./ui/button";
 
 interface PRDetailProps {
   pr: PullRequestDetail;
@@ -93,37 +95,33 @@ export default function PRDetail({ pr, currentUser, onReviewSubmitted }: PRDetai
         <div className="flex items-center gap-2">
           {!isOwnPR && (
             <>
-              <button
-                onClick={() => handleReview("APPROVE")}
-                disabled={submitting}
-                className="text-xs px-3 py-1.5 bg-green-600 hover:bg-green-500 disabled:bg-green-800 disabled:text-gray-400 text-white rounded transition-colors"
-              >
+              <Button variant="green" size="xs" onClick={() => handleReview("APPROVE")} disabled={submitting}>
                 {submitting ? "..." : "Approve"}
-              </button>
-              <button
+              </Button>
+              <Button
+                variant="red"
+                size="xs"
                 onClick={() => setShowRequestChanges(!showRequestChanges)}
-                className={`text-xs px-3 py-1.5 rounded transition-colors ${
-                  showRequestChanges
-                    ? "bg-red-500 text-white"
-                    : "bg-red-600/80 hover:bg-red-500/80 text-white"
-                }`}
+                className={showRequestChanges ? "bg-red-500" : ""}
               >
                 Request Changes
-              </button>
+              </Button>
             </>
           )}
-          <button
-            onClick={() => {
-              if (muted) { unmutePR(pr.repo, pr.number); setMuted(false); }
-              else { mutePR(pr.repo, pr.number); setMuted(true); }
-            }}
-            className={`text-xs px-2 py-1.5 rounded transition-colors ${
-              muted ? "text-gray-600 hover:text-gray-400" : "text-yellow-500 hover:text-yellow-400"
-            }`}
+          <label
+            className="flex items-center gap-1.5 text-xs px-2 py-1.5 rounded cursor-pointer"
             title={muted ? "Unmute notifications for this PR" : "Mute notifications for this PR"}
           >
-            {muted ? <BellOff size={14} /> : <Bell size={14} />}
-          </button>
+            {muted ? <BellOff size={12} className="text-gray-600" /> : <Bell size={12} className="text-gray-400" />}
+            <Switch
+              size="sm"
+              checked={!muted}
+              onCheckedChange={(checked) => {
+                if (checked) { unmutePR(pr.repo, pr.number); setMuted(false); }
+                else { mutePR(pr.repo, pr.number); setMuted(true); }
+              }}
+            />
+          </label>
           <a
             href={pr.url}
             target="_blank"
@@ -160,13 +158,9 @@ export default function PRDetail({ pr, currentUser, onReviewSubmitted }: PRDetai
               >
                 Cancel
               </button>
-              <button
-                onClick={() => handleReview("REQUEST_CHANGES", requestBody)}
-                disabled={submitting}
-                className="text-xs px-3 py-1 bg-red-600 hover:bg-red-500 disabled:bg-red-800 disabled:text-gray-400 text-white rounded transition-colors"
-              >
+              <Button variant="red" size="xs" onClick={() => handleReview("REQUEST_CHANGES", requestBody)} disabled={submitting}>
                 {submitting ? "Submitting..." : "Submit Review"}
-              </button>
+              </Button>
             </div>
           </div>
         </div>

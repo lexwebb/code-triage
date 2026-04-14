@@ -1,5 +1,6 @@
 import type { PullRequest } from "../types";
 import { Check, X, Circle } from "lucide-react";
+import { StatusBadge } from "./ui/status-badge";
 
 interface PRListProps {
   pulls: PullRequest[];
@@ -20,24 +21,16 @@ function StatusIcon({ pr }: { pr: PullRequest }) {
   return (
     <span className="flex items-center gap-1">
       {mergeReady && (
-        <span className="bg-green-500/15 text-green-400 text-xs px-1.5 py-0.5 rounded-full flex items-center gap-1" title="Ready to merge">
-          <Check size={12} /> merge
-        </span>
+        <StatusBadge color="green" icon={<Check size={12} />} title="Ready to merge">merge</StatusBadge>
       )}
       {failed && (
-        <span className="bg-red-500/15 text-red-400 text-xs px-1.5 py-0.5 rounded-full flex items-center gap-1" title="CI checks failed">
-          <X size={12} /> CI
-        </span>
+        <StatusBadge color="red" icon={<X size={12} />} title="CI checks failed">CI</StatusBadge>
       )}
       {pending && (
-        <span className="bg-yellow-500/15 text-yellow-400 text-xs px-1.5 py-0.5 rounded-full flex items-center gap-1" title="CI checks running">
-          <Circle size={10} fill="currentColor" /> CI
-        </span>
+        <StatusBadge color="yellow" icon={<Circle size={10} fill="currentColor" />} title="CI checks running">CI</StatusBadge>
       )}
       {!mergeReady && pr.hasHumanApproval && (
-        <span className="bg-green-500/10 text-green-500 text-xs px-1.5 py-0.5 rounded-full flex items-center gap-1" title="Approved">
-          <Check size={12} /> approved
-        </span>
+        <StatusBadge color="green" icon={<Check size={12} />} title="Approved">approved</StatusBadge>
       )}
     </span>
   );
@@ -81,17 +74,18 @@ export default function PRList({ pulls, selectedPR, onSelectPR, showRepo }: PRLi
               <span className="text-gray-500 text-xs font-mono">#{pr.number}</span>
               <span className="flex items-center gap-1.5">
                 {pr.openComments > 0 && (
-                  <span className="bg-orange-500/20 text-orange-400 text-xs px-1.5 py-0.5 rounded-full" title={`${pr.openComments} open thread${pr.openComments !== 1 ? "s" : ""} (GitHub)`}>
+                  <StatusBadge color="orange" title={`${pr.openComments} open thread${pr.openComments !== 1 ? "s" : ""} (GitHub)`}>
                     {pr.openComments}
-                  </span>
+                  </StatusBadge>
                 )}
                 {pendingTriage > 0 && (
-                  <span
-                    className="bg-amber-500/20 text-amber-300 text-xs px-1.5 py-0.5 rounded-full tabular-nums"
+                  <StatusBadge
+                    color="amber"
+                    className="tabular-nums"
                     title={`${pendingTriage} pending in local triage (not dismissed / replied / fixed)`}
                   >
                     {pendingTriage}
-                  </span>
+                  </StatusBadge>
                 )}
                 <StatusIcon pr={pr} />
               </span>

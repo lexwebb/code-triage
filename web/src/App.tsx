@@ -16,7 +16,9 @@ import SettingsView from "./components/SettingsView";
 import KeyboardShortcutsModal from "./components/KeyboardShortcutsModal";
 import type { FixJobStatus, PollStatus } from "./api";
 import { useMediaQuery } from "./useMediaQuery";
-import { ChevronRight, ChevronDown, X, Menu, RefreshCw, Pause, Bell, ArrowRight, Minus, Settings } from "lucide-react";
+import { X, Menu, RefreshCw, Pause, Bell, ArrowRight, Minus, Settings, PanelLeftClose, PanelLeftOpen, HelpCircle } from "lucide-react";
+import { CollapsibleSection } from "./components/ui/collapsible-section";
+import { IconButton } from "./components/ui/icon-button";
 
 /** Human-readable duration for rate-limit countdown (ticks down each second in the UI). */
 function formatDurationUntil(targetMs: number, nowMs: number): string {
@@ -41,28 +43,21 @@ function MutedReviewSection({ pulls, selectedPR, onSelectPR }: {
   selectedPR: SelectedPR | null;
   onSelectPR: (number: number, repo: string) => void;
 }) {
-  const [expanded, setExpanded] = useState(false);
   return (
-    <>
-      <button
-        type="button"
-        onClick={() => setExpanded(!expanded)}
-        className="w-full px-4 py-1.5 text-xs text-gray-600 uppercase tracking-wide border-y border-gray-800 bg-gray-900/20 flex items-center justify-between hover:bg-gray-800/30 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/60 focus-visible:ring-inset"
-      >
-        <span>Muted ({pulls.length})</span>
-        <span className="text-gray-700">{expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}</span>
-      </button>
-      {expanded && (
-        <div className="opacity-60">
-          <PRList
-            pulls={pulls}
-            selectedPR={selectedPR}
-            onSelectPR={onSelectPR}
-            showRepo
-          />
-        </div>
-      )}
-    </>
+    <CollapsibleSection
+      title={<>Muted ({pulls.length})</>}
+      className="px-4 py-1.5 text-gray-600 border-y border-gray-800 bg-gray-900/20"
+      chevronClassName="text-gray-700"
+    >
+      <div className="opacity-60">
+        <PRList
+          pulls={pulls}
+          selectedPR={selectedPR}
+          onSelectPR={onSelectPR}
+          showRepo
+        />
+      </div>
+    </CollapsibleSection>
   );
 }
 
@@ -611,24 +606,22 @@ export default function App() {
             A new version of Code Triage is available ({updateAvailable.behind} commit{updateAvailable.behind > 1 ? "s" : ""} behind, {updateAvailable.localSha} <ArrowRight size={12} className="inline" /> {updateAvailable.remoteSha}).
             Run <code className="bg-black/20 px-1 rounded">git pull && yarn build:all</code> to update.
           </span>
-          <button
+          <IconButton
+            description="Dismiss update notification"
+            icon={<X size={16} />}
             onClick={() => setUpdateAvailable(null)}
-            className="text-white/70 hover:text-white ml-4 text-lg"
-          >
-            <X size={16} />
-          </button>
+            className="text-white/70 hover:text-white hover:bg-white/10 ml-4"
+          />
         </div>
       )}
       {!isWide && (
         <div className="flex shrink-0 items-center justify-between gap-2 border-b border-gray-800 bg-gray-950 px-2 py-1.5 md:hidden">
-          <button
-            type="button"
+          <IconButton
+            description="Open pull request list"
+            icon={<Menu size={18} />}
             onClick={() => setMobileDrawerOpen(true)}
-            className="rounded px-2 py-1 text-gray-300 hover:bg-gray-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
-            aria-label="Open pull request list"
-          >
-            <Menu size={18} />
-          </button>
+            className="text-gray-300"
+          />
           <span className="min-w-0 flex-1 truncate text-center text-xs font-semibold text-white">Code Triage</span>
           <span className="shrink-0 font-mono text-[10px] text-gray-600" title="Time until next backend poll">
             {timerText}
@@ -661,37 +654,32 @@ export default function App() {
             </div>
             <div className="flex shrink-0 items-center gap-1">
               {isWide && (
-                <button
-                  type="button"
+                <IconButton
+                  description={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+                  icon={sidebarCollapsed ? <PanelLeftOpen size={14} /> : <PanelLeftClose size={14} />}
                   onClick={() => setSidebarCollapsed((c) => !c)}
-                  className="rounded px-1 text-xs text-gray-500 hover:text-gray-300 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
-                  title={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
-                  aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
-                >
-                  {sidebarCollapsed ? "»" : "«"}
-                </button>
+                  size="sm"
+                />
               )}
               <span className="text-xs text-gray-600 font-mono max-md:hidden" title="Time until next backend poll">
                 {timerText}
               </span>
-              <button
-                type="button"
+              <IconButton
+                description="Keyboard shortcuts"
+                icon={<HelpCircle size={14} />}
                 onClick={() => setShortcutsOpen(true)}
-                className="rounded px-1 text-xs text-gray-500 hover:text-gray-300 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
-                title="Keyboard shortcuts (?)"
-              >
-                ?
-              </button>
-              <button
-                type="button"
+                size="sm"
+              />
+              <IconButton
+                description="Settings"
+                icon={<Settings size={14} />}
                 onClick={() => void openSettingsModal()}
-                className="text-xs text-gray-500 hover:text-gray-300 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 rounded"
-                title="Settings"
-              >
-                <Settings size={14} />
-              </button>
-              <button
-                type="button"
+                size="sm"
+              />
+              <IconButton
+                description={`Test notification (permission: ${notifPermission})`}
+                icon={<Bell size={14} />}
+                size="sm"
                 onClick={() => {
                   if ("Notification" in window) {
                     if (Notification.permission === "granted") {
@@ -708,20 +696,14 @@ export default function App() {
                     }
                   }
                 }}
-                className="text-xs text-gray-500 hover:text-gray-300 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 rounded"
-                title={`Test notification (permission: ${notifPermission})`}
-              >
-                <Bell size={14} />
-              </button>
-              <button
-                type="button"
+              />
+              <IconButton
+                description="Refresh lists and reset adaptive poll schedule"
+                icon={<RefreshCw size={14} className={refreshing ? "animate-spin" : ""} />}
                 onClick={() => void fetchPulls(false, true)}
                 disabled={refreshing}
-                className="text-xs text-gray-500 hover:text-gray-300 disabled:text-gray-700 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 rounded"
-                title="Refresh lists and reset adaptive poll schedule (repo hot/cold)"
-              >
-                <RefreshCw size={14} className={refreshing ? "animate-spin" : ""} />
-              </button>
+                size="sm"
+              />
             </div>
           </div>
           <div className="px-3 py-2 border-b border-gray-800 grid grid-cols-2 gap-x-4 text-[10px] text-gray-500">
@@ -827,14 +809,12 @@ export default function App() {
         {/* Main area */}
         <div className="relative flex min-w-0 flex-1 flex-col overflow-hidden">
           {isWide && sidebarCollapsed && (
-            <button
-              type="button"
-              className="absolute left-0 top-1/2 z-10 -translate-y-1/2 rounded-r border border-l-0 border-gray-800 bg-gray-900/95 px-1 py-4 text-gray-400 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+            <IconButton
+              description="Expand sidebar"
+              icon={<PanelLeftOpen size={14} />}
+              className="absolute left-0 top-1/2 z-10 -translate-y-1/2 rounded-l-none rounded-r border border-l-0 border-gray-800 bg-gray-900/95 px-1 py-4 text-gray-400 hover:text-white"
               onClick={() => setSidebarCollapsed(false)}
-              aria-label="Expand sidebar"
-            >
-              »
-            </button>
+            />
           )}
           {loadingPR ? (
             <div className="flex-1 flex items-center justify-center text-gray-500">

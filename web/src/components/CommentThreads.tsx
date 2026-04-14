@@ -3,7 +3,12 @@ import type { ReviewComment } from "../types";
 import { api } from "../api";
 import type { FixJobStatus } from "../api";
 import Comment from "./Comment";
-import { Check, ChevronRight, ChevronDown } from "lucide-react";
+import { Check, ChevronRight, ChevronDown, HelpCircle } from "lucide-react";
+import { IconButton } from "./ui/icon-button";
+import { CollapsibleSection } from "./ui/collapsible-section";
+import { Button } from "./ui/button";
+import { StatusBadge } from "./ui/status-badge";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "./ui/dialog";
 
 type ThreadKeyActions = {
   toggleExpand: () => void;
@@ -72,10 +77,10 @@ function isSnoozed(c: ReviewComment): boolean {
 }
 
 function EvalBadge({ action }: { action: string }) {
-  const styles: Record<string, string> = {
-    resolve: "bg-green-500/20 text-green-400",
-    reply: "bg-blue-500/20 text-blue-400",
-    fix: "bg-orange-500/20 text-orange-400",
+  const colors: Record<string, "green" | "blue" | "orange" | "gray"> = {
+    resolve: "green",
+    reply: "blue",
+    fix: "orange",
   };
   const labels: Record<string, string> = {
     resolve: "Can Resolve",
@@ -83,16 +88,16 @@ function EvalBadge({ action }: { action: string }) {
     fix: "Needs Fix",
   };
   return (
-    <span className={`text-xs px-2 py-0.5 rounded-full font-sans ${styles[action] ?? "bg-gray-500/20 text-gray-400"}`}>
+    <StatusBadge color={colors[action] ?? "gray"} className="font-sans">
       {labels[action] ?? action}
-    </span>
+    </StatusBadge>
   );
 }
 
-function StatusBadge({ status }: { status: string }) {
-  if (status === "replied") return <span className="text-xs text-green-400 flex items-center gap-1">Replied <Check size={12} /></span>;
-  if (status === "dismissed") return <span className="text-xs text-gray-500">Dismissed</span>;
-  if (status === "fixed") return <span className="text-xs text-blue-400 flex items-center gap-1">Fixed <Check size={12} /></span>;
+function ThreadStatusBadge({ status }: { status: string }) {
+  if (status === "replied") return <StatusBadge color="green" icon={<Check size={12} />}>Replied</StatusBadge>;
+  if (status === "dismissed") return <StatusBadge color="gray">Dismissed</StatusBadge>;
+  if (status === "fixed") return <StatusBadge color="blue" icon={<Check size={12} />}>Fixed</StatusBadge>;
   return null;
 }
 
@@ -132,6 +137,8 @@ function ThreadItem({ thread, onSelectFile, repo, prNumber, branch, fixBlocked, 
   // Fix with Claude state
   const [fixing, setFixing] = useState(false);
   const [fixError, setFixError] = useState<string | null>(null);
+  const [fixModalOpen, setFixModalOpen] = useState(false);
+  const [fixInstructions, setFixInstructions] = useState("");
   const [reEvaluating, setReEvaluating] = useState(false);
 
   async function handleReEvaluate() {
@@ -187,7 +194,8 @@ function ThreadItem({ thread, onSelectFile, repo, prNumber, branch, fixBlocked, 
     return d.toISOString();
   }
 
-  async function handleFixWithClaude() {
+  async function handleFixWithClaude(userInstructions?: string) {
+    setFixModalOpen(false);
     setFixing(true);
     setFixError(null);
 
@@ -214,7 +222,7 @@ function ThreadItem({ thread, onSelectFile, repo, prNumber, branch, fixBlocked, 
         line: thread.root.line,
         body: thread.root.body,
         diffHunk: thread.root.diffHunk,
-      });
+      }, userInstructions || undefined);
       if (!result.success) {
         setFixError(result.error ?? "Failed to start fix");
       }
@@ -233,7 +241,7 @@ function ThreadItem({ thread, onSelectFile, repo, prNumber, branch, fixBlocked, 
       reply: () => { void handleAction("reply"); },
       resolve: () => { void handleAction("resolve"); },
       dismiss: () => { void handleAction("dismiss"); },
-      fix: () => { void handleFixWithClaude(); },
+      fix: () => { setFixModalOpen(true); },
       reEvaluate: () => { void handleReEvaluate(); },
     });
     return () => {
@@ -277,7 +285,7 @@ function ThreadItem({ thread, onSelectFile, repo, prNumber, branch, fixBlocked, 
           )}
         </span>
         <span className="flex items-center gap-2 shrink-0">
-          {isActedOn && <StatusBadge status={status!} />}
+          {isActedOn && <ThreadStatusBadge status={status!} />}
           {!isActedOn && eval_ && <EvalBadge action={eval_.action} />}
           {thread.isResolved && <span className="text-green-500/70 text-xs font-sans">Resolved</span>}
           <span className="text-gray-600 text-xs">{expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}</span>
@@ -400,55 +408,88 @@ function ThreadItem({ thread, onSelectFile, repo, prNumber, branch, fixBlocked, 
           {!isActedOn && !thread.isResolved && (
             <div className="flex items-center gap-2 mx-1 mt-2 pt-2 border-t border-gray-800">
               {eval_?.action === "reply" && eval_.reply && (
-                <button
-                  onClick={() => handleAction("reply")}
-                  disabled={acting || fixing}
-                  className="text-xs px-3 py-1 bg-blue-600 hover:bg-blue-500 disabled:bg-blue-800 disabled:text-gray-400 text-white rounded transition-colors"
-                >
+                <Button variant="blue" size="xs" onClick={() => handleAction("reply")} disabled={acting || fixing}>
                   {acting ? "Sending..." : "Send Reply"}
-                </button>
+                </Button>
               )}
-              <button
-                onClick={handleFixWithClaude}
+              <Button
+                variant="orange"
+                size="xs"
+                onClick={() => setFixModalOpen(true)}
                 disabled={acting || fixing || fixBlocked}
-                className="text-xs px-3 py-1 bg-orange-600 hover:bg-orange-500 disabled:bg-orange-800 disabled:text-gray-400 text-white rounded transition-colors"
                 title={fixBlocked ? "A fix is already running on this PR" : undefined}
               >
                 {fixing ? "Starting fix..." : fixBlocked ? "Fix running..." : "Fix with Claude"}
-              </button>
-              <button
-                onClick={() => handleAction("resolve")}
-                disabled={acting || fixing}
-                className="text-xs px-3 py-1 bg-green-600/80 hover:bg-green-500/80 disabled:bg-green-800/50 disabled:text-gray-400 text-white rounded transition-colors"
-              >
+              </Button>
+              <Button variant="green" size="xs" onClick={() => handleAction("resolve")} disabled={acting || fixing}>
                 Resolve
-              </button>
-              <button
-                onClick={() => handleAction("dismiss")}
-                disabled={acting || fixing}
-                className="text-xs px-3 py-1 bg-gray-700 hover:bg-gray-600 disabled:bg-gray-800 disabled:text-gray-400 text-gray-300 rounded transition-colors"
-              >
+              </Button>
+              <Button variant="gray" size="xs" onClick={() => handleAction("dismiss")} disabled={acting || fixing}>
                 Dismiss
-              </button>
-              <button
+              </Button>
+              <Button
+                variant="gray"
+                size="xs"
                 onClick={handleReEvaluate}
                 disabled={acting || fixing || reEvaluating}
-                className="text-xs px-3 py-1 bg-gray-700 hover:bg-gray-600 disabled:bg-gray-800 disabled:text-gray-400 text-gray-400 rounded transition-colors ml-auto"
+                className="ml-auto text-gray-400"
                 title="Re-run Claude evaluation on this comment"
               >
                 {reEvaluating ? "Evaluating..." : "Re-evaluate"}
-              </button>
+              </Button>
             </div>
           )}
         </div>
       )}
+      {/* Fix with Claude modal */}
+      <Dialog open={fixModalOpen} onOpenChange={(open) => { if (!open) { setFixModalOpen(false); setFixInstructions(""); } }}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Fix with Claude</DialogTitle>
+            <DialogDescription>
+              Add optional instructions for how Claude should fix this comment.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="text-xs bg-gray-900 border border-gray-800 rounded p-3 max-h-32 overflow-y-auto text-gray-300 whitespace-pre-wrap">
+            {thread.root.body}
+          </div>
+          <textarea
+            className="w-full rounded border border-gray-700 bg-gray-900 text-sm text-gray-200 p-2 placeholder:text-gray-500 focus:outline-none focus:ring-1 focus:ring-orange-500 resize-y"
+            rows={3}
+            placeholder="e.g. Use a guard clause instead of nesting, keep the existing error message..."
+            value={fixInstructions}
+            onChange={(e) => setFixInstructions(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+                void handleFixWithClaude(fixInstructions);
+                setFixInstructions("");
+              }
+            }}
+            autoFocus
+          />
+          <DialogFooter>
+            <button
+              onClick={() => { setFixModalOpen(false); setFixInstructions(""); }}
+              className="text-xs px-4 py-1.5 bg-gray-700 hover:bg-gray-600 text-gray-300 rounded transition-colors"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={() => { void handleFixWithClaude(fixInstructions); setFixInstructions(""); }}
+              className="text-xs px-4 py-1.5 bg-orange-600 hover:bg-orange-500 text-white rounded transition-colors"
+            >
+              Start Fix
+            </button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       </div>
     </div>
   );
 }
 
 export default function CommentThreads({ comments, onSelectFile, repo, prNumber, branch, fixJobs, onCommentAction, onFixStarted, globalModalOpen = false, onOpenShortcutsHelp }: CommentThreadsProps) {
-  const [collapsed, setCollapsed] = useState(false);
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [batching, setBatching] = useState(false);
   const [filterText, setFilterText] = useState("");
@@ -617,22 +658,18 @@ export default function CommentThreads({ comments, onSelectFile, repo, prNumber,
 
   return (
     <div className="border-b border-gray-800 flex-1 overflow-y-auto">
-      <button
-        onClick={() => setCollapsed(!collapsed)}
-        className="w-full px-6 py-2 flex items-center justify-between text-xs text-gray-500 uppercase tracking-wide hover:bg-gray-800/30 sticky top-0 bg-gray-950 z-10"
-      >
-        <span>
+      <CollapsibleSection
+        defaultOpen
+        title={<>
           Review Threads ({isFiltered ? `${filteredCount} of ${totalCount}` : totalCount})
           {resolvedCount > 0 && !isFiltered && (
             <span className="normal-case ml-2 text-gray-600">
               {openCount} open, {resolvedCount} resolved
             </span>
           )}
-        </span>
-        <span className="text-gray-600">{collapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}</span>
-      </button>
-      {!collapsed && (
-        <>
+        </>}
+        className="px-6 py-2 text-gray-500 sticky top-0 bg-gray-950 z-10"
+      >
           {/* Search/filter bar */}
           <div className="px-6 py-1.5 flex items-center gap-2 border-b border-gray-800/50 bg-gray-900/20">
             <input
@@ -669,14 +706,13 @@ export default function CommentThreads({ comments, onSelectFile, repo, prNumber,
             </label>
             <div className="flex items-center gap-1 shrink-0 text-xs text-gray-600">
               {onOpenShortcutsHelp && (
-                <button
-                  type="button"
+                <IconButton
+                  description="All keyboard shortcuts"
+                  icon={<HelpCircle size={14} />}
                   onClick={() => onOpenShortcutsHelp()}
-                  className="rounded px-1.5 py-0.5 text-blue-400/90 hover:text-blue-300 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
-                  title="All keyboard shortcuts"
-                >
-                  ?
-                </button>
+                  size="sm"
+                  className="text-blue-400/90 hover:text-blue-300"
+                />
               )}
               <details className="text-xs">
                 <summary className="cursor-pointer hover:text-gray-400 select-none">Keys</summary>
@@ -701,15 +737,15 @@ export default function CommentThreads({ comments, onSelectFile, repo, prNumber,
               {selected.size > 0 ? (
                 <>
                   <span className="text-xs text-gray-400">{selected.size} selected</span>
-                  <button onClick={() => handleBatchAction("dismiss")} disabled={batching} className="text-xs px-2 py-0.5 bg-gray-700 hover:bg-gray-600 text-gray-300 rounded disabled:opacity-50">
+                  <Button variant="gray" size="xs" onClick={() => handleBatchAction("dismiss")} disabled={batching}>
                     Dismiss all
-                  </button>
-                  <button onClick={() => handleBatchAction("resolve")} disabled={batching} className="text-xs px-2 py-0.5 bg-green-700/60 hover:bg-green-600/60 text-green-300 rounded disabled:opacity-50">
+                  </Button>
+                  <Button variant="green" size="xs" onClick={() => handleBatchAction("resolve")} disabled={batching}>
                     Resolve all
-                  </button>
-                  <button onClick={() => handleBatchAction("reply")} disabled={batching} className="text-xs px-2 py-0.5 bg-blue-700/60 hover:bg-blue-600/60 text-blue-300 rounded disabled:opacity-50">
+                  </Button>
+                  <Button variant="blue" size="xs" onClick={() => handleBatchAction("reply")} disabled={batching}>
                     Reply all
-                  </button>
+                  </Button>
                 </>
               ) : (
                 <span className="text-xs text-gray-600">Select threads for bulk actions</span>
@@ -748,8 +784,7 @@ export default function CommentThreads({ comments, onSelectFile, repo, prNumber,
               );
             })}
           </div>
-        </>
-      )}
+      </CollapsibleSection>
     </div>
   );
 }
