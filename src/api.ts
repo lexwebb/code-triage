@@ -1,12 +1,15 @@
 import { addRoute, json, getRepos, getBody, getPollState, getHealthPayload, setFixJobStatus, clearFixJobStatus, getActiveFixForBranch, getActiveFixForPR, subscribeSse, getListenPort, notifyConfigSaved } from "./server.js";
 import type { RepoInfo } from "./discovery.js";
 import { loadConfig, saveConfig, configExists, type Config } from "./config.js";
-import { loadState, markComment, markCommentWithEvaluation, patchCommentTriage, saveState, addFixJob as addFixJobState, removeFixJob as removeFixJobState, getFixJobs, getPendingTriageCountsByPr } from "./state.js";
-import { postReply, resolveThread, applyFixWithClaude, evaluateComment, clampEvalConcurrency } from "./actioner.js";
+import { loadState, markComment, patchCommentTriage, saveState, addFixJob as addFixJobState, removeFixJob as removeFixJobState, getFixJobs, getPendingTriageCountsByPr, needsEvaluation } from "./state.js";
+import { postReply, resolveThread, applyFixWithClaude, clampEvalConcurrency } from "./actioner.js";
 import { createWorktree, getWorktreePath, getDiffInWorktree, removeWorktree, commitAndPushWorktree } from "./worktree.js";
 import { ghAsync, ghPost } from "./exec.js";
 import { batchPullPollData, type PullPollData } from "./github-batching.js";
 import { clearRepoPollSchedule } from "./repo-poll-schedule.js";
+import { enqueueEvaluation, drainOnce } from "./eval-queue.js";
+import { buildIgnoredBotSet } from "./poller.js";
+import { getRawSqlite } from "./db/client.js";
 
 const GITHUB_USER_CACHE_MS = 60_000;
 let cachedGitHubUser: { at: number; user: { login: string; avatar_url: string; html_url: string } } | null = null;
@@ -726,6 +729,30 @@ export function registerRoutes(): void {
     const resolvedIds = poll?.resolvedIds ?? new Set<number>();
 
     const state = loadState();
+    const config = loadConfig();
+    const ignoredBots = buildIgnoredBotSet(config.ignoredBots);
+
+    // Enqueue evaluations for comments missing them
+    let enqueued = 0;
+    for (const c of comments) {
+      if (ignoredBots.has(c.user.login)) continue;
+      if (!needsEvaluation(state, c.id, repo)) continue;
+      const crComment = {
+        id: c.id,
+        prNumber,
+        path: c.path,
+        line: c.line || c.original_line || 0,
+        diffHunk: c.diff_hunk,
+        body: c.body,
+        inReplyToId: c.in_reply_to_id ?? null,
+      };
+      const result = enqueueEvaluation(crComment, prNumber, repo, state);
+      if (result === "queued") enqueued++;
+    }
+    if (enqueued > 0) {
+      saveState(state);
+      void drainOnce();
+    }
 
     json(res, comments.map((c) => {
       const stateKey = `${repo}:${c.id}`;
@@ -896,7 +923,6 @@ export function registerRoutes(): void {
     const body = getBody<{ repo: string; commentId: number; prNumber: number }>(req);
     const state = loadState();
 
-    // Fetch comment from GitHub to get current content
     let ghComment: { id: number; path: string; line: number | null; original_line: number | null; diff_hunk: string; body: string; in_reply_to_id: number | null };
     try {
       ghComment = await ghAsync<typeof ghComment>(`/repos/${body.repo}/pulls/comments/${body.commentId}`);
@@ -912,20 +938,29 @@ export function registerRoutes(): void {
       line: ghComment.line ?? ghComment.original_line ?? 0,
       diffHunk: ghComment.diff_hunk,
       body: ghComment.body,
-      inReplyToId: ghComment.in_reply_to_id,
+      inReplyToId: ghComment.in_reply_to_id ?? null,
     };
 
-    let evaluation;
-    try {
-      evaluation = await evaluateComment(comment, body.repo);
-    } catch (err) {
-      json(res, { error: `Claude evaluation failed: ${(err as Error).message}` }, 500);
-      return;
+    // Clear any existing queue entry and reset state
+    const sqlite = getRawSqlite();
+    sqlite.prepare("DELETE FROM eval_queue WHERE comment_key = ?").run(`${body.repo}:${body.commentId}`);
+
+    // Remove evalFailed flag and reset status so needsEvaluation returns true
+    const key = `${body.repo}:${body.commentId}`;
+    if (state.comments[key]) {
+      delete state.comments[key].evalFailed;
+      // Reset to pending so enqueueEvaluation's needsEvaluation check passes
+      if (state.comments[key].status === "evaluating") {
+        state.comments[key].status = "pending";
+      }
+      // Clear old evaluation so needsEvaluation returns true
+      delete state.comments[key].evaluation;
     }
 
-    markCommentWithEvaluation(state, body.commentId, "pending", body.prNumber, evaluation, body.repo);
+    const result = enqueueEvaluation(comment, body.prNumber, body.repo, state);
     saveState(state);
-    json(res, { success: true, evaluation });
+    if (result === "queued") void drainOnce();
+    json(res, { success: true, status: result });
   });
 
   // POST /api/actions/comment-triage — local snooze / priority / note (SQLite only)
