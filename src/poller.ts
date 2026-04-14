@@ -75,7 +75,7 @@ function buildPollResultForRepo(
   targetPulls: OpenPull[],
   pollByPr: Map<number, PullPollData>,
   ignoredBots: Set<string>,
-  isNewComment: (repo: string, commentId: number) => boolean,
+  shouldInclude: (repo: string, commentId: number) => boolean,
 ): PollResult {
   const allNewComments: CrComment[] = [];
   const pullsByNumber: Record<number, PrInfo> = {};
@@ -92,7 +92,7 @@ function buildPollResultForRepo(
     const comments = poll?.comments ?? [];
     const resolvedIds = poll?.resolvedIds ?? new Set<number>();
     const relevantComments = filterCommentsForPoll(comments, resolvedIds, ignoredBots, (id) =>
-      isNewComment(repoPath, id),
+      shouldInclude(repoPath, id),
     );
 
     for (const comment of relevantComments) {
@@ -117,7 +117,7 @@ function buildPollResultForRepo(
  */
 export async function fetchNewCommentsBatch(
   repoPaths: string[],
-  isNewComment: (repo: string, commentId: number) => boolean,
+  shouldInclude: (repo: string, commentId: number) => boolean,
   pollReviewRequested: boolean,
   githubLogin?: string,
 ): Promise<Map<string, PollResult>> {
@@ -177,7 +177,7 @@ export async function fetchNewCommentsBatch(
     const pollByPr = pollData.get(repoPath) ?? new Map();
     out.set(
       repoPath,
-      buildPollResultForRepo(repoPath, targetPulls, pollByPr, ignoredBots, isNewComment),
+      buildPollResultForRepo(repoPath, targetPulls, pollByPr, ignoredBots, shouldInclude),
     );
   }
   return out;
@@ -188,14 +188,14 @@ export async function fetchNewCommentsBatch(
  */
 export async function fetchNewComments(
   repo: string | undefined,
-  isNewComment: (id: number) => boolean,
+  shouldInclude: (id: number) => boolean,
   pollReviewRequested = false,
   githubLogin?: string,
 ): Promise<PollResult> {
   const repoPath = repo || getRepoFromGit();
   const m = await fetchNewCommentsBatch(
     [repoPath],
-    (r, id) => r === repoPath && isNewComment(id),
+    (r, id) => r === repoPath && shouldInclude(id),
     pollReviewRequested,
     githubLogin,
   );

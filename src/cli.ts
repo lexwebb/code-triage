@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 import { parseArgs } from "util";
 import { execSync, execFileSync } from "child_process";
-import { loadState, saveState, isNewComment, getCommentsByStatus, compactCommentHistory } from "./state.js";
+import { loadState, saveState, needsEvaluation, getCommentsByStatus, compactCommentHistory } from "./state.js";
 import { fetchNewComments, fetchNewCommentsBatch, getGitHubLogin } from "./poller.js";
 import { notifyNewComments } from "./notifier.js";
-import { analyzeComments, clampEvalConcurrency, killAllChildren } from "./actioner.js";
+import { clampEvalConcurrency, killAllChildren } from "./actioner.js";
+import { enqueueMany, recoverQueue, startWorker, stopWorker } from "./eval-queue.js";
 import { cleanupAllWorktrees, pruneOrphanedWorktrees } from "./worktree.js";
 import { setTokenResolver, resolveGitHubTokenFromSources, hasEnvGitHubToken, getRateLimitState } from "./exec.js";
 import {
@@ -302,6 +303,9 @@ startServer(port, repos);
   }
 }
 
+recoverQueue();
+startWorker();
+
 let running = false;
 let shuttingDown = false;
 let pollTimer: ReturnType<typeof setTimeout> | null = null;
@@ -415,7 +419,7 @@ async function poll(): Promise<void> {
     try {
       const batch = await fetchNewCommentsBatch(
         reposToPoll,
-        (repo, id) => isNewComment(state, id, repo),
+        (repo, id) => needsEvaluation(state, id, repo),
         pollReviewRequested,
         githubLogin,
       );
@@ -431,7 +435,7 @@ async function poll(): Promise<void> {
 
           if (comments.length > 0) {
             notifyNewComments(comments, pullsByNumber);
-            await analyzeComments(comments, pullsByNumber, state, repoInfo.repo, dryRun, evalConcurrency);
+            enqueueMany(comments, repoInfo.repo, state);
           }
         } catch (err) {
           console.error(`\n  Error processing ${repoInfo.repo}: ${(err as Error).message}`);
@@ -444,7 +448,7 @@ async function poll(): Promise<void> {
         try {
           const { comments, pullsByNumber } = await fetchNewComments(
             repoInfo.repo,
-            (id) => isNewComment(state, id, repoInfo.repo),
+            (id) => needsEvaluation(state, id, repoInfo.repo),
             pollReviewRequested,
             githubLogin,
           );
@@ -452,7 +456,7 @@ async function poll(): Promise<void> {
           pollOutcomes.push({ repo: repoInfo.repo, hadActivity });
           if (comments.length > 0) {
             notifyNewComments(comments, pullsByNumber);
-            await analyzeComments(comments, pullsByNumber, state, repoInfo.repo, dryRun, evalConcurrency);
+            enqueueMany(comments, repoInfo.repo, state);
           }
         } catch (e2) {
           console.error(`\n  Error polling ${repoInfo.repo}: ${(e2 as Error).message}`);
@@ -495,7 +499,7 @@ async function listPRs(): Promise<void> {
     const state = loadState();
     const batch = await fetchNewCommentsBatch(
       repos.map((r) => r.repo),
-      (repo, id) => isNewComment(state, id, repo),
+      (repo, id) => needsEvaluation(state, id, repo),
       pollReviewRequested,
       githubLogin,
     );
@@ -556,6 +560,7 @@ function shutdown(): void {
   console.log("\n\nShutting down code-triage...");
   if (pollTimer) clearTimeout(pollTimer);
   killAllChildren();
+  void stopWorker();
   const check = setInterval(() => {
     if (!running) {
       clearInterval(check);
