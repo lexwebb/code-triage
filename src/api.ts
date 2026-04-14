@@ -1,4 +1,5 @@
-import { addRoute, json, getRepos, getBody, getPollState, getHealthPayload, setFixJobStatus, clearFixJobStatus, getActiveFixForBranch, getActiveFixForPR, subscribeSse, getListenPort, notifyConfigSaved, getFixJobStatus } from "./server.js";
+import { addRoute, json, getRepos, getBody, getPollState, getHealthPayload, setFixJobStatus, clearFixJobStatus, getActiveFixForBranch, subscribeSse, getListenPort, notifyConfigSaved, getFixJobStatus, getAllFixJobStatuses } from "./server.js";
+import { enqueueFix, isInFixQueue, advanceQueue, getFixQueue, removeFromFixQueue } from "./fix-queue.js";
 import { getVapidKeys } from "./vapid.js";
 import { savePushSubscription, deletePushSubscription, mutePR as dbMutePR, unmutePR as dbUnmutePR, getMutedPRs as dbGetMutedPRs } from "./push-db.js";
 import { sendTestPush } from "./push.js";
@@ -1095,24 +1096,38 @@ export function registerRoutes(): void {
   addRoute("POST", "/api/actions/fix", async (req, res) => {
     const body = getBody<{ repo: string; commentId: number; prNumber: number; branch: string; comment: { path: string; line: number; body: string; diffHunk: string }; userInstructions?: string }>(req);
 
-    // Prevent concurrent fixes on the same branch or PR
-    const activeBranch = getActiveFixForBranch(body.branch);
-    if (activeBranch) {
-      json(res, { error: `A fix is already running on branch ${body.branch} (${activeBranch.path})` }, 409);
-      return;
-    }
-    const activePR = getActiveFixForPR(body.repo, body.prNumber);
-    if (activePR) {
-      json(res, { error: `A fix is already running on this PR (${activePR.path})` }, 409);
-      return;
-    }
-    const state = loadState();
-    const persistedJob = getFixJobs(state).find((j) => j.branch === body.branch);
-    if (persistedJob) {
-      json(res, { error: `A fix is already in progress on branch ${body.branch} (${persistedJob.path})` }, 409);
+    // 1. Already queued?
+    if (isInFixQueue(body.commentId)) {
+      json(res, { error: "already queued" }, 409);
       return;
     }
 
+    // 2. Already active (running/completed/awaiting_response)?
+    const existingStatus = getFixJobStatus(body.commentId);
+    if (existingStatus && (existingStatus.status === "running" || existingStatus.status === "completed" || existingStatus.status === "awaiting_response")) {
+      json(res, { error: "already active" }, 409);
+      return;
+    }
+
+    // 3. Branch conflict with a different comment?
+    const activeBranch = getActiveFixForBranch(body.branch);
+    if (activeBranch && activeBranch.commentId !== body.commentId) {
+      json(res, { error: `A fix is already running on branch ${body.branch} (${activeBranch.path})` }, 409);
+      return;
+    }
+
+    // 4. Another fix is running or completed — enqueue instead of starting
+    const allStatuses = getAllFixJobStatuses();
+    if (allStatuses.some((j) => j.status === "running" || j.status === "completed")) {
+      const item = enqueueFix({
+        commentId: body.commentId, repo: body.repo, prNumber: body.prNumber,
+        branch: body.branch, comment: body.comment, userInstructions: body.userInstructions,
+      });
+      json(res, { success: true, status: "queued", position: item.position });
+      return;
+    }
+
+    const state = loadState();
     const repoInfo = getRepos().find((r) => r.repo === body.repo);
     if (!repoInfo?.localPath) {
       json(res, { error: "Repo local path not found" }, 400);
@@ -1176,6 +1191,7 @@ export function registerRoutes(): void {
           branch: body.branch, claudeOutput: result.rawOutput,
           sessionId, conversation,
         });
+        advanceQueue();
         return;
       }
 
@@ -1193,6 +1209,7 @@ export function registerRoutes(): void {
           suggestedReply: result.message,
           claudeOutput: result.message,
         });
+        advanceQueue();
         return;
       }
 
@@ -1205,6 +1222,7 @@ export function registerRoutes(): void {
         diff, branch: body.branch, claudeOutput: result.message,
         conversation: [{ role: "claude", message: result.message }],
       });
+      // completed blocks queue — don't advance
     } catch (err) {
       removeWorktree(body.branch, repoInfo?.localPath);
       const s = loadState();
@@ -1215,6 +1233,7 @@ export function registerRoutes(): void {
         path: body.comment.path, startedAt: Date.now(), status: "failed",
         error: (err as Error).message,
       });
+      advanceQueue();
     }
   });
 
@@ -1237,6 +1256,7 @@ export function registerRoutes(): void {
       markComment(state, body.commentId, "fixed", body.prNumber, body.repo);
       saveState(state);
       clearFixJobStatus(body.commentId);
+      advanceQueue();
 
       json(res, { success: true, status: "fixed" });
     } catch (err) {
@@ -1252,6 +1272,7 @@ export function registerRoutes(): void {
       removeWorktree(body.branch, discardRepoInfo?.localPath);
     } catch { /* ignore */ }
     if (body.commentId) clearFixJobStatus(body.commentId);
+    advanceQueue();
     json(res, { success: true });
   });
 
@@ -1271,6 +1292,7 @@ export function registerRoutes(): void {
     markComment(state, body.commentId, "replied", body.prNumber, body.repo);
     saveState(state);
     clearFixJobStatus(body.commentId);
+    advanceQueue();
 
     json(res, { success: true });
   });
@@ -1336,6 +1358,7 @@ export function registerRoutes(): void {
           conversation: updatedConversation,
           claudeOutput: result.rawOutput,
         });
+        advanceQueue();
         return;
       }
 
@@ -1355,6 +1378,7 @@ export function registerRoutes(): void {
           conversation: updatedConversation,
           claudeOutput: result.rawOutput,
         });
+        advanceQueue();
         return;
       }
 
@@ -1366,6 +1390,7 @@ export function registerRoutes(): void {
         diff, conversation: updatedConversation,
         claudeOutput: result.rawOutput,
       });
+      // completed blocks queue — don't advance
     } catch (err) {
       removeWorktree(job.branch, repoInfo.localPath);
       const s = loadState();
@@ -1376,6 +1401,7 @@ export function registerRoutes(): void {
         error: (err as Error).message,
         conversation,
       });
+      advanceQueue();
     }
   });
 
@@ -1397,6 +1423,30 @@ export function registerRoutes(): void {
 
     saveState(state);
     json(res, results);
+  });
+
+  // GET /api/fix-queue — list queued fixes
+  addRoute("GET", "/api/fix-queue", (_req, res) => {
+    const queue = getFixQueue();
+    json(res, queue.map((q) => ({
+      commentId: q.commentId, repo: q.repo, prNumber: q.prNumber,
+      path: q.path, branch: q.branch, position: q.position, queuedAt: q.queuedAt,
+    })));
+  });
+
+  // DELETE /api/fix-queue/:commentId — remove an item from the queue
+  addRoute("DELETE", "/api/fix-queue/:commentId", (_req, res, params) => {
+    const commentId = Number(params.commentId);
+    if (!Number.isFinite(commentId)) {
+      json(res, { error: "Invalid commentId" }, 400);
+      return;
+    }
+    const removed = removeFromFixQueue(commentId);
+    if (!removed) {
+      json(res, { error: "Item not found in queue" }, 404);
+      return;
+    }
+    json(res, { success: true });
   });
 
   // POST /api/actions/review — submit a PR review (approve or request changes)
