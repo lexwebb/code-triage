@@ -7,23 +7,26 @@ import { savePushSubscription } from "./push-db.js";
 import { mutePR } from "./push-db.js";
 
 // Mock web-push to avoid actual push sends
+const { mockWebPushSendNotification } = vi.hoisted(() => ({
+  mockWebPushSendNotification: vi.fn().mockResolvedValue({}),
+}));
 vi.mock("web-push", () => ({
   default: {
     generateVAPIDKeys: () => ({ publicKey: "fake-pub", privateKey: "fake-priv" }),
     setVapidDetails: vi.fn(),
-    sendNotification: vi.fn().mockResolvedValue({}),
+    sendNotification: mockWebPushSendNotification,
   },
 }));
 
-// Mock node-notifier
-vi.mock("node-notifier", () => ({
-  default: { notify: vi.fn() },
+// Mock notifier module
+const { mockSendNotification } = vi.hoisted(() => ({
+  mockSendNotification: vi.fn(),
+}));
+vi.mock("./notifier.js", () => ({
+  sendNotification: mockSendNotification,
 }));
 
 import { processPolledData, initPush, resetPushState, notifyEvalComplete, notifyFixJobComplete, sendTestPush } from "./push.js";
-import webpush from "web-push";
-import notifier from "node-notifier";
-
 describe("push notification module", () => {
   let testDir: string;
 
@@ -48,8 +51,8 @@ describe("push notification module", () => {
       authored: [{ repo: "owner/repo", number: 1, title: "PR 1", checksStatus: "pending", openComments: 0 }],
       reviewRequested: [],
     });
-    expect(webpush.sendNotification).not.toHaveBeenCalled();
-    expect(notifier.notify).not.toHaveBeenCalled();
+    expect(mockWebPushSendNotification).not.toHaveBeenCalled();
+    expect(mockSendNotification).not.toHaveBeenCalled();
   });
 
   it("sends push for new review request on second poll", () => {
@@ -61,8 +64,8 @@ describe("push notification module", () => {
       reviewRequested: [{ repo: "owner/repo", number: 5, title: "New PR", checksStatus: "pending", openComments: 0 }],
     });
 
-    expect(webpush.sendNotification).toHaveBeenCalledTimes(1);
-    const payload = JSON.parse((webpush.sendNotification as ReturnType<typeof vi.fn>).mock.calls[0][1]);
+    expect(mockWebPushSendNotification).toHaveBeenCalledTimes(1);
+    const payload = JSON.parse((mockWebPushSendNotification as ReturnType<typeof vi.fn>).mock.calls[0][1]);
     expect(payload.title).toContain("Review requested");
   });
 
@@ -78,8 +81,8 @@ describe("push notification module", () => {
       reviewRequested: [],
     });
 
-    expect(webpush.sendNotification).toHaveBeenCalledTimes(1);
-    const payload = JSON.parse((webpush.sendNotification as ReturnType<typeof vi.fn>).mock.calls[0][1]);
+    expect(mockWebPushSendNotification).toHaveBeenCalledTimes(1);
+    const payload = JSON.parse((mockWebPushSendNotification as ReturnType<typeof vi.fn>).mock.calls[0][1]);
     expect(payload.title).toContain("Checks passed");
   });
 
@@ -95,8 +98,8 @@ describe("push notification module", () => {
       reviewRequested: [],
     });
 
-    expect(webpush.sendNotification).toHaveBeenCalledTimes(1);
-    const payload = JSON.parse((webpush.sendNotification as ReturnType<typeof vi.fn>).mock.calls[0][1]);
+    expect(mockWebPushSendNotification).toHaveBeenCalledTimes(1);
+    const payload = JSON.parse((mockWebPushSendNotification as ReturnType<typeof vi.fn>).mock.calls[0][1]);
     expect(payload.title).toContain("3 new comments");
   });
 
@@ -107,8 +110,8 @@ describe("push notification module", () => {
       reviewRequested: [{ repo: "owner/repo", number: 5, title: "New PR", checksStatus: "pending", openComments: 0 }],
     });
 
-    expect(webpush.sendNotification).not.toHaveBeenCalled();
-    expect(notifier.notify).toHaveBeenCalled();
+    expect(mockWebPushSendNotification).not.toHaveBeenCalled();
+    expect(mockSendNotification).toHaveBeenCalled();
   });
 
   it("respects muted PRs", () => {
@@ -121,7 +124,7 @@ describe("push notification module", () => {
       reviewRequested: [{ repo: "owner/repo", number: 5, title: "Muted PR", checksStatus: "pending", openComments: 0 }],
     });
 
-    expect(webpush.sendNotification).not.toHaveBeenCalled();
+    expect(mockWebPushSendNotification).not.toHaveBeenCalled();
   });
 
   it("notifyEvalComplete sends push for analyzed comment", () => {
@@ -132,8 +135,8 @@ describe("push notification module", () => {
       path: "src/index.ts", line: 10, action: "fix", summary: "Missing null check",
     });
 
-    expect(webpush.sendNotification).toHaveBeenCalledTimes(1);
-    const payload = JSON.parse((webpush.sendNotification as ReturnType<typeof vi.fn>).mock.calls[0][1]);
+    expect(mockWebPushSendNotification).toHaveBeenCalledTimes(1);
+    const payload = JSON.parse((mockWebPushSendNotification as ReturnType<typeof vi.fn>).mock.calls[0][1]);
     expect(payload.title).toContain("Needs fix");
   });
 
@@ -144,8 +147,8 @@ describe("push notification module", () => {
       repo: "owner/repo", prNumber: 1, commentId: 42, path: "src/index.ts", status: "completed",
     });
 
-    expect(webpush.sendNotification).toHaveBeenCalledTimes(1);
-    const payload = JSON.parse((webpush.sendNotification as ReturnType<typeof vi.fn>).mock.calls[0][1]);
+    expect(mockWebPushSendNotification).toHaveBeenCalledTimes(1);
+    const payload = JSON.parse((mockWebPushSendNotification as ReturnType<typeof vi.fn>).mock.calls[0][1]);
     expect(payload.title).toContain("Fix ready");
   });
 
@@ -156,14 +159,14 @@ describe("push notification module", () => {
       repo: "owner/repo", prNumber: 1, commentId: 42, path: "src/index.ts", status: "failed", error: "Timeout",
     });
 
-    expect(webpush.sendNotification).toHaveBeenCalledTimes(1);
-    const payload = JSON.parse((webpush.sendNotification as ReturnType<typeof vi.fn>).mock.calls[0][1]);
+    expect(mockWebPushSendNotification).toHaveBeenCalledTimes(1);
+    const payload = JSON.parse((mockWebPushSendNotification as ReturnType<typeof vi.fn>).mock.calls[0][1]);
     expect(payload.title).toContain("Fix failed");
   });
 
   it("sendTestPush sends a test notification", () => {
     savePushSubscription({ endpoint: "https://push.example.com/abc", keys: { p256dh: "a", auth: "b" } });
     sendTestPush();
-    expect(webpush.sendNotification).toHaveBeenCalledTimes(1);
+    expect(mockWebPushSendNotification).toHaveBeenCalledTimes(1);
   });
 });

@@ -1,5 +1,5 @@
 import webpush from "web-push";
-import notifier from "node-notifier";
+import { sendNotification } from "./notifier.js";
 import { getVapidKeys } from "./vapid.js";
 import { getAllPushSubscriptions, deletePushSubscription, getMutedPRs } from "./push-db.js";
 
@@ -78,9 +78,7 @@ function getMutedSet(): Set<string> {
 async function sendPush(title: string, body: string, data?: { url?: string }): Promise<void> {
   const subs = getAllPushSubscriptions();
   if (subs.length === 0) {
-    notifier.notify({ title, message: body }, (err) => {
-      if (err) console.error("Desktop notification failed:", err.message);
-    });
+    sendNotification(title, body);
     return;
   }
   const payload = JSON.stringify({ title, body, icon: "/logo.png", data: data ?? {} });
