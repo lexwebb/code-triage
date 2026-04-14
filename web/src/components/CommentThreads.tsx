@@ -168,7 +168,7 @@ function FixConversation({ job, repo, onJobAction }: {
       <div className="text-[10px] uppercase tracking-wide text-indigo-400">Fix conversation</div>
       <div className="space-y-1.5 max-h-60 overflow-y-auto">
         {conversation.map((msg, i) => (
-          <div key={i} className={`text-xs p-2 rounded ${
+          <div key={i} className={`text-xs p-2 rounded whitespace-pre-wrap ${
             msg.role === "claude"
               ? "bg-gray-800/60 text-gray-300 mr-8"
               : "bg-indigo-900/30 text-indigo-200 ml-8"

@@ -51,6 +51,20 @@ function JobModal({ job, onClose, onJobAction }: { job: FixJobStatus; onClose: (
     }
   }
 
+  async function handleSendReply() {
+    if (!replyText.trim() || acting) return;
+    setActing(true);
+    try {
+      await api.fixReply(job.repo, job.commentId, replyText.trim());
+      setReplyText("");
+      onJobAction();
+    } catch (err) {
+      console.error("Reply failed:", err);
+    } finally {
+      setActing(false);
+    }
+  }
+
   const statusColors: Record<string, string> = {
     running: "text-yellow-400",
     completed: "text-green-400",
@@ -103,7 +117,7 @@ function JobModal({ job, onClose, onJobAction }: { job: FixJobStatus; onClose: (
             <div className="text-xs text-gray-500 mb-1">Conversation</div>
             <div className="space-y-1.5 max-h-48 overflow-y-auto">
               {job.conversation.map((msg, i) => (
-                <div key={i} className={`text-xs p-2 rounded ${
+                <div key={i} className={`text-xs p-2 rounded whitespace-pre-wrap ${
                   msg.role === "claude"
                     ? "bg-gray-800/60 text-gray-300 mr-8"
                     : "bg-indigo-900/30 text-indigo-200 ml-8"
@@ -186,12 +200,8 @@ function JobModal({ job, onClose, onJobAction }: { job: FixJobStatus; onClose: (
                 value={replyText}
                 onChange={(e) => setReplyText(e.target.value)}
                 onKeyDown={(e) => {
-                  if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && replyText.trim()) {
-                    setActing(true);
-                    void api.fixReply(job.repo, job.commentId, replyText.trim()).then(() => {
-                      setReplyText("");
-                      onJobAction();
-                    }).catch((err) => console.error("Reply failed:", err)).finally(() => setActing(false));
+                  if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+                    void handleSendReply();
                   }
                 }}
                 placeholder="Reply to Claude's questions..."
@@ -203,14 +213,7 @@ function JobModal({ job, onClose, onJobAction }: { job: FixJobStatus; onClose: (
               <Button
                 variant="blue"
                 size="xs"
-                onClick={() => {
-                  if (!replyText.trim()) return;
-                  setActing(true);
-                  void api.fixReply(job.repo, job.commentId, replyText.trim()).then(() => {
-                    setReplyText("");
-                    onJobAction();
-                  }).catch((err) => console.error("Reply failed:", err)).finally(() => setActing(false));
-                }}
+                onClick={() => void handleSendReply()}
                 disabled={acting || !replyText.trim()}
               >
                 {acting ? "Sending..." : "Send Reply"}
@@ -297,7 +300,8 @@ function JobRow({ job, onSelect }: { job: FixJobStatus; onSelect: () => void }) 
 }
 
 export default function FixJobsBanner({ fixJobs, onJobAction }: FixJobsBannerProps) {
-  const [selectedJob, setSelectedJob] = useState<FixJobStatus | null>(null);
+  const [selectedJobId, setSelectedJobId] = useState<number | null>(null);
+  const selectedJob = selectedJobId != null ? fixJobs.find((j) => j.commentId === selectedJobId) ?? null : null;
 
   if (fixJobs.length === 0) return null;
 
@@ -318,14 +322,14 @@ export default function FixJobsBanner({ fixJobs, onJobAction }: FixJobsBannerPro
         </div>
         <div className="max-h-40 overflow-y-auto">
           {fixJobs.map((job) => (
-            <JobRow key={job.commentId} job={job} onSelect={() => setSelectedJob(job)} />
+            <JobRow key={job.commentId} job={job} onSelect={() => setSelectedJobId(job.commentId)} />
           ))}
         </div>
       </div>
       {selectedJob && (
         <JobModal
           job={selectedJob}
-          onClose={() => setSelectedJob(null)}
+          onClose={() => setSelectedJobId(null)}
           onJobAction={onJobAction}
         />
       )}
