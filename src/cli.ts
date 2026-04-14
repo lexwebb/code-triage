@@ -240,7 +240,8 @@ if (repos.length === 0 && (flags.repo || configExists())) {
 }
 
 function openBrowser(): void {
-  const url = `http://localhost:${port}`;
+  const devMode = process.env.NODE_ENV === "development" || process.env.npm_lifecycle_event === "dev";
+  const url = devMode ? "http://localhost:5173" : `http://localhost:${port}`;
   try {
     execSync(`open "${url}"`, { stdio: "pipe" });
     console.log(`\n  Opened ${url} in browser.\n`);
@@ -266,7 +267,13 @@ console.log(`  Poll review-requested PRs: ${pollReviewRequested}`);
 if (Number.isFinite(commentRetentionDays) && commentRetentionDays > 0) {
   console.log(`  Comment retention: ${commentRetentionDays} days (replied/dismissed/fixed)`);
 }
-console.log(`  WebUI: http://localhost:${port}\n`);
+const isDev = process.env.NODE_ENV === "development" || process.env.npm_lifecycle_event === "dev";
+if (isDev) {
+  console.log(`  WebUI (dev): http://localhost:5173`);
+  console.log(`  API server:  http://localhost:${port}\n`);
+} else {
+  console.log(`  WebUI: http://localhost:${port}\n`);
+}
 
 startServer(port, repos);
 
