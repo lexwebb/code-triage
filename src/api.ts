@@ -5,7 +5,7 @@ import { savePushSubscription, deletePushSubscription, mutePR as dbMutePR, unmut
 import { sendTestPush } from "./push.js";
 import type { RepoInfo } from "./discovery.js";
 import { loadConfig, saveConfig, configExists, type Config } from "./config.js";
-import { loadState, markComment, patchCommentTriage, saveState, addFixJob as addFixJobState, removeFixJob as removeFixJobState, getFixJobs, getPendingTriageCountsByPr, needsEvaluation } from "./state.js";
+import { loadState, markComment, patchCommentTriage, saveState, addFixJob as addFixJobState, removeFixJob as removeFixJobState, getFixJobs, getPendingTriageCountsByPr, needsEvaluation, reconcileResolvedComments } from "./state.js";
 import { postReply, resolveThread, applyFixWithClaude, clampEvalConcurrency } from "./actioner.js";
 import { createWorktree, getWorktreePath, getDiffInWorktree, removeWorktree, commitAndPushWorktree } from "./worktree.js";
 import { ghAsync, ghPost } from "./exec.js";
@@ -137,7 +137,6 @@ export async function buildPullSidebarLists(targetRepos: RepoInfo[]): Promise<{
   if (username == null) {
     return { authored: [], reviewRequested: [], githubUserUnavailable: true };
   }
-  const triageCounts = getPendingTriageCountsByPr();
   const authored: Array<Record<string, unknown>> = [];
   const reviewRequested: Array<Record<string, unknown>> = [];
 
@@ -152,6 +151,13 @@ export async function buildPullSidebarLists(targetRepos: RepoInfo[]): Promise<{
       );
       const prNums = [...new Set([...myPulls.map((p) => p.number), ...needsReview.map((p) => p.number)])];
       const pollByPr = prNums.length === 0 ? new Map<number, PullPollData>() : await batchPullPollData(repoInfo.repo, prNums);
+
+      // Reconcile: dismiss locally-pending comments whose GitHub threads are now resolved
+      for (const poll of pollByPr.values()) {
+        reconcileResolvedComments(poll.resolvedIds);
+      }
+
+      const triageCounts = getPendingTriageCountsByPr();
 
       async function buildRow(
         pr: GhPull,

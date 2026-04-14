@@ -22,6 +22,20 @@ export function getPendingTriageCountsByPr(): Map<string, number> {
   return m;
 }
 
+/** Mark locally-pending comments as dismissed when their GitHub thread has been resolved. Returns count updated. */
+export function reconcileResolvedComments(resolvedIds: Set<number>): number {
+  if (resolvedIds.size === 0) return 0;
+  const sqlite = getRawSqlite();
+  const ids = [...resolvedIds];
+  const placeholders = ids.map(() => "?").join(",");
+  const result = sqlite.prepare(`
+    UPDATE comments SET status = 'dismissed'
+    WHERE comment_id IN (${placeholders})
+      AND status = 'pending'
+  `).run(...ids);
+  return result.changes;
+}
+
 /** Remove old replied/dismissed/fixed rows from SQLite (pending always kept). Returns rows deleted. */
 export function compactCommentHistory(retentionDays: number): number {
   if (!Number.isFinite(retentionDays) || retentionDays <= 0) {

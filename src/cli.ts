@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { parseArgs } from "util";
 import { execSync, execFileSync } from "child_process";
-import { loadState, saveState, needsEvaluation, getCommentsByStatus, compactCommentHistory } from "./state.js";
+import { loadState, saveState, needsEvaluation, getCommentsByStatus, compactCommentHistory, reconcileResolvedComments } from "./state.js";
 import { fetchNewComments, fetchNewCommentsBatch, getGitHubLogin } from "./poller.js";
 import { clampEvalConcurrency, killAllChildren } from "./actioner.js";
 import { enqueueMany, recoverQueue, startWorker, stopWorker } from "./eval-queue.js";
@@ -433,14 +433,16 @@ async function poll(): Promise<void> {
       for (const repoInfo of repos) {
         if (!reposToPoll.includes(repoInfo.repo)) continue;
         try {
-          const { comments } = batch.get(repoInfo.repo) ?? {
+          const result = batch.get(repoInfo.repo) ?? {
             comments: [],
+            resolvedIds: new Set<number>(),
           };
-          const hadActivity = comments.length > 0;
+          reconcileResolvedComments(result.resolvedIds);
+          const hadActivity = result.comments.length > 0;
           pollOutcomes.push({ repo: repoInfo.repo, hadActivity });
 
-          if (comments.length > 0) {
-            enqueueMany(comments, repoInfo.repo, state);
+          if (result.comments.length > 0) {
+            enqueueMany(result.comments, repoInfo.repo, state);
           }
         } catch (err) {
           console.error(`\n  Error processing ${repoInfo.repo}: ${(err as Error).message}`);
@@ -451,16 +453,17 @@ async function poll(): Promise<void> {
       for (const repoInfo of repos) {
         if (!reposToPoll.includes(repoInfo.repo)) continue;
         try {
-          const { comments } = await fetchNewComments(
+          const result = await fetchNewComments(
             repoInfo.repo,
             (id) => needsEvaluation(state, id, repoInfo.repo),
             pollReviewRequested,
             githubLogin,
           );
-          const hadActivity = comments.length > 0;
+          reconcileResolvedComments(result.resolvedIds);
+          const hadActivity = result.comments.length > 0;
           pollOutcomes.push({ repo: repoInfo.repo, hadActivity });
-          if (comments.length > 0) {
-            enqueueMany(comments, repoInfo.repo, state);
+          if (result.comments.length > 0) {
+            enqueueMany(result.comments, repoInfo.repo, state);
           }
         } catch (e2) {
           console.error(`\n  Error polling ${repoInfo.repo}: ${(e2 as Error).message}`);
@@ -528,10 +531,13 @@ async function listPRs(): Promise<void> {
       githubLogin,
     );
     for (const repoInfo of repos) {
-      const { comments, pullsByNumber } = batch.get(repoInfo.repo) ?? {
+      const result = batch.get(repoInfo.repo) ?? {
         comments: [],
         pullsByNumber: {},
+        resolvedIds: new Set<number>(),
       };
+      reconcileResolvedComments(result.resolvedIds);
+      const { comments, pullsByNumber } = result;
 
       const prNumbers = Object.keys(pullsByNumber);
       if (prNumbers.length === 0) continue;

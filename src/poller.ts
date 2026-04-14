@@ -79,6 +79,7 @@ function buildPollResultForRepo(
 ): PollResult {
   const allNewComments: CrComment[] = [];
   const pullsByNumber: Record<number, PrInfo> = {};
+  const allResolvedIds = new Set<number>();
 
   for (const pr of targetPulls) {
     pullsByNumber[pr.number] = {
@@ -91,6 +92,7 @@ function buildPollResultForRepo(
     const poll = pollByPr.get(pr.number);
     const comments = poll?.comments ?? [];
     const resolvedIds = poll?.resolvedIds ?? new Set<number>();
+    for (const id of resolvedIds) allResolvedIds.add(id);
     const relevantComments = filterCommentsForPoll(comments, resolvedIds, ignoredBots, (id) =>
       shouldInclude(repoPath, id),
     );
@@ -108,7 +110,7 @@ function buildPollResultForRepo(
     }
   }
 
-  return { comments: allNewComments, pullsByNumber };
+  return { comments: allNewComments, pullsByNumber, resolvedIds: allResolvedIds };
 }
 
 /**
@@ -199,5 +201,5 @@ export async function fetchNewComments(
     pollReviewRequested,
     githubLogin,
   );
-  return m.get(repoPath) ?? { comments: [], pullsByNumber: {} };
+  return m.get(repoPath) ?? { comments: [], pullsByNumber: {}, resolvedIds: new Set() };
 }

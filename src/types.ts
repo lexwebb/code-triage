@@ -61,6 +61,8 @@ export interface PrInfo {
 export interface PollResult {
   comments: CrComment[];
   pullsByNumber: Record<number, PrInfo>;
+  /** Comment IDs whose GitHub review thread is resolved (used for local state reconciliation). */
+  resolvedIds: Set<number>;
 }
 
 export interface Evaluation {
