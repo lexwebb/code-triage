@@ -44,6 +44,16 @@ function repoQueryRequired(repo: string): string {
   return `?repo=${encodeURIComponent(repo)}`;
 }
 
+export interface QueuedFixItem {
+  commentId: number;
+  repo: string;
+  prNumber: number;
+  path: string;
+  branch: string;
+  position: number;
+  queuedAt: string;
+}
+
 export interface FixJobStatus {
   commentId: number;
   repo: string;
@@ -111,6 +121,7 @@ export interface PollStatus {
   pollPaused?: boolean;
   pollPausedReason?: string | null;
   fixJobs: FixJobStatus[];
+  fixQueue?: QueuedFixItem[];
   rateLimited?: boolean;
   rateLimitResetAt?: number | null;
   /** From GitHub `X-RateLimit-Remaining` / `X-RateLimit-Limit` when present. */
@@ -169,7 +180,10 @@ export const api = {
   batchAction: (action: "reply" | "resolve" | "dismiss", items: Array<{ repo: string; commentId: number; prNumber: number }>) =>
     postJSON<{ results: Array<{ commentId: number; success: boolean; error?: string }> }>("/api/actions/batch", { action, items }),
   fixWithClaude: (repo: string, commentId: number, prNumber: number, branch: string, comment: { path: string; line: number; body: string; diffHunk: string }, userInstructions?: string) =>
-    postJSON<{ success: boolean; status: string; branch?: string; error?: string }>("/api/actions/fix", { repo, commentId, prNumber, branch, comment, ...(userInstructions ? { userInstructions } : {}) }),
+    postJSON<{ success: boolean; status: string; branch?: string; error?: string; position?: number }>("/api/actions/fix", { repo, commentId, prNumber, branch, comment, ...(userInstructions ? { userInstructions } : {}) }),
+  getFixQueue: () => fetchJSON<QueuedFixItem[]>("/api/fix-queue"),
+  cancelQueuedFix: (commentId: number) =>
+    deleteJSON<{ success: boolean }>(`/api/fix-queue/${commentId}`, {}),
   fixApply: (repo: string, commentId: number, prNumber: number, branch: string) =>
     postJSON<{ success: boolean }>("/api/actions/fix-apply", { repo, commentId, prNumber, branch }),
   fixDiscard: (branch: string, commentId?: number) =>

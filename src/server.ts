@@ -7,6 +7,7 @@ import { fileURLToPath } from "url";
 import type { RepoInfo } from "./discovery.js";
 import { getRateLimitState } from "./exec.js";
 import { getRawSqlite, openStateDatabase } from "./db/client.js";
+import { getFixQueue } from "./fix-queue.js";
 
 declare module "http" {
   interface IncomingMessage {
@@ -364,6 +365,15 @@ export function getPollState() {
     ...pollState,
     estimatedGithubRequestsPerHour,
     fixJobs: Array.from(fixJobStatuses.values()),
+    fixQueue: getFixQueue().map((q) => ({
+      commentId: q.commentId,
+      repo: q.repo,
+      prNumber: q.prNumber,
+      path: q.path,
+      branch: q.branch,
+      position: q.position,
+      queuedAt: q.queuedAt,
+    })),
     pollPaused: pollState.pollPaused ?? false,
     pollPausedReason: pollState.pollPausedReason ?? null,
     rateLimited: rl.limited,

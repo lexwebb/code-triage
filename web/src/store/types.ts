@@ -9,6 +9,7 @@ import type {
 } from "../types";
 import type {
   FixJobStatus,
+  QueuedFixItem,
   AppConfigPayload,
   ConfigGetResponse,
   PollStatus,
@@ -182,12 +183,15 @@ export interface PollStatusSlice {
 
 export interface FixJobsSlice {
   jobs: FixJobStatus[];
+  queue: QueuedFixItem[];
   replyText: Record<number, string>;
   noChangesReply: Record<number, string>;
   acting: Record<number, boolean>;
   selectedJobId: number | null;
 
   setJobs: (jobs: FixJobStatus[]) => void;
+  setQueue: (items: QueuedFixItem[]) => void;
+  cancelQueued: (commentId: number) => Promise<void>;
   setReplyText: (commentId: number, text: string) => void;
   setNoChangesReply: (commentId: number, text: string) => void;
   setSelectedJobId: (id: number | null) => void;

@@ -1,5 +1,5 @@
 import { api } from "../api";
-import type { PollStatus } from "../api";
+import type { PollStatus, QueuedFixItem } from "../api";
 import type { SliceCreator, PollStatusSlice } from "./types";
 
 export const createPollStatusSlice: SliceCreator<PollStatusSlice> = (set, get) => ({
@@ -37,6 +37,13 @@ export const createPollStatusSlice: SliceCreator<PollStatusSlice> = (set, get) =
       } catch { /* ignore */ }
     });
 
+    es.addEventListener("fix-queue", (ev) => {
+      try {
+        const data = JSON.parse((ev as MessageEvent).data) as QueuedFixItem[];
+        get().setQueue(data);
+      } catch { /* ignore */ }
+    });
+
     es.addEventListener("eval-complete", (ev) => {
       try {
         const data = JSON.parse((ev as MessageEvent).data) as { repo?: string; prNumber?: number };
@@ -68,6 +75,10 @@ export const createPollStatusSlice: SliceCreator<PollStatusSlice> = (set, get) =
       const status = await api.getPollStatus();
       get().applyPollStatus(status);
     } catch { /* ignore */ }
+    try {
+      const queue = await api.getFixQueue();
+      get().setQueue(queue);
+    } catch { /* ignore */ }
   },
 
   applyPollStatus: (status: PollStatus) => {
@@ -92,6 +103,10 @@ export const createPollStatusSlice: SliceCreator<PollStatusSlice> = (set, get) =
     });
 
     get().setJobs(status.fixJobs);
+
+    if (status.fixQueue) {
+      get().setQueue(status.fixQueue);
+    }
 
     // Refresh pulls if backend has new data
     if (status.lastPoll > get()._lastPoll && get()._lastPoll > 0) {

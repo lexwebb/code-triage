@@ -3,10 +3,22 @@ import type { SliceCreator, FixJobsSlice } from "./types";
 
 export const createFixJobsSlice: SliceCreator<FixJobsSlice> = (set, get) => ({
   jobs: [],
+  queue: [],
   replyText: {},
   noChangesReply: {},
   acting: {},
   selectedJobId: null,
+
+  setQueue: (items) => set({ queue: items }),
+
+  cancelQueued: async (commentId) => {
+    try {
+      await api.cancelQueuedFix(commentId);
+      set((s) => ({ queue: s.queue.filter((q) => q.commentId !== commentId) }));
+    } catch (err) {
+      console.error("Cancel queued fix failed:", err);
+    }
+  },
 
   setJobs: (jobs) => {
     // Initialize noChangesReply for new no_changes jobs
