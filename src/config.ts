@@ -46,6 +46,12 @@ export interface Config {
   preferredEditor?: string;
   /** Max Q&A turns before Claude must attempt the fix (0 = unlimited). Default 5. */
   fixConversationMaxTurns?: number;
+  /** Personal Linear API key for ticket integration. */
+  linearApiKey?: string;
+  /** Limit ticket queries to these Linear team keys (e.g. ["ENG", "PROD"]). If omitted, all teams. */
+  linearTeamKeys?: string[];
+  /** Active ticket provider. Defaults to "linear" when linearApiKey is present. */
+  ticketProvider?: "linear";
 }
 
 const DEFAULTS: Config = {
