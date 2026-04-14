@@ -1,4 +1,4 @@
-import type { User, RepoInfo, PullRequest, PullRequestDetail, PullFile, ReviewComment, CrWatchState, CheckSuite } from "./types";
+import type { User, RepoInfo, PullRequest, PullRequestDetail, PullFile, ReviewComment, CrWatchState, CheckSuite, TicketIssue, TicketIssueDetail } from "./types";
 
 const BASE = "";
 
@@ -216,4 +216,11 @@ export const api = {
   unmutePR: (repo: string, number: number) =>
     deleteJSON<{ ok: boolean }>("/api/push/mute", { repo, number }),
   getMutedPRs: () => fetchJSON<{ muted: string[] }>("/api/push/muted"),
+  // Tickets
+  getTicketUser: () => fetchJSON<{ id: string; name: string; email: string }>("/api/tickets/me"),
+  getMyTickets: () => fetchJSON<TicketIssue[]>("/api/tickets/mine"),
+  getRepoLinkedTickets: () => fetchJSON<(TicketIssue & { linkedPRs: Array<{ number: number; repo: string; title: string }> })[]>("/api/tickets/repo-linked"),
+  getTicketDetail: (id: string) => fetchJSON<TicketIssueDetail>(`/api/tickets/${encodeURIComponent(id)}`),
+  getTicketTeams: () => fetchJSON<Array<{ id: string; key: string; name: string }>>("/api/tickets/teams"),
+  getTicketLinkMap: () => fetchJSON<{ ticketToPRs: Record<string, Array<{ number: number; repo: string; title: string }>>; prToTickets: Record<string, string[]> }>("/api/tickets/link-map"),
 };

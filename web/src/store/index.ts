@@ -8,6 +8,7 @@ import { createPollStatusSlice } from "./pollStatusSlice";
 import { createFixJobsSlice } from "./fixJobsSlice";
 import { createNotificationsSlice } from "./notificationsSlice";
 import { createUiSlice } from "./uiSlice";
+import { createTicketsSlice } from "./ticketsSlice";
 
 export const useAppStore = create<AppStore>()(
   subscribeWithSelector((...a) => ({
@@ -18,6 +19,7 @@ export const useAppStore = create<AppStore>()(
     ...createFixJobsSlice(...a),
     ...createNotificationsSlice(...a),
     ...createUiSlice(...a),
+    ...createTicketsSlice(...a),
   })),
 );
 

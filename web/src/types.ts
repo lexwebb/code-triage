@@ -124,3 +124,30 @@ export interface CrWatchState {
     timestamp: string;
   }>;
 }
+
+// ── Tickets ──
+
+export interface TicketIssue {
+  id: string;
+  identifier: string;
+  title: string;
+  state: { name: string; color: string; type: string };
+  priority: number;
+  assignee?: { name: string; avatarUrl?: string };
+  labels: Array<{ name: string; color: string }>;
+  updatedAt: string;
+  providerUrl: string;
+}
+
+export interface TicketComment {
+  id: string;
+  body: string;
+  author: { name: string; avatarUrl?: string };
+  createdAt: string;
+}
+
+export interface TicketIssueDetail extends TicketIssue {
+  description?: string;
+  comments: TicketComment[];
+  linkedPRs: Array<{ number: number; repo: string; title: string }>;
+}

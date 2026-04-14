@@ -1,4 +1,4 @@
-import { addRoute, json, getRepos, getBody, getPollState, getHealthPayload, setFixJobStatus, clearFixJobStatus, getActiveFixForBranch, subscribeSse, getListenPort, notifyConfigSaved, getFixJobStatus, getAllFixJobStatuses } from "./server.js";
+import { addRoute, json, getRepos, getBody, getPollState, getHealthPayload, setFixJobStatus, clearFixJobStatus, getActiveFixForBranch, subscribeSse, getListenPort, notifyConfigSaved, getFixJobStatus, getAllFixJobStatuses, getTicketState } from "./server.js";
 import { enqueueFix, isInFixQueue, advanceQueue, getFixQueue, removeFromFixQueue } from "./fix-queue.js";
 import { getVapidKeys } from "./vapid.js";
 import { savePushSubscription, deletePushSubscription, mutePR as dbMutePR, unmutePR as dbUnmutePR, getMutedPRs as dbGetMutedPRs } from "./push-db.js";
@@ -386,6 +386,16 @@ export function mergeConfigFromBody(body: Record<string, unknown>, previous: Con
 
   const fixConversationMaxTurns = toInt(body.fixConversationMaxTurns, previous.fixConversationMaxTurns ?? 5);
 
+  let linearApiKey: string | undefined = previous.linearApiKey;
+  if (typeof body.linearApiKey === "string" && body.linearApiKey.length > 0) {
+    linearApiKey = body.linearApiKey;
+  }
+
+  let linearTeamKeys: string[] | undefined = previous.linearTeamKeys;
+  if (Array.isArray(body.linearTeamKeys)) {
+    linearTeamKeys = body.linearTeamKeys.length > 0 ? body.linearTeamKeys : undefined;
+  }
+
   return {
     root,
     port,
@@ -405,6 +415,8 @@ export function mergeConfigFromBody(body: Record<string, unknown>, previous: Con
     pollRateLimitAware,
     preferredEditor,
     fixConversationMaxTurns,
+    linearApiKey,
+    linearTeamKeys,
   };
 }
 
@@ -1566,5 +1578,69 @@ export function registerRoutes(): void {
   addRoute("POST", "/api/push/test", (_req, res) => {
     sendTestPush();
     json(res, { ok: true });
+  });
+
+  // ── Tickets ──
+
+  addRoute("GET", "/api/tickets/me", async (_req, res) => {
+    const config = loadConfig();
+    const { getTicketProvider } = await import("./tickets/index.js");
+    const provider = await getTicketProvider(config);
+    if (!provider) return json(res, { error: "No ticket provider configured" }, 400);
+    try {
+      const user = await provider.getCurrentUser();
+      json(res, user);
+    } catch (err) {
+      json(res, { error: (err as Error).message }, 500);
+    }
+  });
+
+  addRoute("GET", "/api/tickets/mine", async (_req, res) => {
+    const { myIssues } = getTicketState();
+    json(res, myIssues);
+  });
+
+  addRoute("GET", "/api/tickets/repo-linked", async (_req, res) => {
+    const { repoLinkedIssues, linkMap } = getTicketState();
+    const enriched = repoLinkedIssues.map((issue) => ({
+      ...issue,
+      linkedPRs: linkMap.ticketToPRs.get(issue.identifier) ?? [],
+    }));
+    json(res, enriched);
+  });
+
+  addRoute("GET", "/api/tickets/teams", async (_req, res) => {
+    const config = loadConfig();
+    const { getTicketProvider } = await import("./tickets/index.js");
+    const provider = await getTicketProvider(config);
+    if (!provider) return json(res, { error: "No ticket provider configured" }, 400);
+    try {
+      const teams = await provider.getTeams();
+      json(res, teams);
+    } catch (err) {
+      json(res, { error: (err as Error).message }, 500);
+    }
+  });
+
+  addRoute("GET", "/api/tickets/link-map", async (_req, res) => {
+    const { linkMap } = getTicketState();
+    json(res, {
+      ticketToPRs: Object.fromEntries(linkMap.ticketToPRs),
+      prToTickets: Object.fromEntries(linkMap.prToTickets),
+    });
+  });
+
+  addRoute("GET", "/api/tickets/:id", async (_req, res, params) => {
+    const config = loadConfig();
+    const { getTicketProvider } = await import("./tickets/index.js");
+    const provider = await getTicketProvider(config);
+    if (!provider) return json(res, { error: "No ticket provider configured" }, 400);
+    try {
+      const detail = await provider.getIssueDetail(params.id);
+      const { linkMap } = getTicketState();
+      json(res, { ...detail, linkedPRs: linkMap.ticketToPRs.get(detail.identifier) ?? [] });
+    } catch (err) {
+      json(res, { error: (err as Error).message }, 500);
+    }
   });
 }

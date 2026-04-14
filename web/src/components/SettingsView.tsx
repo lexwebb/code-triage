@@ -261,6 +261,44 @@ export default function SettingsView({
           )}
         </section>
 
+        {/* Linear Integration */}
+        <section className="space-y-3">
+          <h2 className="text-xs text-gray-500 uppercase tracking-wide">Linear Integration</h2>
+          <div className="space-y-3">
+            <div>
+              <label className="block text-xs text-zinc-400 mb-1">
+                Linear API Key
+                {form.hasLinearApiKey && !form.linearApiKey && (
+                  <span className="ml-1 text-green-500">✓ configured</span>
+                )}
+              </label>
+              <input
+                type="password"
+                placeholder={form.hasLinearApiKey ? "(unchanged)" : "lin_api_..."}
+                value={form.linearApiKey}
+                onChange={(e) => updateField("linearApiKey", e.target.value)}
+                className="w-full px-3 py-1.5 bg-zinc-800 border border-zinc-700 rounded text-sm text-zinc-200 placeholder-zinc-500"
+              />
+              <p className="text-xs text-zinc-500 mt-1">
+                Generate at{" "}
+                <a href="https://linear.app/settings/api" target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:underline">
+                  linear.app/settings/api
+                </a>
+              </p>
+            </div>
+            <div>
+              <label className="block text-xs text-zinc-400 mb-1">Team Keys (optional)</label>
+              <input
+                type="text"
+                placeholder="ENG, PROD (comma-separated, blank = all teams)"
+                value={form.linearTeamKeys}
+                onChange={(e) => updateField("linearTeamKeys", e.target.value)}
+                className="w-full px-3 py-1.5 bg-zinc-800 border border-zinc-700 rounded text-sm text-zinc-200 placeholder-zinc-500"
+              />
+            </div>
+          </div>
+        </section>
+
         <section className="space-y-3">
           <div className="flex items-center justify-between">
             <h2 className="text-xs text-gray-500 uppercase tracking-wide">GitHub accounts</h2>
