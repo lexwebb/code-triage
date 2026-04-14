@@ -22,6 +22,7 @@ function elapsed(startedAt: number): string {
 function JobModal({ job, onClose, onJobAction }: { job: FixJobStatus; onClose: () => void; onJobAction: () => void }) {
   const [acting, setActing] = useState(false);
   const [replyText, setReplyText] = useState("");
+  const [noChangesReply, setNoChangesReply] = useState(job.suggestedReply ?? "");
   const repoShort = job.repo.split("/")[1] ?? job.repo;
 
   async function handleApply() {
@@ -70,6 +71,7 @@ function JobModal({ job, onClose, onJobAction }: { job: FixJobStatus; onClose: (
     running: "text-yellow-400",
     completed: "text-green-400",
     failed: "text-red-400",
+    no_changes: "text-blue-400",
     awaiting_response: "text-indigo-400",
   };
 
@@ -136,6 +138,20 @@ function JobModal({ job, onClose, onJobAction }: { job: FixJobStatus; onClose: (
             <div className="p-2 bg-red-500/10 border border-red-500/30 rounded text-xs text-red-400 whitespace-pre-wrap">
               {job.error}
             </div>
+          </div>
+        )}
+
+        {/* No changes — suggested reply */}
+        {job.status === "no_changes" && job.suggestedReply && (
+          <div className="px-4 py-3 border-b border-gray-800">
+            <div className="text-xs text-gray-500 mb-1">Claude determined no code changes are needed</div>
+            <div className="text-xs text-gray-500 mb-2">Review and optionally edit the reply before sending:</div>
+            <textarea
+              value={noChangesReply}
+              onChange={(e) => setNoChangesReply(e.target.value)}
+              rows={4}
+              className="w-full text-xs bg-gray-950 border border-gray-700 rounded px-2 py-1.5 text-gray-300 placeholder-gray-600 focus:outline-none focus:border-blue-500 resize-y"
+            />
           </div>
         )}
 
@@ -260,6 +276,34 @@ function JobModal({ job, onClose, onJobAction }: { job: FixJobStatus; onClose: (
             </Button>
           </div>
         )}
+
+        {job.status === "no_changes" && (
+          <div className="px-4 py-3 border-t border-gray-800 flex items-center justify-end gap-2">
+            <Button
+              variant="blue"
+              size="xs"
+              onClick={async () => {
+                if (!noChangesReply.trim()) return;
+                setActing(true);
+                try {
+                  await api.fixReplyAndResolve(job.repo, job.commentId, job.prNumber, noChangesReply.trim());
+                  onJobAction();
+                  onClose();
+                } catch (err) {
+                  console.error("Reply failed:", err);
+                } finally {
+                  setActing(false);
+                }
+              }}
+              disabled={acting || !noChangesReply.trim()}
+            >
+              {acting ? "Sending..." : "Send Reply & Resolve"}
+            </Button>
+            <Button variant="gray" size="xs" onClick={onClose}>
+              Dismiss
+            </Button>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -272,12 +316,14 @@ function JobRow({ job, onSelect }: { job: FixJobStatus; onSelect: () => void }) 
     running: "text-yellow-400",
     completed: "text-green-400",
     failed: "text-red-400",
+    no_changes: "text-blue-400",
     awaiting_response: "text-indigo-400",
   };
   const statusIcons: Record<string, React.ReactNode> = {
     running: <Clock size={12} />,
     completed: <Check size={12} />,
     failed: <X size={12} />,
+    no_changes: <HelpCircle size={12} />,
     awaiting_response: <HelpCircle size={12} />,
   };
 
@@ -287,7 +333,7 @@ function JobRow({ job, onSelect }: { job: FixJobStatus; onSelect: () => void }) 
       className="w-full flex items-center gap-3 px-4 py-1.5 text-xs hover:bg-gray-800/50 transition-colors text-left"
     >
       <span className={cn("flex items-center gap-1", statusColors[job.status] ?? "text-gray-400")}>
-        {statusIcons[job.status] ?? null} {job.status}
+        {statusIcons[job.status] ?? null} {job.status === "no_changes" ? "no changes" : job.status}
       </span>
       <span className="text-gray-400 font-mono">{repoShort}#{job.prNumber}</span>
       <span className="text-gray-500 truncate flex-1">{job.path}</span>
@@ -306,6 +352,7 @@ export default function FixJobsBanner({ fixJobs, onJobAction }: FixJobsBannerPro
   const awaiting = fixJobs.filter((j) => j.status === "awaiting_response").length;
   const completed = fixJobs.filter((j) => j.status === "completed").length;
   const failed = fixJobs.filter((j) => j.status === "failed").length;
+  const noChanges = fixJobs.filter((j) => j.status === "no_changes").length;
 
   return (
     <>
@@ -316,6 +363,7 @@ export default function FixJobsBanner({ fixJobs, onJobAction }: FixJobsBannerPro
           {awaiting > 0 && <span className="text-indigo-400">{awaiting} awaiting reply</span>}
           {completed > 0 && <span className="text-green-400">{completed} ready</span>}
           {failed > 0 && <span className="text-red-400">{failed} failed</span>}
+          {noChanges > 0 && <span className="text-blue-400">{noChanges} no changes</span>}
         </div>
         <div className="max-h-40 overflow-y-auto">
           {fixJobs.map((job) => (
