@@ -877,6 +877,7 @@ export function registerRoutes(): void {
         htmlUrl: c.html_url ?? "",
         author: c.user.login,
         authorAvatar: c.user.avatar_url ?? "",
+        isBot: c.user.type === "Bot" || c.user.login.endsWith("[bot]"),
         path: c.path,
         line: c.line || c.original_line || 0,
         diffHunk: c.diff_hunk,

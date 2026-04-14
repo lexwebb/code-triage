@@ -260,7 +260,7 @@ export async function fetchOpenPullRequestsForRepos(repoPaths: string[]): Promis
 /** REST-shaped review comment (poller + web API). */
 export interface PullReviewCommentRow {
   id: number;
-  user: { login: string; avatar_url?: string };
+  user: { login: string; avatar_url?: string; type?: string };
   path: string;
   line: number | null;
   original_line: number | null;
@@ -273,7 +273,7 @@ export interface PullReviewCommentRow {
 
 type GqlComment = {
   databaseId: number;
-  author: { login: string; avatarUrl?: string } | null;
+  author: { login: string; avatarUrl?: string; __typename?: string } | null;
   body: string;
   path: string;
   line: number | null;
@@ -290,6 +290,7 @@ function gqlCommentToRow(c: GqlComment): PullReviewCommentRow {
     user: {
       login: c.author?.login ?? "ghost",
       avatar_url: c.author?.avatarUrl,
+      type: c.author?.__typename === "Bot" ? "Bot" : "User",
     },
     path: c.path,
     line: c.line,
@@ -327,7 +328,7 @@ const PULL_POLL_FIELDS = `
           databaseId
           author {
             login
-            ... on User { avatarUrl }
+            avatarUrl
           }
           body
           path

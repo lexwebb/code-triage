@@ -72,6 +72,7 @@ export interface ReviewComment {
   htmlUrl?: string;
   author: string;
   authorAvatar: string;
+  isBot?: boolean;
   path: string;
   line: number;
   diffHunk: string;

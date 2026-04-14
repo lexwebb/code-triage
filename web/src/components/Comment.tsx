@@ -14,20 +14,29 @@ interface CommentProps {
 }
 
 const Comment = memo<CommentProps>(function Comment({ comment, compact }) {
-  const isBot = comment.author.includes("[bot]");
+  const isBot = comment.isBot ?? comment.author.includes("[bot]");
   const timeAgo = getTimeAgo(comment.createdAt);
 
   return (
     <div className={cn(compact ? "my-1" : "my-2 ml-8", "border border-gray-700 rounded-lg bg-gray-900/80 overflow-hidden")}>
       <div className="flex items-center gap-2 px-3 py-1.5 bg-gray-800/50 text-xs">
-        <img
-          src={comment.authorAvatar}
-          alt={comment.author}
-          className="w-4 h-4 rounded-full"
-        />
+        {comment.authorAvatar ? (
+          <img
+            src={comment.authorAvatar}
+            alt={comment.author}
+            className="w-4 h-4 rounded-full"
+          />
+        ) : (
+          <span className="w-4 h-4 rounded-full bg-gray-700 inline-block" />
+        )}
         <span className={cn("font-medium", isBot ? "text-purple-400" : "text-gray-300")}>
           {comment.author}
         </span>
+        {isBot && (
+          <span className="px-1 py-0.5 rounded text-[10px] font-medium bg-purple-500/20 text-purple-400 leading-none">
+            BOT
+          </span>
+        )}
         <span className="text-gray-500">{timeAgo}</span>
         {comment.htmlUrl && (
           <a
