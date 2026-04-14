@@ -5,7 +5,7 @@
 
 ## Overview
 
-Move all notification logic from the frontend (`useNotifications.ts`) and CLI (`notifier.ts` / `node-notifier`) to a centralized backend module that sends Web Push notifications via the Push API. The browser `Notification` API calls and `node-notifier` desktop toasts are replaced by server-driven push messages that work even when the browser tab is closed. `node-notifier` is retained as a fallback only when zero push subscriptions exist.
+Move all notification logic from the frontend zustand `notificationsSlice` and CLI `notifier.ts` (`node-notifier`) to a centralized backend module (`src/push.ts`) that sends Web Push notifications via the Push API. The browser `Notification` API calls and `node-notifier` desktop toasts are replaced by server-driven push messages that work even when the browser tab is closed. `node-notifier` is retained as a fallback only when zero push subscriptions exist.
 
 ## Goals
 
@@ -13,7 +13,18 @@ Move all notification logic from the frontend (`useNotifications.ts`) and CLI (`
 2. **Works with tab closed** — Web Push via service worker delivers OS-level notifications regardless of tab state.
 3. **Zero-config setup** — VAPID keys auto-generated on first run, stored in `~/.code-triage/`.
 4. **`node-notifier` fallback** — if no browser has subscribed for push, fall back to CLI desktop toasts (existing behavior).
-5. **Server-side muting** — muted PR list moves from `localStorage` to SQLite so the backend can respect it.
+5. **Server-side muting** — muted PR list moves from in-memory zustand state to SQLite so the backend can respect it.
+
+## Current State (post-zustand refactor)
+
+The frontend uses a Zustand store with 7 composable slices. Notification logic lives in:
+
+- **`web/src/store/notificationsSlice.ts`** (296 lines) — all state-diffing, `Notification` API calls, muting, reminders.
+- **`web/src/store/types.ts`** — `NotificationsSlice` interface (lines 201-226).
+- **`web/src/store/index.ts`** — subscribes `pullFetchGeneration` changes to `diffAndNotify()`.
+- **`src/notifier.ts`** — CLI-side `node-notifier` desktop toasts + console.log summaries, called from `cli.ts`.
+
+Muted PRs are in-memory only (`Set<string>` in zustand state) — not persisted across page reloads.
 
 ## Architecture
 
@@ -75,7 +86,7 @@ muted_prs (
 )
 ```
 
-Replaces the `localStorage`-based muted set in the frontend.
+Replaces the in-memory `mutedPRs: Set<string>` in the zustand notifications slice.
 
 ### Drizzle schema additions (`src/db/schema.ts`)
 
@@ -104,7 +115,7 @@ export const mutedPrs = sqliteTable("muted_prs", {
 
 ## 4. Backend Push Module (`src/push.ts`)
 
-### State Tracked (in-memory, mirrors what `useNotifications.ts` tracked)
+### State Tracked (in-memory, mirrors what `notificationsSlice.ts` currently tracks)
 
 ```ts
 interface PushState {
@@ -129,7 +140,7 @@ interface PushState {
 
 ### Event Detection Logic
 
-Mirrors the current `useNotifications.ts` diffing:
+Mirrors the current `notificationsSlice.ts` diffing:
 
 1. **New review requests:** diff `reviewPRKeys` — any key in current but not previous (and not muted) triggers a push.
 2. **CI status changes:** diff `prChecksStatus` — transition to `success` or `failure` (and not muted) triggers a push.
@@ -198,27 +209,51 @@ self.addEventListener("notificationclick", (event) => {
 
 ## 6. Frontend Changes
 
-### `useNotifications.ts` → `usePushSubscription.ts`
+### `notificationsSlice.ts` — gutted to push subscription management
 
-**Removed:** All state-diffing logic, `notify()` calls, review reminder interval, comment baseline tracking, inline `new Notification()` calls.
+**Removed:**
+- All state-diffing logic (`diffAndNotify`, `initializeBaseline`, and all `_previous*` state)
+- `notify()` function and all `new Notification()` calls
+- `startReminderInterval()` — backend owns this now
+- `checkPermissionPeriodically()` — replaced by push subscription status
+- `testNotification()` — backend sends push directly
 
 **Retained/rewritten:**
-- Service worker registration and push subscription management.
-- `mutePR()` / `unmutePR()` / `isPRMuted()` — rewritten to call backend API instead of `localStorage`.
-- Exports a `usePushSubscription()` hook that:
-  1. Registers the service worker on mount.
-  2. Fetches the VAPID public key from the backend.
-  3. Subscribes to push via `pushManager.subscribe()`.
-  4. POSTs the subscription to `/api/push/subscribe`.
-  5. Returns subscription status for the UI to display.
+- `mutePR()` / `unmutePR()` / `isPRMuted()` — rewritten to call backend API (`/api/push/mute` etc.) and cache in zustand state. On mount, fetches muted list from `GET /api/push/muted` to hydrate.
+- `permission` state — now tracks push subscription status rather than `Notification.permission`.
+
+**New state and actions:**
+- `pushSubscribed: boolean` — whether the browser has an active push subscription.
+- `subscribePush()` — registers service worker, subscribes via `pushManager.subscribe()`, POSTs to backend.
+- `unsubscribePush()` — unsubscribes and DELETEs from backend.
+
+### `NotificationsSlice` type changes (`web/src/store/types.ts`)
+
+```ts
+export interface NotificationsSlice {
+  mutedPRs: Set<string>;
+  permission: NotificationPermission;
+  pushSubscribed: boolean;
+
+  subscribePush: () => Promise<void>;
+  unsubscribePush: () => Promise<void>;
+  mutePR: (repo: string, number: number) => void;
+  unmutePR: (repo: string, number: number) => void;
+  isPRMuted: (repo: string, number: number) => boolean;
+  requestPermission: () => Promise<void>;
+  loadMutedPRs: () => Promise<void>;
+}
+```
+
+### `store/index.ts`
+
+- Remove the `pullFetchGeneration` subscription that triggers `diffAndNotify()` — backend handles this now.
 
 ### `App.tsx`
 
-- Remove inline fix-job notification logic (~lines 390-410).
-- Remove `testNotification` consumption from poll status.
-- Replace `useNotifications()` call with `usePushSubscription()`.
-- Keep notification permission banner — reworded for push notifications. Flow: request permission → register SW → subscribe to push → POST to backend.
-- Test notification button calls `POST /api/push/test` (or reuses `triggerTestNotification()`) instead of inline `new Notification()`.
+- Keep notification permission banner — reworded for push notifications. Flow: request permission → subscribe to push → POST to backend.
+- Test notification button calls backend `triggerTestNotification()` (which now sends a push) instead of inline `new Notification()`.
+- Remove any remaining inline `new Notification()` calls.
 
 ### `web/src/api.ts`
 
@@ -239,6 +274,6 @@ The console.log summary output in `notifyNewComments()` (the `=== CodeRabbit: N 
 
 ## 9. Migration
 
-- Existing `localStorage` muted PRs are not migrated automatically. Users re-mute from the web UI (minor inconvenience, one-time).
+- Muted PRs currently live in zustand memory only (not persisted). Moving to SQLite is an improvement — no migration needed, users just re-mute.
 - No breaking API changes — new endpoints only.
 - The `testNotification` field on poll status becomes unused but can be removed without breaking anything (frontend just stops reading it).
