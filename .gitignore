@@ -4,3 +4,5 @@ dist
 web/node_modules
 web/dist
 .claude/
+.worktrees/
+.superpowers/
