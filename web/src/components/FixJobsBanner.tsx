@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import type { FixJobStatus } from "../api";
 import { api } from "../api";
-import { Clock, Check, X } from "lucide-react";
+import { Clock, Check, X, HelpCircle } from "lucide-react";
 import { IconButton } from "./ui/icon-button";
 import { Button } from "./ui/button";
 
@@ -20,6 +20,7 @@ function elapsed(startedAt: number): string {
 
 function JobModal({ job, onClose, onJobAction }: { job: FixJobStatus; onClose: () => void; onJobAction: () => void }) {
   const [acting, setActing] = useState(false);
+  const [replyText, setReplyText] = useState("");
   const repoShort = job.repo.split("/")[1] ?? job.repo;
 
   async function handleApply() {
@@ -54,6 +55,7 @@ function JobModal({ job, onClose, onJobAction }: { job: FixJobStatus; onClose: (
     running: "text-yellow-400",
     completed: "text-green-400",
     failed: "text-red-400",
+    awaiting_response: "text-indigo-400",
   };
 
   return (
@@ -94,6 +96,27 @@ function JobModal({ job, onClose, onJobAction }: { job: FixJobStatus; onClose: (
             <span className="text-gray-300 font-mono">{job.path}</span>
           </div>
         </div>
+
+        {/* Conversation */}
+        {job.conversation && job.conversation.length > 0 && (
+          <div className="px-4 py-3 border-b border-gray-800">
+            <div className="text-xs text-gray-500 mb-1">Conversation</div>
+            <div className="space-y-1.5 max-h-48 overflow-y-auto">
+              {job.conversation.map((msg, i) => (
+                <div key={i} className={`text-xs p-2 rounded ${
+                  msg.role === "claude"
+                    ? "bg-gray-800/60 text-gray-300 mr-8"
+                    : "bg-indigo-900/30 text-indigo-200 ml-8"
+                }`}>
+                  <span className="text-[10px] text-gray-500 block mb-0.5">
+                    {msg.role === "claude" ? "Claude" : "You"}
+                  </span>
+                  {msg.message}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* Error */}
         {job.status === "failed" && job.error && (
@@ -155,6 +178,47 @@ function JobModal({ job, onClose, onJobAction }: { job: FixJobStatus; onClose: (
           </div>
         )}
 
+        {/* Awaiting response reply */}
+        {job.status === "awaiting_response" && (
+          <div className="px-4 py-3 border-t border-gray-800">
+            <div className="flex gap-2 items-end">
+              <textarea
+                value={replyText}
+                onChange={(e) => setReplyText(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && replyText.trim()) {
+                    setActing(true);
+                    void api.fixReply(job.repo, job.commentId, replyText.trim()).then(() => {
+                      setReplyText("");
+                      onJobAction();
+                    }).catch((err) => console.error("Reply failed:", err)).finally(() => setActing(false));
+                  }
+                }}
+                placeholder="Reply to Claude's questions..."
+                disabled={acting}
+                rows={2}
+                autoFocus
+                className="flex-1 text-xs bg-gray-950 border border-gray-700 rounded px-2 py-1 text-gray-300 placeholder-gray-600 focus:outline-none focus:border-indigo-500 resize-y"
+              />
+              <Button
+                variant="blue"
+                size="xs"
+                onClick={() => {
+                  if (!replyText.trim()) return;
+                  setActing(true);
+                  void api.fixReply(job.repo, job.commentId, replyText.trim()).then(() => {
+                    setReplyText("");
+                    onJobAction();
+                  }).catch((err) => console.error("Reply failed:", err)).finally(() => setActing(false));
+                }}
+                disabled={acting || !replyText.trim()}
+              >
+                {acting ? "Sending..." : "Send Reply"}
+              </Button>
+            </div>
+          </div>
+        )}
+
         {/* Actions */}
         {job.status === "completed" && (
           <div className="px-4 py-3 border-t border-gray-800 flex items-center justify-end gap-2">
@@ -208,11 +272,13 @@ function JobRow({ job, onSelect }: { job: FixJobStatus; onSelect: () => void }) 
     running: "text-yellow-400",
     completed: "text-green-400",
     failed: "text-red-400",
+    awaiting_response: "text-indigo-400",
   };
   const statusIcons: Record<string, React.ReactNode> = {
     running: <Clock size={12} />,
     completed: <Check size={12} />,
     failed: <X size={12} />,
+    awaiting_response: <HelpCircle size={12} />,
   };
 
   return (
@@ -236,6 +302,7 @@ export default function FixJobsBanner({ fixJobs, onJobAction }: FixJobsBannerPro
   if (fixJobs.length === 0) return null;
 
   const running = fixJobs.filter((j) => j.status === "running").length;
+  const awaiting = fixJobs.filter((j) => j.status === "awaiting_response").length;
   const completed = fixJobs.filter((j) => j.status === "completed").length;
   const failed = fixJobs.filter((j) => j.status === "failed").length;
 
@@ -245,6 +312,7 @@ export default function FixJobsBanner({ fixJobs, onJobAction }: FixJobsBannerPro
         <div className="px-4 py-1 text-xs text-gray-500 flex items-center gap-3 border-b border-gray-800/50">
           <span className="uppercase tracking-wide">Fix Jobs</span>
           {running > 0 && <span className="text-yellow-400">{running} running</span>}
+          {awaiting > 0 && <span className="text-indigo-400">{awaiting} awaiting reply</span>}
           {completed > 0 && <span className="text-green-400">{completed} ready</span>}
           {failed > 0 && <span className="text-red-400">{failed} failed</span>}
         </div>

@@ -1,16 +1,18 @@
+import { memo } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
 import rehypeRaw from "rehype-raw";
 import type { ReviewComment } from "../types";
 import { ExternalLink } from "lucide-react";
+import { Checkbox } from "./ui/checkbox";
 
 interface CommentProps {
   comment: ReviewComment;
   compact?: boolean;
 }
 
-export default function Comment({ comment, compact }: CommentProps) {
+const Comment = memo<CommentProps>(function Comment({ comment, compact }) {
   const isBot = comment.author.includes("[bot]");
   const timeAgo = getTimeAgo(comment.createdAt);
 
@@ -95,7 +97,7 @@ export default function Comment({ comment, compact }: CommentProps) {
             ),
             input: ({ type, checked, ...props }) => {
               if (type === "checkbox") {
-                return <input type="checkbox" checked={checked} readOnly className="mr-1" {...props} />;
+                return <Checkbox checked={checked ?? false} disabled className="mr-1 inline-flex align-text-bottom" />;
               }
               return <input type={type} {...props} />;
             },
@@ -115,7 +117,9 @@ export default function Comment({ comment, compact }: CommentProps) {
       </div>
     </div>
   );
-}
+}, (prev, next) => prev.comment.id === next.comment.id && prev.comment.body === next.comment.body && prev.compact === next.compact);
+
+export default Comment;
 
 function getTimeAgo(dateStr: string): string {
   const date = new Date(dateStr);

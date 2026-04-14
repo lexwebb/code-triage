@@ -66,6 +66,7 @@ yarn dev                  # Runs tsc watch + CLI auto-restart + Vite HMR concurr
 - State comment keys are prefixed with repo: `owner/repo:commentId`
 - Web frontend uses `sessionStorage` for caching, polls backend for status
 - Tailwind CSS v4 with `@tailwindcss/vite` plugin (no postcss config needed)
+- **shadcn/ui first**: Always check for a shadcn component (`npx shadcn@latest add <name>`) before creating a custom one in `web/src/components/ui/`. This applies to all UI elements including inline components (e.g. checkboxes in markdown renderers).
 
 ## Testing
 

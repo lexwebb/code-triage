@@ -2,6 +2,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeRaw from "rehype-raw";
 import type { PullRequestDetail } from "../types";
+import { Checkbox } from "./ui/checkbox";
 
 interface PROverviewProps {
   pr: PullRequestDetail;
@@ -61,7 +62,7 @@ export default function PROverview({ pr }: PROverviewProps) {
               <img alt={alt} src={src} className="max-w-full rounded my-2" {...props} />
             ),
             input: ({ type, checked, ...props }) => {
-              if (type === "checkbox") return <input type="checkbox" checked={checked} readOnly className="mr-1.5" {...props} />;
+              if (type === "checkbox") return <Checkbox checked={checked ?? false} disabled className="mr-1.5 inline-flex align-text-bottom" />;
               return <input type={type} {...props} />;
             },
             details: ({ children, ...props }) => (

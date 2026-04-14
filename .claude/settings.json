@@ -6,7 +6,14 @@
       "Bash(git commit -m ':*)",
       "Bash(npm run:*)",
       "Bash(yarn build:all)",
-      "Bash(npx shadcn@latest add switch --yes)"
+      "Bash(npx shadcn@latest add switch --yes)",
+      "mcp__onui-local__onui_list_pages",
+      "mcp__onui-local__onui_get_report",
+      "mcp__onui-local__onui_get_annotations",
+      "mcp__onui-local__onui_update_annotation_metadata",
+      "Bash(yarn test:*)",
+      "Bash(yarn build:*)",
+      "Read(//tmp/**)"
     ]
   }
 }
