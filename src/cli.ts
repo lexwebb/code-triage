@@ -5,6 +5,7 @@ import { loadState, saveState, needsEvaluation, getCommentsByStatus, compactComm
 import { fetchNewComments, fetchNewCommentsBatch, getGitHubLogin } from "./poller.js";
 import { clampEvalConcurrency, killAllChildren } from "./actioner.js";
 import { enqueueMany, recoverQueue, startWorker, stopWorker } from "./eval-queue.js";
+import { loadFixQueue, advanceQueue as advanceFixQueue } from "./fix-queue.js";
 import { cleanupAllWorktrees, pruneOrphanedWorktrees } from "./worktree.js";
 import { setTokenResolver, resolveGitHubTokenFromSources, hasEnvGitHubToken, getRateLimitState } from "./exec.js";
 import {
@@ -295,6 +296,7 @@ if (isDev) {
 
 startServer(port, repos);
 loadPersistedFixJobResults();
+loadFixQueue();
 initPush();
 const stopReviewReminder = startReviewReminder();
 
@@ -309,6 +311,7 @@ const stopReviewReminder = startReviewReminder();
 
 recoverQueue();
 startWorker();
+advanceFixQueue();
 
 let running = false;
 let shuttingDown = false;
