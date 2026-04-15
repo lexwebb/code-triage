@@ -78,8 +78,15 @@ export const createPollStatusSlice: SliceCreator<PollStatusSlice> = (set, get) =
       void getQueryClient().invalidateQueries({ queryKey: qk.team.root });
     });
 
-    es.addEventListener("poll", () => {
+    es.addEventListener("poll", (ev) => {
       void getQueryClient().invalidateQueries({ queryKey: qk.attention.root });
+      try {
+        const data = JSON.parse((ev as MessageEvent).data) as { ok?: boolean };
+        if (data.ok === false) return;
+      } catch {
+        /* ignore parse errors */
+      }
+      void invalidatePullBundleQueries(getQueryClient());
     });
 
     es.onerror = () => { /* browser auto-reconnects */ };
@@ -141,8 +148,8 @@ export const createPollStatusSlice: SliceCreator<PollStatusSlice> = (set, get) =
       get().setQueue(status.fixQueue);
     }
 
-    // Refresh pulls if backend has new data. Attention follows the `poll` SSE (after coherence writes).
-    if (status.lastPoll > get()._lastPoll && get()._lastPoll > 0) {
+    // Refresh pulls when `lastPoll` advances (including 0 → first timestamp after connect).
+    if (status.lastPoll > get()._lastPoll) {
       void invalidatePullBundleQueries(getQueryClient());
       void get().refreshIfMatch(
         get().selectedPR?.repo ?? "",
