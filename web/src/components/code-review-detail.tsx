@@ -36,10 +36,19 @@ export function CodeReviewDetail({ owner, repo, number, tab, file }: Props) {
       const fullRepo = `${owner}/${repo}`;
       void useAppStore.getState().selectPR(number, fullRepo);
     } else {
-      // No PR selected — clear selection
-      useAppStore.getState().setRepoFilter(owner && repo ? `${owner}/${repo}` : "");
+      // No PR in URL — if store has a selectedPR, navigate to it so URL reflects state
+      const current = useAppStore.getState().selectedPR;
+      if (current) {
+        const [o, r] = current.repo.split("/");
+        void navigate({
+          to: "/reviews/$owner/$repo/pull/$number",
+          params: { owner: o!, repo: r!, number: String(current.number) },
+          search: { tab: "threads", file: undefined },
+          replace: true,
+        });
+      }
     }
-  }, [owner, repo, number]);
+  }, [owner, repo, number, navigate]);
 
   // Sync repo filter from route params
   useEffect(() => {
