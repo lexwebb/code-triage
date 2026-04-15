@@ -359,6 +359,69 @@ export const createPrDetailSlice: SliceCreator<PrDetailSlice> = (set, get) => ({
     }
   },
 
+  startBatchFix: async (threads, userInstructions) => {
+    const pr = get().selectedPR;
+    const detail = get().detail;
+    if (!pr || !detail || threads.length < 2) return;
+    const sorted = [...threads].sort((a, b) => a.commentId - b.commentId);
+    const ids = sorted.map((t) => t.commentId);
+    const primary = ids[0]!;
+    const uniquePaths = [...new Set(sorted.map((t) => t.path))];
+    const displayPath = `${sorted.length} threads (${uniquePaths.slice(0, 2).join(", ")}${uniquePaths.length > 2 ? ", …" : ""})`;
+
+    set((s) => {
+      const nextFixing = new Set(s.fixingThreads);
+      for (const id of ids) nextFixing.add(id);
+      const nextErrors = { ...s.fixErrors };
+      for (const id of ids) nextErrors[id] = null;
+      return { fixingThreads: nextFixing, fixErrors: nextErrors };
+    });
+    try {
+      const result = await api.batchFixWithClaude({
+        repo: pr.repo,
+        prNumber: pr.number,
+        branch: detail.branch,
+        threads: sorted,
+        ...(userInstructions ? { userInstructions } : {}),
+      });
+      if (result.success) {
+        get().setJobs([
+          ...get().jobs.filter(
+            (j) => !ids.includes(j.commentId) && !(j.batchCommentIds?.some((c) => ids.includes(c))),
+          ),
+          {
+            commentId: primary,
+            batchCommentIds: ids,
+            repo: pr.repo,
+            prNumber: pr.number,
+            path: displayPath,
+            startedAt: Date.now(),
+            status: "running",
+            branch: result.branch,
+          },
+        ]);
+        set((s) => {
+          const next = new Set(s.fixModalOpenThreads);
+          for (const id of ids) next.delete(id);
+          return { fixModalOpenThreads: next };
+        });
+      }
+    } catch (err) {
+      const msg = (err as Error).message;
+      set((s) => {
+        const next = { ...s.fixErrors };
+        for (const id of ids) next[id] = msg;
+        return { fixErrors: next };
+      });
+    } finally {
+      set((s) => {
+        const next = new Set(s.fixingThreads);
+        for (const id of ids) next.delete(id);
+        return { fixingThreads: next };
+      });
+    }
+  },
+
   startFix: async (commentId, comment, userInstructions) => {
     const pr = get().selectedPR;
     const detail = get().detail;

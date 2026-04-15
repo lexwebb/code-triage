@@ -503,6 +503,95 @@ Respond as JSON: { "action": "fix" | "questions", "message": "..." }`;
   return { ...parsed, rawOutput };
 }
 
+export type BatchFixThreadInput = {
+  commentId: number;
+  path: string;
+  line: number;
+  body: string;
+  diffHunk: string;
+};
+
+/**
+ * One Claude session applying multiple review threads in the same worktree (single diff / push).
+ */
+export async function applyBatchFixWithClaude(
+  worktreePath: string,
+  threads: BatchFixThreadInput[],
+  userInstructions?: string,
+  options?: { sessionId?: string; resumeSessionId?: string; isLastTurn?: boolean },
+): Promise<{ action: "fix" | "questions"; message: string; rawOutput: string }> {
+  let prompt: string;
+  const args: string[] = [];
+
+  if (options?.resumeSessionId) {
+    prompt = (userInstructions ?? "").trimEnd();
+    if (prompt.length > 0) {
+      prompt += "\n\n";
+    }
+    prompt += FIX_RESUME_VALIDATION_NUDGE;
+    if (options.isLastTurn) {
+      prompt +=
+        "\n\nIMPORTANT: This is the final turn. You must now attempt the fixes with what you know. Do not ask more questions. Respond with action \"fix\". Run documented tests and validation before responding; fix any failures your changes caused.";
+    }
+    args.push(
+      "-p",
+      prompt,
+      ...fixClaudePermissionArgv(),
+      "--resume",
+      options.resumeSessionId,
+      "--output-format",
+      "json",
+      "--json-schema",
+      FIX_JSON_SCHEMA,
+    );
+  } else {
+    const userBlock = userInstructions?.trim()
+      ? `\n\nAdditional instructions from the developer:\n${userInstructions.trim()}`
+      : "";
+    const blocks = threads
+      .map((t, i) => {
+        const bodyLines = t.body.split("\n").slice(0, 12).join("\n  ");
+        return `### Thread ${i + 1} (commentId ${t.commentId})
+- File: ${t.path}, line ${t.line}
+- Comment:
+  ${bodyLines}
+
+Diff context:
+${t.diffHunk}`;
+      })
+      .join("\n\n");
+
+    prompt = `You are applying several CodeRabbit review suggestions on the same branch. Address all of them in one coherent change set — minimal edits, consistent style, no unrelated refactors. Prefer changes that can ship in a single commit so the PR stays easy to review.
+
+${blocks}${userBlock}
+
+${FIX_VALIDATION_INSTRUCTIONS}
+
+If any thread is ambiguous or threads conflict in a way you cannot reconcile without a decision, respond with action "questions" and explain. Otherwise implement all addressable items and respond with action "fix".
+
+Respond as JSON: { "action": "fix" | "questions", "message": "..." }`;
+    args.push("-p", prompt, ...fixClaudePermissionArgv(), "--output-format", "json", "--json-schema", FIX_JSON_SCHEMA);
+    if (options?.sessionId) {
+      args.push("--session-id", options.sessionId);
+    }
+  }
+
+  updateClaudeStats({ fixStarted: true });
+  let rawOutput: string;
+  try {
+    rawOutput = await spawnTracked("claude", args, {
+      cwd: worktreePath,
+      stdio: ["pipe", "pipe", "pipe"],
+      stderrToConsole: true,
+    });
+  } finally {
+    updateClaudeStats({ fixFinished: true });
+  }
+
+  const parsed = parseFixResponse(rawOutput);
+  return { ...parsed, rawOutput };
+}
+
 /**
  * PR assistant panel (reviews page): one-shot prose from Claude. Uses the same JSON CLI wrapper as evaluation (`result` string).
  * Read-only triage — no repo tools or permissions flags.

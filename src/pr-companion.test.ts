@@ -5,6 +5,7 @@ import {
   buildCompanionPrompt,
   parseAndStripQueueFixDirectives,
   COMPANION_QUEUE_FIXES_FENCE,
+  COMPANION_BATCH_FIX_FENCE,
 } from "./pr-companion.js";
 
 describe("pr-companion", () => {
@@ -43,16 +44,41 @@ describe("pr-companion", () => {
 \`\`\`${COMPANION_QUEUE_FIXES_FENCE}
 {"queueFixes":[{"commentId":42,"userInstructions":"use X"}]}
 \`\`\``;
-    const { displayText, queueFixes } = parseAndStripQueueFixDirectives(raw);
+    const { displayText, queueFixes, batchFix } = parseAndStripQueueFixDirectives(raw);
     expect(displayText).toContain("Here is the plan");
     expect(displayText).not.toContain("queueFixes");
     expect(queueFixes).toEqual([{ commentId: 42, userInstructions: "use X" }]);
+    expect(batchFix).toBeNull();
   });
 
   it("parseAndStripQueueFixDirectives caps list length and instruction size", () => {
     const many = Array.from({ length: 20 }, (_, i) => ({ commentId: i + 1 }));
     const raw = `\`\`\`${COMPANION_QUEUE_FIXES_FENCE}\n${JSON.stringify({ queueFixes: many })}\n\`\`\``;
-    const { queueFixes } = parseAndStripQueueFixDirectives(raw);
+    const { queueFixes, batchFix } = parseAndStripQueueFixDirectives(raw);
     expect(queueFixes.length).toBe(12);
+    expect(batchFix).toBeNull();
+  });
+
+  it("parseAndStripQueueFixDirectives extracts batchFix and ignores queue when batch present", () => {
+    const raw = `Ok.
+
+\`\`\`${COMPANION_BATCH_FIX_FENCE}
+{"commentIds":[10,20],"userInstructions":"merge"}
+\`\`\`
+
+\`\`\`${COMPANION_QUEUE_FIXES_FENCE}
+{"queueFixes":[{"commentId":99}]}
+\`\`\``;
+    const { displayText, queueFixes, batchFix } = parseAndStripQueueFixDirectives(raw);
+    expect(displayText).toContain("Ok");
+    expect(batchFix).toEqual({ commentIds: [10, 20], userInstructions: "merge" });
+    expect(queueFixes).toEqual([]);
+  });
+
+  it("parseAndStripQueueFixDirectives rejects batch with only one id", () => {
+    const raw = `\`\`\`${COMPANION_BATCH_FIX_FENCE}\n{"commentIds":[5]}\n\`\`\``;
+    const { batchFix, queueFixes } = parseAndStripQueueFixDirectives(raw);
+    expect(batchFix).toBeNull();
+    expect(queueFixes).toEqual([]);
   });
 });

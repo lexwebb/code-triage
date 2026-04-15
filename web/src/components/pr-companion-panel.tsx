@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, type PrCompanionChatMessage, type PrCompanionQueueFix } from "../api";
+import { api, type PrCompanionChatMessage, type PrCompanionBatchFix, type PrCompanionQueueFix } from "../api";
 import { useAppStore } from "../store";
 import { Button } from "./ui/button";
 import { cn } from "../lib/utils";
@@ -14,6 +14,7 @@ const SUGGESTED_PROMPTS = [
   "What should I double-check before running fixes on this PR?",
   "Group these review threads by file and call out the riskiest changes first.",
   "When I agree, queue Fix-with-Claude for the fix threads we discussed, and fold our chat into userInstructions where helpful.",
+  "When I agree, start one batch fix (single push) for the threads we listed — use the batch directive, not separate queue entries.",
 ];
 
 async function runPrCompanionQueueFixes(items: PrCompanionQueueFix[], repo: string, prNumber: number): Promise<void> {
@@ -30,6 +31,28 @@ async function runPrCompanionQueueFixes(items: PrCompanionQueueFix[], repo: stri
       userInstructions,
     );
   }
+}
+
+async function runPrCompanionBatchFix(batch: PrCompanionBatchFix, repo: string, prNumber: number): Promise<void> {
+  const st = useAppStore.getState();
+  const pr = st.selectedPR;
+  const detail = st.detail;
+  if (!pr || pr.repo !== repo || pr.number !== prNumber || !detail?.branch) return;
+  const threads = batch.commentIds
+    .map((id) => {
+      const c = st.comments.find((x) => x.id === id);
+      if (!c || c.inReplyToId != null) return null;
+      return {
+        commentId: id,
+        path: c.path,
+        line: c.line,
+        body: c.body,
+        diffHunk: c.diffHunk ?? "",
+      };
+    })
+    .filter((t): t is NonNullable<typeof t> => t != null);
+  if (threads.length < 2) return;
+  await st.startBatchFix(threads, batch.userInstructions);
 }
 
 function formatSnapshotTime(ms: number | null): string {
@@ -115,11 +138,18 @@ export function PrCompanionPanel({
       setMessages(out.messages);
       setBundleUpdatedAtMs(out.bundleUpdatedAtMs);
       setBundleThreadCount(out.bundleThreadCount);
-      const q = out.queueFixes;
-      if (q && q.length > 0) {
-        void runPrCompanionQueueFixes(q, repo, prNumber).catch((err) => {
-          console.error("PR assistant queue fixes:", err);
+      const batch = out.batchFix;
+      if (batch && batch.commentIds.length >= 2) {
+        void runPrCompanionBatchFix(batch, repo, prNumber).catch((err) => {
+          console.error("PR assistant batch fix:", err);
         });
+      } else {
+        const q = out.queueFixes;
+        if (q && q.length > 0) {
+          void runPrCompanionQueueFixes(q, repo, prNumber).catch((err) => {
+            console.error("PR assistant queue fixes:", err);
+          });
+        }
       }
     } catch (e) {
       setError((e as Error).message);

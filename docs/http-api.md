@@ -43,6 +43,7 @@ The CLI embeds an HTTP server (default port **3100**, configurable). All routes 
 | `/api/actions/batch` | `action`, `items[]` | Same as reply/resolve/dismiss for many comments. |
 | `/api/actions/re-evaluate` | `repo`, `commentId`, `prNumber` | Fetch comment from GitHub, run Claude, update evaluation. |
 | `/api/actions/fix` | `repo`, `commentId`, `prNumber`, `branch`, `comment{path,line,body,diffHunk}` | Start async worktree + Claude fix; returns immediately with `status: running`. |
+| `/api/actions/batch-fix` | `repo`, `prNumber`, `branch`, `threads` (`{ commentId, path, line, body, diffHunk }[]`, min 2, max 12) | One Claude run over multiple review threads in a single worktree; one diff / one apply. Returns `status: running`. Requires no other in-flight fix. |
 | `/api/actions/fix-apply` | `repo`, `commentId`, `prNumber`, `branch` | Commit, push, remove worktree, mark `fixed`. |
 | `/api/actions/fix-discard` | `branch`, optional `repo`, `commentId` | Remove worktree; clear fix status if `commentId` set. |
 | `/api/actions/review` | `repo`, `prNumber`, `event` (`APPROVE` \| `REQUEST_CHANGES` \| `COMMENT`), optional `body` | Submit PR review. |
@@ -51,16 +52,16 @@ The CLI embeds an HTTP server (default port **3100**, configurable). All routes 
 
 ## Reviews PR assistant (`POST`)
 
-Companion chat for the web reviews page: summarizes review threads and answers questions in prose. The model may include a machine-readable **queue-fixes** fenced block; the server strips it from `messages` / `assistantMessage` and returns the parsed list as **`queueFixes`**. The web UI then calls the same **`POST /api/actions/fix`** flow as the thread buttons (start or enqueue with optional `userInstructions`). Nothing is auto-applied to GitHub from this endpoint alone.
+Companion chat for the web reviews page: summarizes review threads and answers questions in prose. The model may include a machine-readable **queue-fixes** or **batch-fix** fenced block; the server strips it from `messages` / `assistantMessage`. **`queueFixes`** drives per-thread **`POST /api/actions/fix`** calls (same as thread buttons). **`batchFix`** drives **`POST /api/actions/batch-fix`** so multiple threads are addressed in one job (single push when applied). If both blocks appear in one reply, **batch wins** and queue entries are ignored. Nothing is auto-applied to GitHub from the companion endpoint alone.
 
 | Path | Body (summary) | Response |
 |------|----------------|----------|
-| `/api/reviews/companion/message` | `repo`, `prNumber`, `userMessage`, optional `threadBundle` (array of thread objects from the UI), optional `refreshContext` | `assistantMessage`, `messages` (full transcript), `contextNote`, `bundleThreadCount`, `bundleUpdatedAtMs`, optional `queueFixes` (`{ commentId, userInstructions? }[]`) |
+| `/api/reviews/companion/message` | `repo`, `prNumber`, `userMessage`, optional `threadBundle` (array of thread objects from the UI), optional `refreshContext` | `assistantMessage`, `messages` (full transcript), `contextNote`, `bundleThreadCount`, `bundleUpdatedAtMs`, optional `queueFixes`, optional `batchFix` (`{ commentIds: number[], userInstructions? }`) |
 | `/api/reviews/companion/reset` | `repo`, `prNumber` | `{ ok: true }` — clears stored session for that PR |
 
 **`threadBundle`:** Required for the first message in a PR session (or whenever `refreshContext` is `true`). Omit on later turns to reuse the last stored bundle; the web UI typically sends an updated bundle on every message to keep context fresh.
 
-**Queue directive:** Fence label `code-triage-queue-fixes`, body JSON `{"queueFixes":[{"commentId":123,"userInstructions":"optional"}]}`. Documented in the PR assistant system prompt; not shown in the saved chat transcript.
+**Queue directive:** Fence label `code-triage-queue-fixes`, body JSON `{"queueFixes":[{"commentId":123,"userInstructions":"optional"}]}`. **Batch directive:** Fence label `code-triage-batch-fix`, body JSON `{"commentIds":[123,456],"userInstructions":"optional"}` (at least two ids). Documented in the PR assistant system prompt; not shown in the saved chat transcript.
 
 **Errors:** **413** if the serialized bundle exceeds the server limit; **400** for missing `repo` / `prNumber` / `userMessage` or invalid body.
 

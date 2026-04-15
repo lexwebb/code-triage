@@ -1,4 +1,4 @@
-import { addRoute, json, getRepos, getBody, getPollState, getHealthPayload, setFixJobStatus, clearFixJobStatus, getActiveFixForBranch, subscribeSse, getListenPort, notifyConfigSaved, getFixJobStatus, getAllFixJobStatuses, getTicketState, triggerManualPoll } from "./server.js";
+import { addRoute, json, getRepos, getBody, getPollState, getHealthPayload, setFixJobStatus, clearFixJobStatus, getActiveFixForBranch, subscribeSse, getListenPort, notifyConfigSaved, getFixJobStatus, getFixJobStatusForComment, getAllFixJobStatuses, getTicketState, triggerManualPoll } from "./server.js";
 import { enqueueFix, isInFixQueue, advanceQueue, getFixQueue, removeFromFixQueue } from "./fix-queue.js";
 import { getVapidKeys } from "./vapid.js";
 import { savePushSubscription, deletePushSubscription, mutePR as dbMutePR, unmutePR as dbUnmutePR, getMutedPRs as dbGetMutedPRs } from "./push-db.js";
@@ -6,7 +6,7 @@ import { sendTestPush } from "./push.js";
 import type { RepoInfo } from "./discovery.js";
 import { loadConfig, saveConfig, configExists, isTeamFeaturesEnabled, type Config } from "./config.js";
 import { loadState, markComment, patchCommentTriage, saveState, addFixJob as addFixJobState, removeFixJob as removeFixJobState, getFixJobs, getPendingTriageCountsByPr, needsEvaluation, reconcileResolvedComments } from "./state.js";
-import { postReply, resolveThread, applyFixWithClaude, clampEvalConcurrency } from "./actioner.js";
+import { postReply, resolveThread, applyFixWithClaude, applyBatchFixWithClaude, clampEvalConcurrency } from "./actioner.js";
 import { existsSync } from "fs";
 import {
   applyPatchInWorktree,
@@ -1501,6 +1501,208 @@ export function registerRoutes(): void {
     }
   });
 
+  const MIN_BATCH_FIX_THREADS = 2;
+  const MAX_BATCH_FIX_THREADS = 12;
+
+  // POST /api/actions/batch-fix — one Claude run for multiple review threads (PR assistant batch directive)
+  addRoute("POST", "/api/actions/batch-fix", async (req, res) => {
+    const body = getBody<{
+      repo: string;
+      prNumber: number;
+      branch: string;
+      threads: Array<{ commentId: number; path: string; line: number; body: string; diffHunk: string }>;
+      userInstructions?: string;
+    }>(req);
+
+    if (!Array.isArray(body.threads) || body.threads.length < MIN_BATCH_FIX_THREADS) {
+      json(res, { error: `batch-fix requires at least ${MIN_BATCH_FIX_THREADS} threads` }, 400);
+      return;
+    }
+    if (body.threads.length > MAX_BATCH_FIX_THREADS) {
+      json(res, { error: `batch-fix allows at most ${MAX_BATCH_FIX_THREADS} threads` }, 400);
+      return;
+    }
+
+    const seen = new Set<number>();
+    const threads: Array<{ commentId: number; path: string; line: number; body: string; diffHunk: string }> = [];
+    for (const t of body.threads) {
+      if (typeof t.commentId !== "number" || !Number.isFinite(t.commentId) || seen.has(t.commentId)) continue;
+      if (typeof t.path !== "string" || !t.path.trim()) continue;
+      seen.add(t.commentId);
+      threads.push({
+        commentId: t.commentId,
+        path: t.path,
+        line: typeof t.line === "number" ? t.line : Number(t.line),
+        body: typeof t.body === "string" ? t.body : "",
+        diffHunk: typeof t.diffHunk === "string" ? t.diffHunk : "",
+      });
+    }
+    if (threads.length < MIN_BATCH_FIX_THREADS) {
+      json(res, { error: "batch-fix needs at least two valid distinct commentIds" }, 400);
+      return;
+    }
+
+    threads.sort((a, b) => a.commentId - b.commentId);
+    const batchCommentIds = threads.map((t) => t.commentId);
+    const primaryCommentId = batchCommentIds[0]!;
+    const uniquePaths = threads.map((t) => t.path).filter((p, i, a) => a.indexOf(p) === i);
+    const displayPath = `${threads.length} threads (${uniquePaths.slice(0, 2).join(", ")}${uniquePaths.length > 2 ? ", …" : ""})`;
+
+    for (const t of threads) {
+      if (isInFixQueue(t.commentId)) {
+        json(res, { error: `Comment ${t.commentId} is already in the fix queue` }, 409);
+        return;
+      }
+      const st = getFixJobStatusForComment(t.commentId);
+      if (st && (st.status === "running" || st.status === "completed" || st.status === "awaiting_response")) {
+        json(res, { error: `Comment ${t.commentId} already has an active fix` }, 409);
+        return;
+      }
+    }
+
+    if (getActiveFixForBranch(body.branch)) {
+      json(res, { error: `A fix is already running on branch ${body.branch}` }, 409);
+      return;
+    }
+
+    const allStatuses = getAllFixJobStatuses();
+    if (allStatuses.some((j) => j.status === "running" || j.status === "completed" || j.status === "awaiting_response")) {
+      json(
+        res,
+        { error: "Another fix is in progress or waiting for apply. Finish or discard it before starting a batch fix." },
+        409,
+      );
+      return;
+    }
+
+    const repoInfo = getRepos().find((r) => r.repo === body.repo);
+    if (!repoInfo?.localPath) {
+      json(res, { error: "Repo local path not found" }, 400);
+      return;
+    }
+
+    let worktreePath: string;
+    try {
+      worktreePath = createWorktree(body.branch, repoInfo.localPath);
+    } catch (err) {
+      json(res, { error: `Failed to create worktree: ${(err as Error).message}` }, 500);
+      return;
+    }
+
+    const jobRecord = {
+      commentId: primaryCommentId,
+      repo: body.repo,
+      prNumber: body.prNumber,
+      branch: body.branch,
+      path: threads[0]!.path,
+      worktreePath,
+      startedAt: new Date().toISOString(),
+    };
+    const state = loadState();
+    addFixJobState(state, jobRecord);
+    saveState(state);
+
+    setFixJobStatus({
+      commentId: primaryCommentId,
+      batchCommentIds,
+      repo: body.repo,
+      prNumber: body.prNumber,
+      path: displayPath,
+      startedAt: Date.now(),
+      status: "running",
+    });
+
+    json(res, { success: true, status: "running", branch: body.branch });
+
+    const sessionId = crypto.randomUUID();
+    void (async () => {
+      try {
+        const result = await applyBatchFixWithClaude(worktreePath, threads, body.userInstructions, { sessionId });
+
+        if (result.action === "questions") {
+          const conversation = [{ role: "claude" as const, message: result.message }];
+          const s = loadState();
+          const existingJob = getFixJobs(s).find((j) => j.commentId === primaryCommentId);
+          if (existingJob) {
+            existingJob.sessionId = sessionId;
+            existingJob.conversation = conversation;
+            saveState(s);
+          }
+          setFixJobStatus({
+            commentId: primaryCommentId,
+            batchCommentIds,
+            repo: body.repo,
+            prNumber: body.prNumber,
+            path: displayPath,
+            startedAt: Date.now(),
+            status: "awaiting_response",
+            branch: body.branch,
+            claudeOutput: result.rawOutput,
+            sessionId,
+            conversation,
+          });
+          advanceQueue();
+          return;
+        }
+
+        const diff = getDiffInWorktree(worktreePath);
+
+        if (!diff.trim()) {
+          removeWorktree(body.branch, repoInfo.localPath);
+          const s = loadState();
+          removeFixJobState(s, primaryCommentId);
+          saveState(s);
+          setFixJobStatus({
+            commentId: primaryCommentId,
+            batchCommentIds,
+            repo: body.repo,
+            prNumber: body.prNumber,
+            path: displayPath,
+            startedAt: Date.now(),
+            status: "no_changes",
+            suggestedReply: result.message,
+            claudeOutput: result.message,
+          });
+          advanceQueue();
+          return;
+        }
+
+        const s = loadState();
+        removeFixJobState(s, primaryCommentId);
+        saveState(s);
+        setFixJobStatus({
+          commentId: primaryCommentId,
+          batchCommentIds,
+          repo: body.repo,
+          prNumber: body.prNumber,
+          path: displayPath,
+          startedAt: Date.now(),
+          status: "completed",
+          diff,
+          branch: body.branch,
+          claudeOutput: result.message,
+          conversation: [{ role: "claude", message: result.message }],
+        });
+      } catch (err) {
+        removeWorktree(body.branch, repoInfo.localPath);
+        const s = loadState();
+        removeFixJobState(s, primaryCommentId);
+        saveState(s);
+        setFixJobStatus({
+          commentId: primaryCommentId,
+          batchCommentIds,
+          repo: body.repo,
+          prNumber: body.prNumber,
+          path: displayPath,
+          startedAt: Date.now(),
+          status: "failed",
+          error: (err as Error).message,
+        });
+        advanceQueue();
+      }
+    })();
+  });
+
   // POST /api/actions/fix-apply — commit and push worktree changes
   addRoute("POST", "/api/actions/fix-apply", async (req, res) => {
     const body = getBody<{ repo: string; commentId: number; prNumber: number; branch: string }>(req);
@@ -1510,12 +1712,13 @@ export function registerRoutes(): void {
       return;
     }
 
+    let primaryId = body.commentId;
     try {
       const worktreePath = getWorktreePath(body.branch, repoInfo.localPath);
       let recoveredWorktree = false;
 
       if (!existsSync(worktreePath)) {
-        const job = getFixJobStatus(body.commentId);
+        const job = getFixJobStatusForComment(body.commentId);
         if (!job || job.status !== "completed" || !job.diff?.trim()) {
           json(
             res,
@@ -1527,7 +1730,7 @@ export function registerRoutes(): void {
           );
           return;
         }
-        console.error(`[fix-apply] recreating missing worktree at ${worktreePath} (commentId=${body.commentId})`);
+        console.error(`[fix-apply] recreating missing worktree at ${worktreePath} (commentId=${job.commentId})`);
         try {
           createWorktree(body.branch, repoInfo.localPath);
           applyPatchInWorktree(worktreePath, job.diff);
@@ -1550,20 +1753,33 @@ export function registerRoutes(): void {
         }
       }
 
-      const commitMsg = `fix: apply CodeRabbit suggestion for PR #${body.prNumber}`;
+      const preApplyJob = getFixJobStatusForComment(body.commentId);
+      primaryId = preApplyJob?.commentId ?? body.commentId;
+      const batchCount = preApplyJob?.batchCommentIds?.length ?? 0;
+      const commitMsg =
+        batchCount > 1
+          ? `fix: address ${batchCount} review threads for PR #${body.prNumber}`
+          : `fix: apply CodeRabbit suggestion for PR #${body.prNumber}`;
       commitAndPushWorktree(worktreePath, commitMsg, body.branch);
       removeWorktree(body.branch, repoInfo?.localPath);
 
       const state = loadState();
-      markComment(state, body.commentId, "fixed", body.prNumber, body.repo);
+      const batchIds = preApplyJob?.batchCommentIds;
+      if (batchIds && batchIds.length > 0) {
+        for (const cid of batchIds) {
+          markComment(state, cid, "fixed", body.prNumber, body.repo);
+        }
+      } else {
+        markComment(state, primaryId, "fixed", body.prNumber, body.repo);
+      }
       saveState(state);
-      clearFixJobStatus(body.commentId);
+      clearFixJobStatus(primaryId);
       advanceQueue();
 
       json(res, { success: true, status: "fixed", ...(recoveredWorktree ? { recoveredWorktree: true } : {}) });
     } catch (err) {
       console.error(
-        `[fix-apply] repo=${body.repo} pr=#${body.prNumber} commentId=${body.commentId} branch=${body.branch}`,
+        `[fix-apply] repo=${body.repo} pr=#${body.prNumber} commentId=${primaryId} branch=${body.branch}`,
       );
       console.error(`[fix-apply] ${formatGitExecError(err)}`);
       json(res, { error: `Push failed: ${(err as Error).message}` }, 500);
@@ -1577,7 +1793,10 @@ export function registerRoutes(): void {
     try {
       removeWorktree(body.branch, discardRepoInfo?.localPath);
     } catch { /* ignore */ }
-    if (body.commentId) clearFixJobStatus(body.commentId);
+    if (body.commentId != null) {
+      const j = getFixJobStatusForComment(body.commentId);
+      clearFixJobStatus(j?.commentId ?? body.commentId);
+    }
     advanceQueue();
     json(res, { success: true });
   });
@@ -1597,7 +1816,8 @@ export function registerRoutes(): void {
     const state = loadState();
     markComment(state, body.commentId, "replied", body.prNumber, body.repo);
     saveState(state);
-    clearFixJobStatus(body.commentId);
+    const fixJob = getFixJobStatusForComment(body.commentId);
+    clearFixJobStatus(fixJob?.commentId ?? body.commentId);
     advanceQueue();
 
     json(res, { success: true });
@@ -1607,12 +1827,13 @@ export function registerRoutes(): void {
   addRoute("POST", "/api/actions/fix-reply", async (req, res) => {
     const body = getBody<{ repo: string; commentId: number; message: string }>(req);
 
-    // Find the job — must be awaiting_response
-    const job = getFixJobStatus(body.commentId);
+    // Find the job — must be awaiting_response (`commentId` may be any thread in a batch)
+    const job = getFixJobStatusForComment(body.commentId);
     if (!job || job.status !== "awaiting_response") {
       json(res, { error: "No fix job awaiting response for this comment" }, 400);
       return;
     }
+    const primaryCommentId = job.commentId;
     if (!job.sessionId || !job.branch) {
       json(res, { error: "Fix job missing session or branch info" }, 400);
       return;
@@ -1654,7 +1875,7 @@ export function registerRoutes(): void {
       if (result.action === "questions" && !isLastTurn) {
         // More questions — update job
         const s = loadState();
-        const persistedJob = getFixJobs(s).find((j) => j.commentId === body.commentId);
+        const persistedJob = getFixJobs(s).find((j) => j.commentId === primaryCommentId);
         if (persistedJob) {
           persistedJob.conversation = updatedConversation;
           saveState(s);
@@ -1674,7 +1895,7 @@ export function registerRoutes(): void {
       if (!diff.trim()) {
         removeWorktree(job.branch, repoInfo.localPath);
         const s = loadState();
-        removeFixJobState(s, body.commentId);
+        removeFixJobState(s, primaryCommentId);
         saveState(s);
         setFixJobStatus({
           ...job, status: "failed",
@@ -1689,7 +1910,7 @@ export function registerRoutes(): void {
       }
 
       const s = loadState();
-      removeFixJobState(s, body.commentId);
+      removeFixJobState(s, primaryCommentId);
       saveState(s);
       setFixJobStatus({
         ...job, status: "completed",
@@ -1700,7 +1921,7 @@ export function registerRoutes(): void {
     } catch (err) {
       removeWorktree(job.branch, repoInfo.localPath);
       const s = loadState();
-      removeFixJobState(s, body.commentId);
+      removeFixJobState(s, primaryCommentId);
       saveState(s);
       setFixJobStatus({
         ...job, status: "failed",
@@ -1743,6 +1964,7 @@ export function registerRoutes(): void {
         bundleThreadCount: out.bundleThreadCount,
         bundleUpdatedAtMs: out.bundleUpdatedAtMs,
         queueFixes: out.queueFixes,
+        batchFix: out.batchFix,
       });
     } catch (err) {
       const msg = (err as Error).message;

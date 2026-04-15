@@ -32,6 +32,7 @@ export const statusIcons: Record<string, React.ReactNode> = {
 
 export function FixJobRow({ job, onSelect }: { job: FixJobStatus; onSelect: () => void }) {
   const repoShort = job.repo.split("/")[1] ?? job.repo;
+  const batchN = job.batchCommentIds?.length ?? 0;
 
   return (
     <button
@@ -40,6 +41,7 @@ export function FixJobRow({ job, onSelect }: { job: FixJobStatus; onSelect: () =
     >
       <span className={cn("flex items-center gap-1", statusColors[job.status] ?? "text-gray-400")}>
         {statusIcons[job.status] ?? null} {job.status === "no_changes" ? "no changes" : job.status}
+        {batchN > 1 && <span className="text-purple-400/90 font-normal">batch</span>}
       </span>
       <span className="text-gray-400 font-mono">{repoShort}#{job.prNumber}</span>
       <span className="text-gray-500 truncate flex-1">{job.path}</span>

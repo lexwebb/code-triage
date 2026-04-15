@@ -34,12 +34,20 @@ const MAX_MESSAGES_IN_PROMPT = 24;
 
 /** Fenced block label — parsed server-side; stripped from the message shown in the chat transcript. */
 export const COMPANION_QUEUE_FIXES_FENCE = "code-triage-queue-fixes";
+/** One Claude run / one push for multiple threads (min 2 comment IDs). Mutually exclusive with per-thread `queueFixes` in the same reply. */
+export const COMPANION_BATCH_FIX_FENCE = "code-triage-batch-fix";
 const MAX_QUEUE_FIX_ITEMS = 12;
+const MIN_BATCH_FIX_COMMENT_IDS = 2;
 const MAX_QUEUE_USER_INSTRUCTIONS_CHARS = 8_000;
 
 export interface CompanionQueueFixDirective {
   commentId: number;
   /** Passed to “Fix with Claude” as extra instructions (merged with the review comment). */
+  userInstructions?: string;
+}
+
+export interface CompanionBatchFixDirective {
+  commentIds: number[];
   userInstructions?: string;
 }
 
@@ -50,6 +58,7 @@ Rules:
 - Prefer numbered summaries, clear questions, and risk callouts. Reference threads by commentId when useful.
 - If thread data is missing or truncated, say so — do not invent code.
 - When the user clearly wants to start fixes (e.g. “queue fixes for …”, “go ahead and fix those”), you MAY ask the app to queue Fix-with-Claude jobs by including ONE fenced block at the END of your reply (after your normal prose). The UI will strip this block from the chat history. Use only commentIds that appear in the thread snapshot JSON.
+- When the user wants **one combined fix** for **multiple** threads (less PR noise, single commit), use the **batch** fence instead of queueing separate fixes. Batch requires at least two commentIds. Do not include both a batch block and a queue-fixes block in the same reply — pick one.
 - In prose, you may say the app will queue or start those fixes — do not claim a branch was pushed or a fix was applied on GitHub until the user does that elsewhere.
 
 Fenced block format (JSON object, exactly this label):
@@ -57,7 +66,12 @@ Fenced block format (JSON object, exactly this label):
 {"queueFixes":[{"commentId":123,"userInstructions":"optional: merge context from this chat for Claude"}]}
 \`\`\`
 
-Omit userInstructions if the default comment text is enough. Keep userInstructions concise. At most ${MAX_QUEUE_FIX_ITEMS} entries.`;
+Batch format (one worktree, one push; at least ${MIN_BATCH_FIX_COMMENT_IDS} commentIds):
+\`\`\`${COMPANION_BATCH_FIX_FENCE}
+{"commentIds":[123,456],"userInstructions":"optional"}
+\`\`\`
+
+Omit userInstructions if the default comment text is enough. Keep userInstructions concise. At most ${MAX_QUEUE_FIX_ITEMS} entries or comment IDs.`;
 
 export function loadCompanionSession(repo: string, prNumber: number): {
   messages: CompanionChatMessage[];
@@ -193,21 +207,70 @@ export function clearCompanionSession(repo: string, prNumber: number): void {
 }
 
 /**
- * Extract queue directives from the model reply, validate, and remove the fence from text shown to the user.
+ * Extract queue and batch directives from the model reply, validate, and remove fences from text shown to the user.
+ * If a valid batch directive is present, per-thread queueFixes are ignored for that reply.
  */
 export function parseAndStripQueueFixDirectives(assistantRaw: string): {
   displayText: string;
   queueFixes: CompanionQueueFixDirective[];
+  batchFix: CompanionBatchFixDirective | null;
 } {
+  let working = assistantRaw;
+  let batchFix: CompanionBatchFixDirective | null = null;
+
+  const batchRe = new RegExp(
+    "```\\s*" + COMPANION_BATCH_FIX_FENCE + "\\s*\\n([\\s\\S]*?)\\n?```",
+    "m",
+  );
+  const batchMatch = working.match(batchRe);
+  if (batchMatch && typeof batchMatch[1] === "string") {
+    working = working.replace(batchRe, "").trim();
+    try {
+      const parsed = JSON.parse(batchMatch[1].trim()) as unknown;
+      const idsRaw =
+        typeof parsed === "object" && parsed !== null && Array.isArray((parsed as { commentIds?: unknown }).commentIds)
+          ? (parsed as { commentIds: unknown[] }).commentIds
+          : null;
+      if (idsRaw) {
+        const seen = new Set<number>();
+        const commentIds: number[] = [];
+        for (const x of idsRaw) {
+          if (commentIds.length >= MAX_QUEUE_FIX_ITEMS) break;
+          const id = typeof x === "number" ? x : Number(x);
+          if (!Number.isFinite(id) || seen.has(id)) continue;
+          seen.add(id);
+          commentIds.push(id);
+        }
+        let userInstructions: string | undefined;
+        if (
+          typeof parsed === "object" &&
+          parsed !== null &&
+          typeof (parsed as { userInstructions?: unknown }).userInstructions === "string" &&
+          (parsed as { userInstructions: string }).userInstructions.trim()
+        ) {
+          userInstructions = (parsed as { userInstructions: string }).userInstructions.trim().slice(
+            0,
+            MAX_QUEUE_USER_INSTRUCTIONS_CHARS,
+          );
+        }
+        if (commentIds.length >= MIN_BATCH_FIX_COMMENT_IDS) {
+          batchFix = { commentIds, ...(userInstructions ? { userInstructions } : {}) };
+        }
+      }
+    } catch {
+      batchFix = null;
+    }
+  }
+
   const fenceRe = new RegExp(
     "```\\s*" + COMPANION_QUEUE_FIXES_FENCE + "\\s*\\n([\\s\\S]*?)\\n?```",
     "m",
   );
-  const m = assistantRaw.match(fenceRe);
+  const m = working.match(fenceRe);
   if (!m || typeof m[1] !== "string") {
-    return { displayText: assistantRaw.trim(), queueFixes: [] };
+    return { displayText: working.trim(), queueFixes: [], batchFix };
   }
-  const displayText = assistantRaw.replace(fenceRe, "").trim();
+  const displayText = working.replace(fenceRe, "").trim();
   let queueFixes: CompanionQueueFixDirective[] = [];
   try {
     const parsed = JSON.parse(m[1].trim()) as unknown;
@@ -216,7 +279,7 @@ export function parseAndStripQueueFixDirectives(assistantRaw: string): {
         ? (parsed as { queueFixes: unknown[] }).queueFixes
         : null;
     if (!arr) {
-      return { displayText: displayText || assistantRaw.trim(), queueFixes: [] };
+      return { displayText: displayText || working.trim(), queueFixes: [], batchFix };
     }
     const seen = new Set<number>();
     for (const item of arr) {
@@ -235,9 +298,13 @@ export function parseAndStripQueueFixDirectives(assistantRaw: string): {
   } catch {
     queueFixes = [];
   }
+  if (batchFix) {
+    queueFixes = [];
+  }
   return {
-    displayText: displayText.trim() || assistantRaw.replace(fenceRe, "").trim(),
+    displayText: displayText.trim() || working.replace(fenceRe, "").trim(),
     queueFixes,
+    batchFix,
   };
 }
 
@@ -286,6 +353,7 @@ export async function appendUserMessageAndRunAssistant(input: {
   bundleThreadCount: number;
   bundleUpdatedAtMs: number | null;
   queueFixes: CompanionQueueFixDirective[];
+  batchFix: CompanionBatchFixDirective | null;
 }> {
   const trimmed = input.userMessage.trim();
   if (!trimmed) {
@@ -340,8 +408,14 @@ export async function appendUserMessageAndRunAssistant(input: {
     throw new Error("Assistant returned an empty response");
   }
 
-  const { displayText, queueFixes } = parseAndStripQueueFixDirectives(assistantRaw);
+  const { displayText, queueFixes, batchFix } = parseAndStripQueueFixDirectives(assistantRaw);
   let assistantShown = displayText.trim();
+  if (!assistantShown && batchFix && batchFix.commentIds.length > 0) {
+    assistantShown =
+      batchFix.commentIds.length === MIN_BATCH_FIX_COMMENT_IDS
+        ? "Started a batch fix for 2 threads — one job in Fix jobs (single push when you apply)."
+        : `Started a batch fix for ${batchFix.commentIds.length} threads — one job in Fix jobs (single push when you apply).`;
+  }
   if (!assistantShown && queueFixes.length > 0) {
     assistantShown =
       queueFixes.length === 1
@@ -369,5 +443,6 @@ export async function appendUserMessageAndRunAssistant(input: {
     bundleThreadCount,
     bundleUpdatedAtMs: bundleUpdatedAtMs !== null ? bundleUpdatedAtMs : existing?.bundleUpdatedAtMs ?? null,
     queueFixes,
+    batchFix,
   };
 }

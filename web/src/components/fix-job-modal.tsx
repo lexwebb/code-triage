@@ -6,13 +6,15 @@ import { IconButton } from "./ui/icon-button";
 import { Button } from "./ui/button";
 import { Skeleton } from "./ui/skeleton";
 import { elapsed, statusColors } from "./fix-job-row";
+import { findJobForComment } from "../lib/fix-job-for-comment";
 
 export function FixJobModal({ commentId }: { commentId: number }) {
-  const job = useAppStore((s) => s.jobs.find((j) => j.commentId === commentId));
-  const acting = useAppStore((s) => s.acting[commentId] ?? false);
-  const fixApplyPhase = useAppStore((s) => s.fixApplyPhase[commentId]);
-  const replyText = useAppStore((s) => s.replyText[commentId] ?? "");
-  const noChangesReply = useAppStore((s) => s.noChangesReply[commentId] ?? "");
+  const job = useAppStore((s) => findJobForComment(s.jobs, commentId));
+  const canonicalId = job?.commentId ?? commentId;
+  const acting = useAppStore((s) => s.acting[canonicalId] ?? false);
+  const fixApplyPhase = useAppStore((s) => s.fixApplyPhase[canonicalId]);
+  const replyText = useAppStore((s) => s.replyText[canonicalId] ?? "");
+  const noChangesReply = useAppStore((s) => s.noChangesReply[canonicalId] ?? "");
   const setReplyText = useAppStore((s) => s.setReplyText);
   const setNoChangesReply = useAppStore((s) => s.setNoChangesReply);
   const applyFix = useAppStore((s) => s.apply);
@@ -27,11 +29,12 @@ export function FixJobModal({ commentId }: { commentId: number }) {
 
   const onClose = () => close(null);
   const repoShort = job.repo.split("/")[1] ?? job.repo;
+  const batchCount = job.batchCommentIds?.length ?? 0;
 
   async function handleApply() {
     if (!job || !job.branch) return;
     try {
-      await applyFix(job.repo, job.commentId, job.prNumber, job.branch);
+      await applyFix(job.repo, canonicalId, job.prNumber, job.branch);
       close(null);
     } catch (err) {
       console.error("Apply failed:", err);
@@ -41,7 +44,7 @@ export function FixJobModal({ commentId }: { commentId: number }) {
   async function handleDiscard() {
     if (!job || !job.branch) return;
     try {
-      await discardFix(job.branch, job.commentId);
+      await discardFix(job.branch, canonicalId);
       close(null);
     } catch (err) {
       console.error("Discard failed:", err);
@@ -51,8 +54,8 @@ export function FixJobModal({ commentId }: { commentId: number }) {
   async function handleSendReply() {
     if (!job || !replyText.trim() || acting) return;
     try {
-      await sendReply(job.repo, job.commentId, replyText.trim());
-      setReplyText(job.commentId, "");
+      await sendReply(job.repo, canonicalId, replyText.trim());
+      setReplyText(canonicalId, "");
       await reloadComments();
     } catch (err) {
       console.error("Reply failed:", err);
@@ -69,7 +72,9 @@ export function FixJobModal({ commentId }: { commentId: number }) {
         <div className="px-4 py-3 border-b border-gray-800 flex items-center justify-between">
           <div>
             <h3 className="text-sm font-semibold text-white">Fix Job Details</h3>
-            <span className="text-xs text-gray-500">{repoShort}#{job.prNumber} — {job.path}</span>
+            <span className="text-xs text-gray-500">
+              {repoShort}#{job.prNumber} — {batchCount > 1 ? `${batchCount}-thread batch` : job.path}
+            </span>
           </div>
           <IconButton description="Close" icon={<X size={16} />} onClick={onClose} size="sm" />
         </div>
@@ -132,7 +137,7 @@ export function FixJobModal({ commentId }: { commentId: number }) {
             <div className="text-xs text-gray-500 mb-2">Review and optionally edit the reply before sending:</div>
             <textarea
               value={noChangesReply}
-              onChange={(e) => setNoChangesReply(commentId, e.target.value)}
+              onChange={(e) => setNoChangesReply(canonicalId, e.target.value)}
               rows={4}
               className="w-full text-xs bg-gray-950 border border-gray-700 rounded px-2 py-1.5 text-gray-300 placeholder-gray-600 focus:outline-none focus:border-blue-500 resize-y"
             />
@@ -196,7 +201,7 @@ export function FixJobModal({ commentId }: { commentId: number }) {
             <div className="flex gap-2 items-end">
               <textarea
                 value={replyText}
-                onChange={(e) => setReplyText(commentId, e.target.value)}
+                onChange={(e) => setReplyText(canonicalId, e.target.value)}
                 onKeyDown={(e) => {
                   if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
                     void handleSendReply();
@@ -245,14 +250,14 @@ export function FixJobModal({ commentId }: { commentId: number }) {
 
         {job.status === "failed" && (
           <div className="px-4 py-3 border-t border-gray-800 flex items-center justify-end gap-2">
-            {job.originalComment && job.branch && (
+            {job.originalComment && job.branch && !(job.batchCommentIds && job.batchCommentIds.length > 1) && (
               <Button
                 variant="orange"
                 size="xs"
                 onClick={async () => {
                   if (!job.branch || !job.originalComment) return;
                   try {
-                    await retryFix(job.repo, job.commentId, job.prNumber, job.branch, job.originalComment);
+                    await retryFix(job.repo, canonicalId, job.prNumber, job.branch, job.originalComment);
                     await reloadComments();
                     close(null);
                   } catch (err) {
@@ -278,7 +283,7 @@ export function FixJobModal({ commentId }: { commentId: number }) {
               onClick={async () => {
                 if (!noChangesReply.trim()) return;
                 try {
-                  await sendReplyAndResolve(job.repo, job.commentId, job.prNumber, noChangesReply.trim());
+                  await sendReplyAndResolve(job.repo, canonicalId, job.prNumber, noChangesReply.trim());
                   await reloadComments();
                   close(null);
                 } catch (err) {

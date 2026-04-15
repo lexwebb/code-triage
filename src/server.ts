@@ -266,6 +266,8 @@ export function updatePollState(state: {
 
 export interface FixJobStatus {
   commentId: number;
+  /** When set, this job addresses every listed review thread in one worktree / push (primary key is `commentId`, usually min). */
+  batchCommentIds?: number[];
   repo: string;
   prNumber: number;
   path: string;
@@ -383,6 +385,7 @@ export function setFixJobStatus(job: FixJobStatus): void {
   try { persistFixJobResult(job); } catch { /* don't block SSE on DB write failure */ }
   sseBroadcast("fix-job", {
     commentId: job.commentId,
+    batchCommentIds: job.batchCommentIds,
     repo: job.repo,
     prNumber: job.prNumber,
     status: job.status,
@@ -397,11 +400,12 @@ export function setFixJobStatus(job: FixJobStatus): void {
   });
   broadcastPollStatus();
   if (job.status === "completed" || job.status === "failed") {
+    const batchN = job.batchCommentIds?.length ?? 0;
     notifyFixJobComplete({
       repo: job.repo,
       prNumber: job.prNumber,
       commentId: job.commentId,
-      path: job.path,
+      path: batchN > 1 ? `Batch: ${batchN} threads` : job.path,
       status: job.status,
       error: job.error,
     });
@@ -430,6 +434,16 @@ export function clearFixJobStatus(commentId: number): void {
 
 export function getFixJobStatus(commentId: number): FixJobStatus | undefined {
   return fixJobStatuses.get(commentId);
+}
+
+/** Resolve a fix job when `commentId` may be any thread in a batch (stored under the primary id). */
+export function getFixJobStatusForComment(commentId: number): FixJobStatus | undefined {
+  const direct = fixJobStatuses.get(commentId);
+  if (direct) return direct;
+  for (const job of fixJobStatuses.values()) {
+    if (job.batchCommentIds?.includes(commentId)) return job;
+  }
+  return undefined;
 }
 
 export function getAllFixJobStatuses(): FixJobStatus[] {

@@ -127,6 +127,10 @@ export interface PrDetailSlice {
   runEvalsForSelectedPR: () => Promise<void>;
   updateCommentTriage: (commentId: number, patch: { snoozeUntil?: string | null; priority?: number | null; triageNote?: string | null }) => Promise<void>;
   startFix: (commentId: number, comment: { path: string; line: number; body: string; diffHunk: string }, userInstructions?: string) => Promise<void>;
+  startBatchFix: (
+    threads: Array<{ commentId: number; path: string; line: number; body: string; diffHunk: string }>,
+    userInstructions?: string,
+  ) => Promise<void>;
   batchAction: (action: "reply" | "resolve" | "dismiss") => Promise<void>;
 
   // Diff actions

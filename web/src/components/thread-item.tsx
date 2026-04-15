@@ -6,6 +6,7 @@ import { Button } from "./ui/button";
 import { StatusBadge } from "./ui/status-badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "./ui/dialog";
 import { cn } from "../lib/utils";
+import { findJobForComment } from "../lib/fix-job-for-comment";
 import { type Thread, isSnoozed, buildEditorUri, EDITOR_LABELS, EvalBadge, ThreadStatusBadge } from "./thread-utils";
 
 export type ThreadKeyActions = {
@@ -18,13 +19,14 @@ export type ThreadKeyActions = {
 };
 
 function FixConversation({ commentId, repo }: { commentId: number; repo: string }) {
-  const replyText = useAppStore((s) => s.replyText[commentId] ?? "");
-  const sending = useAppStore((s) => s.acting[commentId] ?? false);
+  const jobs = useAppStore((s) => s.jobs);
+  const job = findJobForComment(jobs, commentId);
+  const canonicalId = job?.commentId ?? commentId;
+  const replyText = useAppStore((s) => s.replyText[canonicalId] ?? "");
+  const sending = useAppStore((s) => s.acting[canonicalId] ?? false);
   const setReplyText = useAppStore((s) => s.setReplyText);
   const sendReply = useAppStore((s) => s.sendReply);
-  const jobs = useAppStore((s) => s.jobs);
 
-  const job = jobs.find((j) => j.commentId === commentId);
   if (!job) return null;
 
   const conversation = job.conversation ?? [];
@@ -33,7 +35,7 @@ function FixConversation({ commentId, repo }: { commentId: number; repo: string 
 
   async function handleSend() {
     if (!replyText.trim() || sending) return;
-    await sendReply(repo, commentId, replyText.trim());
+    await sendReply(repo, canonicalId, replyText.trim());
   }
 
   return (
@@ -56,7 +58,7 @@ function FixConversation({ commentId, repo }: { commentId: number; repo: string 
         <div className="flex gap-2 items-end">
           <textarea
             value={replyText}
-            onChange={(e) => setReplyText(commentId, e.target.value)}
+            onChange={(e) => setReplyText(canonicalId, e.target.value)}
             onKeyDown={(e) => {
               if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
                 void handleSend();
@@ -129,7 +131,7 @@ export function ThreadItem({ rootId, thread, fixBlocked, fixQueueSlot, isFocused
   const isActedOn = status === "replied" || status === "dismissed" || status === "fixed";
   const isEvaluating = status === "evaluating";
 
-  const fixJob = jobs.find((j) => j.commentId === thread.root.id);
+  const fixJob = findJobForComment(jobs, thread.root.id);
   const isAwaitingResponse = fixJob?.status === "awaiting_response";
   const isFixRunning = fixJob?.status === "running";
   const suppressEvalForFixOutcome =

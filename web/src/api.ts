@@ -56,6 +56,7 @@ export interface QueuedFixItem {
 
 export interface FixJobStatus {
   commentId: number;
+  batchCommentIds?: number[];
   repo: string;
   prNumber: number;
   path: string;
@@ -79,6 +80,11 @@ export interface PrCompanionChatMessage {
 
 export interface PrCompanionQueueFix {
   commentId: number;
+  userInstructions?: string;
+}
+
+export interface PrCompanionBatchFix {
+  commentIds: number[];
   userInstructions?: string;
 }
 
@@ -316,6 +322,16 @@ export const api = {
     postJSON<{ results: Array<{ commentId: number; success: boolean; error?: string }> }>("/api/actions/batch", { action, items }),
   fixWithClaude: (repo: string, commentId: number, prNumber: number, branch: string, comment: { path: string; line: number; body: string; diffHunk: string }, userInstructions?: string) =>
     postJSON<{ success: boolean; status: string; branch?: string; error?: string; position?: number }>("/api/actions/fix", { repo, commentId, prNumber, branch, comment, ...(userInstructions ? { userInstructions } : {}) }),
+  batchFixWithClaude: (body: {
+    repo: string;
+    prNumber: number;
+    branch: string;
+    threads: Array<{ commentId: number; path: string; line: number; body: string; diffHunk: string }>;
+    userInstructions?: string;
+  }) =>
+    postJSON<{ success: boolean; status: string; branch?: string; error?: string }>("/api/actions/batch-fix", {
+      ...body,
+    } as Record<string, unknown>),
   getFixQueue: () => fetchJSON<QueuedFixItem[]>("/api/fix-queue"),
   cancelQueuedFix: (commentId: number) =>
     deleteJSON<{ success: boolean }>(`/api/fix-queue/${commentId}`, {}),
@@ -407,6 +423,7 @@ export const api = {
       bundleThreadCount: number;
       bundleUpdatedAtMs: number | null;
       queueFixes?: PrCompanionQueueFix[];
+      batchFix?: PrCompanionBatchFix | null;
     }>("/api/reviews/companion/message", body),
   resetPrCompanionSession: (repo: string, prNumber: number) =>
     postJSON<{ ok: boolean }>("/api/reviews/companion/reset", { repo, prNumber }),
