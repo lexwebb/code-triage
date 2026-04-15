@@ -1,33 +1,38 @@
 import { useEffect } from "react";
-import { createRootRoute, Outlet } from "@tanstack/react-router";
-import { useAppStore, selectShowNotifBanner } from "../store";
+import { createRootRoute, Outlet, useNavigate } from "@tanstack/react-router";
+import { useAppStore, selectShowNotifBanner, selectTimerText } from "../store";
 import { updateFaviconBadge, updateTitleBadge } from "../lib/tab-badge";
 import { IconRail } from "../components/icon-rail";
 import FixJobsBanner from "../components/fix-jobs-banner";
 import KeyboardShortcutsModal from "../components/keyboard-shortcuts-modal";
 import SettingsView from "../components/settings-view";
 import { IconButton } from "../components/ui/icon-button";
-import { X, ArrowRight } from "lucide-react";
+import { X, ArrowRight, RefreshCw, Bell, Settings, HelpCircle } from "lucide-react";
 
 export const Route = createRootRoute({
   component: function RootLayout() {
+    const navigate = useNavigate();
+
     // ── Store selectors ──
     const appGate = useAppStore((s) => s.appGate);
     const error = useAppStore((s) => s.error);
     const updateAvailable = useAppStore((s) => s.updateAvailable);
     const pullsLoading = useAppStore((s) => s.pullsLoading);
     const permission = useAppStore((s) => s.permission);
+    const pullsRefreshing = useAppStore((s) => s.pullsRefreshing);
 
     const jobs = useAppStore((s) => s.jobs);
     const authored = useAppStore((s) => s.authored);
     const reviewRequested = useAppStore((s) => s.reviewRequested);
 
     const showNotifBanner = useAppStore(selectShowNotifBanner);
+    const timerText = useAppStore(selectTimerText);
 
     // ── Store actions ──
     const initialize = useAppStore((s) => s.initialize);
     const dismissUpdate = useAppStore((s) => s.dismissUpdate);
     const subscribePush = useAppStore((s) => s.subscribePush);
+    const fetchPulls = useAppStore((s) => s.fetchPulls);
 
     // ── Tab badge: favicon + title ──
     useEffect(() => {
@@ -146,6 +151,43 @@ export const Route = createRootRoute({
             />
           </div>
         )}
+        {/* Title bar — spans all pages */}
+        <div className="flex shrink-0 items-center justify-between gap-2 border-b border-gray-800 bg-gray-950 px-4 py-2">
+          <div className="flex items-center gap-2 min-w-0">
+            <img src="/logo.png" alt="" className="w-6 h-6 shrink-0 rounded-md" />
+            <h1 className="text-sm font-semibold text-white truncate">Code Triage</h1>
+          </div>
+          <div className="flex shrink-0 items-center gap-1">
+            <span className="text-xs text-gray-600 font-mono" title="Time until next backend poll">
+              {timerText}
+            </span>
+            <IconButton
+              description="Keyboard shortcuts"
+              icon={<HelpCircle size={14} />}
+              onClick={() => useAppStore.getState().toggleShortcuts()}
+              size="sm"
+            />
+            <IconButton
+              description="Settings"
+              icon={<Settings size={14} />}
+              onClick={() => void navigate({ to: "/settings" })}
+              size="sm"
+            />
+            <IconButton
+              description={`Test notification (permission: ${permission})`}
+              icon={<Bell size={14} />}
+              size="sm"
+              onClick={() => void fetch("/api/push/test", { method: "POST" })}
+            />
+            <IconButton
+              description="Refresh lists and reset adaptive poll schedule"
+              icon={<RefreshCw size={14} className={pullsRefreshing ? "animate-spin" : ""} />}
+              onClick={() => void fetchPulls(false, true)}
+              disabled={pullsRefreshing}
+              size="sm"
+            />
+          </div>
+        </div>
         <div className="relative flex flex-1 min-h-0 overflow-hidden">
           {/* Icon rail — desktop only */}
           <div className="hidden md:flex">

@@ -2,11 +2,16 @@ import { cn } from "../lib/utils";
 import { MessageSquare } from "lucide-react";
 import { useAppStore } from "../store";
 
-export default function FileList() {
+interface FileListProps {
+  onSelectFile?: (path: string) => void;
+}
+
+export default function FileList({ onSelectFile }: FileListProps) {
   const files = useAppStore((s) => s.files);
   const selectedFile = useAppStore((s) => s.selectedFile);
-  const selectFile = useAppStore((s) => s.selectFile);
+  const storeSelectFile = useAppStore((s) => s.selectFile);
   const comments = useAppStore((s) => s.comments);
+  const selectFile = onSelectFile ?? storeSelectFile;
   const commentsByFile: Record<string, number> = {};
   for (const c of comments) {
     commentsByFile[c.path] = (commentsByFile[c.path] || 0) + 1;

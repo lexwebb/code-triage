@@ -1,6 +1,6 @@
-import { createRoute, Outlet, useMatchRoute, useNavigate } from "@tanstack/react-router";
+import { createRoute, Outlet, useMatchRoute } from "@tanstack/react-router";
 import { useShallow } from "zustand/react/shallow";
-import { Menu, RefreshCw, Pause, Bell, Minus, Settings, PanelLeftClose, PanelLeftOpen, HelpCircle } from "lucide-react";
+import { Menu, Pause, Minus, PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import { Route as rootRoute } from "./__root";
 import {
   useAppStore,
@@ -38,14 +38,12 @@ export const Route = createRoute({
   id: "sidebar",
   component: function SidebarLayout() {
     const matchRoute = useMatchRoute();
-    const navigate = useNavigate();
     const isTicketsRoute = !!matchRoute({ to: "/tickets", fuzzy: true });
 
     // ── Store selectors ──
     const sidebarCollapsed = useAppStore((s) => s.sidebarCollapsed);
     const mobileDrawerOpen = useAppStore((s) => s.mobileDrawerOpen);
     const isWide = useAppStore((s) => s.isWide);
-    const pullsRefreshing = useAppStore((s) => s.pullsRefreshing);
     const githubUserUnavailable = useAppStore((s) => s.githubUserUnavailable);
     const polling = useAppStore((s) => s.polling);
     const pollPaused = useAppStore((s) => s.pollPaused);
@@ -57,7 +55,6 @@ export const Route = createRoute({
     const lastPollError = useAppStore((s) => s.lastPollError);
     const rateLimitNow = useAppStore((s) => s.rateLimitNow);
     const claude = useAppStore((s) => s.claude);
-    const permission = useAppStore((s) => s.permission);
 
     const filteredPulls = useAppStore(useShallow(selectFilteredAuthored));
     const filteredReviewPulls = useAppStore(useShallow(selectFilteredReviewRequested));
@@ -66,7 +63,6 @@ export const Route = createRoute({
     // ── Store actions ──
     const toggleSidebar = useAppStore((s) => s.toggleSidebar);
     const setMobileDrawerOpen = useAppStore((s) => s.setMobileDrawerOpen);
-    const fetchPulls = useAppStore((s) => s.fetchPulls);
 
     return (
       <>
@@ -107,50 +103,16 @@ export const Route = createRoute({
           >
             {!isTicketsRoute ? (
               <>
-                <div className="px-4 py-2 border-b border-gray-800 flex items-center justify-between gap-2 min-w-0">
-                  <div className="flex items-center gap-2 min-w-0">
-                    <img src="/logo.png" alt="" className="w-6 h-6 shrink-0 rounded-md" />
-                    <h1 className="text-sm font-semibold text-white truncate">Code Triage</h1>
-                  </div>
-                  <div className="flex shrink-0 items-center gap-1">
-                    {isWide && (
-                      <IconButton
-                        description={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
-                        icon={sidebarCollapsed ? <PanelLeftOpen size={14} /> : <PanelLeftClose size={14} />}
-                        onClick={toggleSidebar}
-                        size="sm"
-                      />
-                    )}
-                    <span className="text-xs text-gray-600 font-mono max-md:hidden" title="Time until next backend poll">
-                      {timerText}
-                    </span>
+                {isWide && (
+                  <div className="px-4 py-2 border-b border-gray-800 flex items-center justify-end">
                     <IconButton
-                      description="Keyboard shortcuts"
-                      icon={<HelpCircle size={14} />}
-                      onClick={() => useAppStore.getState().toggleShortcuts()}
-                      size="sm"
-                    />
-                    <IconButton
-                      description="Settings"
-                      icon={<Settings size={14} />}
-                      onClick={() => void navigate({ to: "/settings" })}
-                      size="sm"
-                    />
-                    <IconButton
-                      description={`Test notification (permission: ${permission})`}
-                      icon={<Bell size={14} />}
-                      size="sm"
-                      onClick={() => void fetch("/api/push/test", { method: "POST" })}
-                    />
-                    <IconButton
-                      description="Refresh lists and reset adaptive poll schedule"
-                      icon={<RefreshCw size={14} className={pullsRefreshing ? "animate-spin" : ""} />}
-                      onClick={() => void fetchPulls(false, true)}
-                      disabled={pullsRefreshing}
+                      description={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+                      icon={sidebarCollapsed ? <PanelLeftOpen size={14} /> : <PanelLeftClose size={14} />}
+                      onClick={toggleSidebar}
                       size="sm"
                     />
                   </div>
-                </div>
+                )}
                 <div className="px-3 py-2 border-b border-gray-800 grid grid-cols-2 gap-x-4 text-[10px] text-gray-500">
                   {/* GitHub column */}
                   <div className="flex flex-col gap-1">

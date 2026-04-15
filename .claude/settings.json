@@ -13,7 +13,25 @@
       "mcp__onui-local__onui_update_annotation_metadata",
       "Bash(yarn test:*)",
       "Bash(yarn build:*)",
-      "Read(//tmp/**)"
+      "Read(//tmp/**)",
+      "Bash(yarn build:web)",
+      "mcp__chrome-devtools__take_screenshot",
+      "mcp__chrome-devtools__list_pages",
+      "mcp__chrome-devtools__navigate_page",
+      "mcp__chrome-devtools__take_snapshot",
+      "mcp__chrome-devtools__click",
+      "Bash(npm view:*)",
+      "Bash(npm info:*)",
+      "Read(//Users/lex/.claude/plugins/cache/claude-plugins-official/superpowers/**)",
+      "Bash(/Users/lex/.claude/plugins/cache/claude-plugins-official/superpowers/5.0.7/skills/brainstorming/scripts/start-server.sh --project-dir /Users/lex/src/cr-watch)",
+      "mcp__chrome-devtools__list_console_messages",
+      "mcp__chrome-devtools__evaluate_script",
+      "mcp__chrome-devtools__new_page",
+      "Bash(git worktree:*)",
+      "Bash(yarn install:*)",
+      "mcp__typescript-tools__rename_file_or_folder",
+      "Bash(yarn dev:*)",
+      "mcp__chrome-devtools__wait_for"
     ]
   }
 }
