@@ -20,8 +20,14 @@ Extend Code Triage from a personal productivity tool to a team awareness dashboa
 
 ## Prerequisites
 
-- Truth Layer (Direction A) — coherence engine and lifecycle tracking provide per-item status that team views aggregate.
-- Ticket integration (Linear) — team membership and ticket data come from Linear.
+- Truth Layer (Direction A) — **implemented**. The following are in place:
+  - `src/coherence.ts` — `evaluateCoherence(input: CoherenceInput): CoherenceAlert[]` with types `CoherencePR`, `CoherenceTicket`, `CoherenceThresholds`. Rules: stale-in-progress, done-but-unmerged, approved-but-lingering, review-bottleneck, CI failure, ticket-no-PR, ticket-inactive, PR-without-ticket.
+  - `src/attention.ts` — `refreshAttentionFeed()`, `getAttentionItems()`, `snoozeItem()`, `dismissItem()`, `pinItem()`. SQLite `attention_items` table.
+  - `web/src/components/lifecycle-bar.tsx` — `LifecycleBar` component, `deriveLifecycleStage()`, `deriveTicketIssueLifecycleStage()`. Reusable in team views.
+  - `src/config.ts` — `coherence` thresholds. Follow same pattern for `team` config key.
+  - `src/tickets/linker.ts` — `buildLinkMap()`, `mergeProviderPullLinksIntoLinkMap()`, `parseGithubPullRequestUrl()`.
+- Ticket integration (Linear) — **implemented**. `LinearProvider` in `src/tickets/linear.ts` with `fetchMyIssues()`, `fetchIssuesByIdentifiers()`, `getIssueDetail()`, `getCurrentUser()`, `getTeams()`. Team membership available via `getTeams()`.
+- `TicketProvider` interface needs extension — `getCycles()` / `getCurrentCycle()` must be added before Feature 3 (Sprint/Cycle Health) can be built.
 
 ## Feature 1: Team Dashboard
 
@@ -54,10 +60,10 @@ Click a team member to see their:
 
 ### Data Source
 
-- Team members from `GET /api/tickets/teams` (Linear teams) — already exists.
+- Team members from `GET /api/tickets/teams` (Linear teams) — already implemented in `src/tickets/linear.ts` via `getTeams()`.
 - New endpoint needed: `GET /api/team/overview` — fetches PRs and tickets for all team members.
-- GitHub data: fetch open PRs where author is a team member, or reviewer is a team member.
-- Linear data: fetch active tickets assigned to team members.
+- GitHub data: fetch open PRs where author is a team member, or reviewer is a team member. Use existing `ghAsync` / `ghGraphQL` patterns from `src/exec.ts`.
+- Linear data: fetch active tickets assigned to team members via `@linear/sdk`.
 
 ### API Considerations
 
@@ -109,7 +115,7 @@ Sprint view in the team dashboard showing:
 | Approved | Tickets with approved PR, awaiting merge |
 | Merged/Done | Tickets with merged PR or completed status |
 
-Each ticket card shows the lifecycle bar from Direction A.
+Each ticket card shows the lifecycle bar from Direction A (`web/src/components/lifecycle-bar.tsx` — `LifecycleBar` component with `deriveTicketIssueLifecycleStage()`).
 
 ### Health Indicators
 
@@ -119,9 +125,9 @@ Each ticket card shows the lifecycle bar from Direction A.
 
 ### Data Source
 
-- New `TicketProvider` method: `getCycles()` / `getCurrentCycle()` — returns cycle with ticket list.
-- Linear SDK provides cycle data with issue references.
-- Cross-reference with PR linkage from existing linker.
+- New `TicketProvider` method: `getCycles()` / `getCurrentCycle()` — returns cycle with ticket list. Must be added to the interface in `src/tickets/types.ts` and implemented in `LinearProvider` (`src/tickets/linear.ts`).
+- Linear SDK provides cycle data with issue references via `linearClient.cycles()`.
+- Cross-reference with PR linkage from existing linker (`buildLinkMap()`, `mergeProviderPullLinksIntoLinkMap()` in `src/tickets/linker.ts`).
 
 ### Configuration
 
@@ -222,6 +228,18 @@ Detect when PRs depend on each other and surface blocking relationships.
 | `GET` | `/api/team/dependencies` | PR dependency graph |
 | `GET` | `/api/team/config` | Team feature configuration |
 | `POST` | `/api/team/config` | Update team configuration |
+
+## Integration with Existing Infrastructure
+
+The following are already in place from Direction A and should be reused:
+
+- **Config pattern**: Follow `coherence` key pattern in `src/config.ts` — add `team` as a new optional key.
+- **Settings UI pattern**: Follow the "Coherence Thresholds" section in `web/src/components/settings-view.tsx`.
+- **Icon rail pattern**: Follow the attention/tickets icons in `web/src/components/icon-rail.tsx` — add a team icon gated on `team.enabled`.
+- **Route pattern**: Follow `/attention` route structure — top-level route under `rootRoute`, not under `sidebarRoute`.
+- **Store pattern**: Follow `createAttentionSlice` in `web/src/store/attention-slice.ts` — create `createTeamSlice`.
+- **Coherence reuse**: The coherence engine can be called with team-wide data by constructing a `CoherenceInput` for each team member's PRs and tickets.
+- **Lifecycle bar reuse**: `LifecycleBar` and `deriveTicketIssueLifecycleStage()` work for any ticket/PR, not just the current user's.
 
 ## Settings Integration
 

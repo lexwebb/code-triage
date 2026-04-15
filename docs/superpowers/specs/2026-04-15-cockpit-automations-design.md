@@ -19,7 +19,16 @@ Build on the Truth Layer foundation to let Code Triage act on your behalf — au
 
 ## Prerequisites
 
-- Truth Layer (Direction A) must be implemented first — coherence engine, attention feed, and lifecycle tracking are the foundation these automations act on.
+- Truth Layer (Direction A) — **implemented**. The following are in place and available for automations to build on:
+  - `src/coherence.ts` — `evaluateCoherence()` returns `CoherenceAlert[]` with rules for stale-in-progress, done-but-unmerged, approved-but-lingering, review-bottleneck, CI failure, ticket-no-PR, etc.
+  - `src/attention.ts` — `refreshAttentionFeed()`, `getAttentionItems()`, `snoozeItem()`, `dismissItem()`, `pinItem()` with SQLite persistence (`attention_items` table).
+  - `src/db/schema.ts` — `attentionItems` table with `id`, `type`, `entityKind`, `entityIdentifier`, `priority`, `title`, `stage`, `stuckSince`, `firstSeenAt`, `snoozedUntil`, `dismissedAt`, `pinned`.
+  - `src/config.ts` — `coherence` thresholds in Config interface.
+  - `web/src/components/lifecycle-bar.tsx` — `LifecycleBar`, `deriveLifecycleStage()`, `deriveTicketIssueLifecycleStage()`.
+  - `web/src/store/attention-slice.ts` — Zustand slice with `fetchAttention()`, `snoozeAttention()`, `dismissAttention()`, `pinAttention()`.
+  - SSE event `attention` broadcast after coherence evaluation in CLI poll loop.
+  - `src/tickets/linker.ts` — `buildLinkMap()`, `mergeProviderPullLinksIntoLinkMap()`, `parseGithubPullRequestUrl()`.
+- `TicketProvider` interface needs extension — `transitionIssue(id: string, statusId: string): Promise<void>` must be added before Feature 2 (Ticket Status Sync) can be built.
 
 ## Feature 1: Auto-Resolve Stale Threads
 
@@ -57,7 +66,7 @@ When Claude evaluates a review comment as "resolve" and no new activity occurs o
 - New function in `src/actioner.ts`: `processAutoResolves()` — called after each poll cycle.
 - Checks eligible threads: eval is "resolve", age > delay, no new comments since eval.
 - Calls existing `resolveThread()` for each.
-- Records action in `attention_items` for audit trail.
+- Records action in `attention_items` table (already exists in `src/db/schema.ts`) for audit trail.
 
 ## Feature 2: Ticket Status Sync
 
@@ -99,8 +108,8 @@ Automatically transition Linear tickets based on PR lifecycle events:
 
 - New function in `src/tickets/sync.ts`: `syncTicketStatuses()`.
 - Runs after each poll cycle, compares current PR states to last-known states.
-- Uses `TicketProvider` interface — needs a new method: `transitionIssue(id, statusId)`.
-- Linear provider implements via `@linear/sdk` issue update.
+- Uses `TicketProvider` interface (defined in `src/tickets/types.ts`) — needs a new method: `transitionIssue(id: string, statusId: string): Promise<void>`.
+- `LinearProvider` (`src/tickets/linear.ts`) implements via `@linear/sdk` issue update. Current methods: `fetchMyIssues()`, `fetchIssuesByIdentifiers()`, `getIssueDetail()`, `getCurrentUser()`, `getTeams()`.
 
 ## Feature 3: Smart Notifications
 
@@ -129,8 +138,8 @@ Desktop notifications support actions (where platform allows):
 
 ### Implementation
 
-- Enhance existing `sendNotification()` in the notification system to accept structured content.
-- Claude evaluation summaries already exist — pipe them into notification messages.
+- Enhance existing notification system (`src/push.ts` for web push, `node-notifier` for desktop). The CLI already sends desktop notifications for high-priority attention alerts after coherence evaluation.
+- Claude evaluation summaries already exist in `CommentRecord.evaluation` — pipe them into notification messages.
 - Browser Notification API supports actions natively; node-notifier supports them on macOS.
 
 ## Feature 4: Morning Briefing
@@ -162,10 +171,10 @@ On first dashboard open of the day (or at a configured time), show a briefing mo
 
 ### Content Generation
 
-- **No Claude involved** — the briefing is assembled from data already computed by the coherence engine and poll cycle.
+- **No Claude involved** — the briefing is assembled from data already computed by the coherence engine (`src/coherence.ts`) and stored in `attention_items`.
 - Counts of events since last briefing, grouped by type.
-- Top 5 attention items by priority.
-- Stuck items from lifecycle tracking.
+- Top 5 attention items by priority (via `getAttentionItems()` from `src/attention.ts`).
+- Stuck items from lifecycle tracking (items with `stuckSince` set in `attention_items`).
 
 ### Implementation
 
@@ -207,8 +216,8 @@ Category shown as a badge on the ticket in the sidebar and attention feed. Click
 
 - New function in `src/actioner.ts`: `triageNewTickets()`.
 - Uses `claude -p` with a focused prompt: ticket title + description → category + reasoning.
-- Result stored in `attention_items` metadata.
-- Runs once per ticket (keyed by ticket identifier), not on every poll.
+- Result stored in `attention_items` table (use `type: "auto-triage"` and store category in `stage` field).
+- Runs once per ticket (keyed by ticket identifier, e.g. `auto-triage:ENG-42`), not on every poll.
 
 ## New Modules
 
@@ -218,6 +227,16 @@ Category shown as a badge on the ticket in the sidebar and attention feed. Click
 | `src/tickets/sync.ts` | Ticket status sync logic |
 | `web/src/components/morning-briefing.tsx` | Briefing modal |
 | `web/src/components/smart-notification.tsx` | Enhanced notification content |
+
+## Integration with Existing Infrastructure
+
+The following are already in place from Direction A and should be reused:
+
+- **Config pattern**: Follow `coherence` key pattern in `src/config.ts` — add `automations` as a new optional key with sub-objects per feature.
+- **Settings UI pattern**: Follow the "Coherence Thresholds" section in `web/src/components/settings-view.tsx` — add an "Automations" section with toggles.
+- **Poll loop integration point**: `src/cli.ts` runs coherence evaluation after ticket polling. Automations should run after coherence, using the same PR and ticket data already fetched.
+- **SSE broadcasting**: Use `sseBroadcast("automation", { ... })` for real-time UI updates, following the existing `attention` event pattern.
+- **Attention feed integration**: Auto-actions can write to `attention_items` via `refreshAttentionFeed()` or direct SQL for audit records.
 
 ## Settings Integration
 
