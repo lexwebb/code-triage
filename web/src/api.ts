@@ -164,7 +164,12 @@ export const api = {
   getReviewRequested: (repo?: string) => fetchJSON<PullRequest[]>(`/api/pulls/review-requested${repoQuery(repo)}`),
   getPull: (number: number, repo: string) => fetchJSON<PullRequestDetail>(`/api/pulls/${number}${repoQueryRequired(repo)}`),
   getPullFiles: (number: number, repo: string) => fetchJSON<PullFile[]>(`/api/pulls/${number}/files${repoQueryRequired(repo)}`),
-  getPullComments: (number: number, repo: string) => fetchJSON<ReviewComment[]>(`/api/pulls/${number}/comments${repoQueryRequired(repo)}`),
+  getPullComments: (number: number, repo: string, opts?: { autoEvaluate?: boolean }) =>
+    fetchJSON<ReviewComment[]>(
+      `/api/pulls/${number}/comments${repoQueryRequired(repo)}${
+        opts?.autoEvaluate === undefined ? "" : `&autoEvaluate=${opts.autoEvaluate ? "1" : "0"}`
+      }`,
+    ),
   getChecks: (number: number, repo: string, sha?: string) => fetchJSON<CheckSuite[]>(`/api/pulls/${number}/checks${repoQueryRequired(repo)}${sha ? `&sha=${encodeURIComponent(sha)}` : ""}`),
   getFileContent: (prNumber: number, path: string, repo: string) => fetchJSON<{ content: string; path: string }>(`/api/pulls/${prNumber}/files/${path}${repoQueryRequired(repo)}`),
   getState: () => fetchJSON<CrWatchState>("/api/state"),

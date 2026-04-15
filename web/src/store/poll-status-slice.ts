@@ -29,6 +29,14 @@ export const createPollStatusSlice: SliceCreator<PollStatusSlice> = (set, get) =
   connectSSE: () => {
     get().disconnectSSE();
     const es = new EventSource("/api/events");
+    let pendingEvalRefresh: ReturnType<typeof setTimeout> | null = null;
+    const schedulePullsRefresh = () => {
+      if (pendingEvalRefresh) return;
+      pendingEvalRefresh = setTimeout(() => {
+        pendingEvalRefresh = null;
+        void get().fetchPulls();
+      }, 300);
+    };
 
     es.addEventListener("poll-status", (ev) => {
       try {
@@ -47,6 +55,8 @@ export const createPollStatusSlice: SliceCreator<PollStatusSlice> = (set, get) =
     es.addEventListener("eval-complete", (ev) => {
       try {
         const data = JSON.parse((ev as MessageEvent).data) as { repo?: string; prNumber?: number };
+        // Keep sidebar PR badges/counts in sync when evaluations finish.
+        schedulePullsRefresh();
         if (data.repo && data.prNumber) {
           void get().refreshIfMatch(data.repo, data.prNumber);
         }
@@ -61,6 +71,10 @@ export const createPollStatusSlice: SliceCreator<PollStatusSlice> = (set, get) =
 
     set({ _eventSource: es });
     return () => {
+      if (pendingEvalRefresh) {
+        clearTimeout(pendingEvalRefresh);
+        pendingEvalRefresh = null;
+      }
       es.close();
       set({ _eventSource: null });
     };

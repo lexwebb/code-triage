@@ -83,6 +83,7 @@ export interface PrDetailSlice {
   fixModalOpenThreads: Set<number>;
   threadFixInstructions: Record<number, string>;
   reEvaluatingThreads: Set<number>;
+  runningAllEvals: boolean;
 
   // Diff view
   commentingLine: { line: number; side: "LEFT" | "RIGHT" } | null;
@@ -124,6 +125,7 @@ export interface PrDetailSlice {
   resolveComment: (commentId: number) => Promise<void>;
   dismissComment: (commentId: number) => Promise<void>;
   reEvaluateComment: (commentId: number) => Promise<void>;
+  runEvalsForSelectedPR: () => Promise<void>;
   updateCommentTriage: (commentId: number, patch: { snoozeUntil?: string | null; priority?: number | null; triageNote?: string | null }) => Promise<void>;
   startFix: (commentId: number, comment: { path: string; line: number; body: string; diffHunk: string }, userInstructions?: string) => Promise<void>;
   batchAction: (action: "reply" | "resolve" | "dismiss") => Promise<void>;

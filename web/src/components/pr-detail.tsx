@@ -48,7 +48,9 @@ export default function PRDetail() {
   const reviewError = useAppStore((s) => s.reviewError);
   const showRequestChanges = useAppStore((s) => s.showRequestChanges);
   const requestBody = useAppStore((s) => s.reviewBody);
+  const runningAllEvals = useAppStore((s) => s.runningAllEvals);
   const submitReview = useAppStore((s) => s.submitReview);
+  const runEvalsForSelectedPR = useAppStore((s) => s.runEvalsForSelectedPR);
   const setShowRequestChanges = useAppStore((s) => s.setShowRequestChanges);
   const setReviewBody = useAppStore((s) => s.setReviewBody);
   const muted = useAppStore((s) => s.detail ? s.isPRMuted(s.detail.repo, s.detail.number) : false);
@@ -62,6 +64,7 @@ export default function PRDetail() {
   if (!pr) return null;
 
   const isOwnPR = currentUser != null && pr.author === currentUser;
+  const showManualEvalButton = !isOwnPR;
 
   async function handleReview(event: "APPROVE" | "REQUEST_CHANGES" | "COMMENT", body?: string) {
     await submitReview(event, body);
@@ -85,6 +88,17 @@ export default function PRDetail() {
           </div>
         </div>
         <div className="flex items-center gap-2">
+          {showManualEvalButton && (
+            <Button
+              variant="gray"
+              size="xs"
+              onClick={() => void runEvalsForSelectedPR()}
+              disabled={runningAllEvals}
+              title="Run Claude evaluations for this PR on demand"
+            >
+              {runningAllEvals ? "Running evals..." : "Run evals"}
+            </Button>
+          )}
           {!isOwnPR && (
             <>
               <Button variant="green" size="xs" onClick={() => handleReview("APPROVE")} disabled={submitting}>

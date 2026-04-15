@@ -852,6 +852,11 @@ export function registerRoutes(): void {
   addRoute("GET", "/api/pulls/:number/comments", async (_req, res, params, query) => {
     const repo = requireRepo(query);
     const prNumber = parseInt(params.number, 10);
+    const autoEvaluateParam = query.get("autoEvaluate");
+    const autoEvaluate =
+      autoEvaluateParam !== "0" &&
+      autoEvaluateParam !== "false" &&
+      autoEvaluateParam !== "off";
 
     const pollByPr = await batchPullPollData(repo, [prNumber]);
     const poll = pollByPr.get(prNumber);
@@ -862,26 +867,28 @@ export function registerRoutes(): void {
     const config = loadConfig();
     const ignoredBots = buildIgnoredBotSet(config.ignoredBots);
 
-    // Enqueue evaluations for comments missing them
-    let enqueued = 0;
-    for (const c of comments) {
-      if (ignoredBots.has(c.user.login)) continue;
-      if (!needsEvaluation(state, c.id, repo)) continue;
-      const crComment = {
-        id: c.id,
-        prNumber,
-        path: c.path,
-        line: c.line || c.original_line || 0,
-        diffHunk: c.diff_hunk,
-        body: c.body,
-        inReplyToId: c.in_reply_to_id ?? null,
-      };
-      const result = enqueueEvaluation(crComment, prNumber, repo, state);
-      if (result === "queued") enqueued++;
-    }
-    if (enqueued > 0) {
-      saveState(state);
-      void drainOnce();
+    if (autoEvaluate) {
+      // Enqueue evaluations for comments missing them
+      let enqueued = 0;
+      for (const c of comments) {
+        if (ignoredBots.has(c.user.login)) continue;
+        if (!needsEvaluation(state, c.id, repo)) continue;
+        const crComment = {
+          id: c.id,
+          prNumber,
+          path: c.path,
+          line: c.line || c.original_line || 0,
+          diffHunk: c.diff_hunk,
+          body: c.body,
+          inReplyToId: c.in_reply_to_id ?? null,
+        };
+        const result = enqueueEvaluation(crComment, prNumber, repo, state);
+        if (result === "queued") enqueued++;
+      }
+      if (enqueued > 0) {
+        saveState(state);
+        void drainOnce();
+      }
     }
 
     json(res, comments.map((c) => {

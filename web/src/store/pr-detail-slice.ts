@@ -2,6 +2,13 @@ import { api } from "../api";
 import type { QueuedFixItem } from "../api";
 import type { SliceCreator, PrDetailSlice } from "./types";
 
+function isAuthoredPR(
+  authored: Array<{ number: number; repo: string }>,
+  pr: { number: number; repo: string },
+): boolean {
+  return authored.some((candidate) => candidate.number === pr.number && candidate.repo === pr.repo);
+}
+
 export const createPrDetailSlice: SliceCreator<PrDetailSlice> = (set, get) => ({
   selectedPR: null,
   detail: null,
@@ -35,6 +42,7 @@ export const createPrDetailSlice: SliceCreator<PrDetailSlice> = (set, get) => ({
   fixModalOpenThreads: new Set(),
   threadFixInstructions: {},
   reEvaluatingThreads: new Set(),
+  runningAllEvals: false,
 
   // Diff view
   commentingLine: null,
@@ -90,10 +98,11 @@ export const createPrDetailSlice: SliceCreator<PrDetailSlice> = (set, get) => ({
     });
 
     try {
+      const autoEvaluate = isAuthoredPR(get().authored, { number, repo });
       const [detail, files, comments] = await Promise.all([
         api.getPull(number, repo),
         api.getPullFiles(number, repo),
-        api.getPullComments(number, repo),
+        api.getPullComments(number, repo, { autoEvaluate }),
       ]);
       // Bail if user navigated away
       const current = get().selectedPR;
@@ -121,7 +130,8 @@ export const createPrDetailSlice: SliceCreator<PrDetailSlice> = (set, get) => ({
     const pr = get().selectedPR;
     if (!pr) return;
     try {
-      const comments = await api.getPullComments(pr.number, pr.repo);
+      const autoEvaluate = isAuthoredPR(get().authored, pr);
+      const comments = await api.getPullComments(pr.number, pr.repo, { autoEvaluate });
       set({ comments });
     } catch (err) {
       console.error("Failed to reload comments:", err);
@@ -132,9 +142,10 @@ export const createPrDetailSlice: SliceCreator<PrDetailSlice> = (set, get) => ({
     const current = get().selectedPR;
     if (!current || current.repo !== repo || current.number !== prNumber) return;
     try {
+      const autoEvaluate = isAuthoredPR(get().authored, { number: prNumber, repo });
       const [detail, comments] = await Promise.all([
         api.getPull(prNumber, repo),
-        api.getPullComments(prNumber, repo),
+        api.getPullComments(prNumber, repo, { autoEvaluate }),
       ]);
       set({ detail, comments });
     } catch {
@@ -270,6 +281,8 @@ export const createPrDetailSlice: SliceCreator<PrDetailSlice> = (set, get) => ({
     set((s) => ({ reEvaluatingThreads: new Set(s.reEvaluatingThreads).add(commentId) }));
     try {
       await api.reEvaluate(pr.repo, commentId, pr.number);
+      // Reflect "evaluating" status in sidebar badges immediately.
+      void get().fetchPulls();
       await get().reloadComments();
     } finally {
       set((s) => {
@@ -277,6 +290,22 @@ export const createPrDetailSlice: SliceCreator<PrDetailSlice> = (set, get) => ({
         next.delete(commentId);
         return { reEvaluatingThreads: next };
       });
+    }
+  },
+
+  runEvalsForSelectedPR: async () => {
+    const pr = get().selectedPR;
+    if (!pr) return;
+    set({ runningAllEvals: true });
+    try {
+      const comments = await api.getPullComments(pr.number, pr.repo, { autoEvaluate: true });
+      set({ comments });
+      // Reflect freshly queued evaluations in sidebar badges immediately.
+      void get().fetchPulls();
+    } catch (err) {
+      console.error("Failed to run evaluations:", err);
+    } finally {
+      set({ runningAllEvals: false });
     }
   },
 
