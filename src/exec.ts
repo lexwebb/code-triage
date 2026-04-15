@@ -165,14 +165,10 @@ export function hasEnvGitHubToken(): boolean {
   return Boolean(process.env.GITHUB_TOKEN?.trim() || process.env.GH_TOKEN?.trim());
 }
 
-/** True in `yarn dev`, `NODE_ENV=development`, or `CODE_TRIAGE_LOG_GITHUB=1`. Off under Vitest (`NODE_ENV=test`). */
+/** Per-request stderr logging when `CODE_TRIAGE_LOG_GITHUB=1`. Off under Vitest (`NODE_ENV=test`). */
 function shouldLogGitHubRequests(): boolean {
   if (process.env.NODE_ENV === "test") return false;
-  return (
-    process.env.NODE_ENV === "development" ||
-    process.env.npm_lifecycle_event === "dev" ||
-    process.env.CODE_TRIAGE_LOG_GITHUB === "1"
-  );
+  return process.env.CODE_TRIAGE_LOG_GITHUB === "1";
 }
 
 function formatGithubRequestUrl(input: RequestInfo | URL): string {

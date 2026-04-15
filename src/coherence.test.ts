@@ -175,14 +175,14 @@ describe("evaluateCoherence", () => {
     expect(alert?.priority).toBe("high");
   });
 
-  it("detects inactive ticket with no PR", () => {
+  it("detects inactive in-progress ticket with no open linked PR", () => {
     const tenDaysAgo = new Date(Date.now() - 10 * 24 * 60 * 60 * 1000).toISOString();
     const input = makeInput({
       myTickets: [{
         id: "t1",
         identifier: "ENG-99",
         title: "Refactor logging",
-        state: { name: "Todo", color: "#ccc", type: "unstarted" },
+        state: { name: "In Progress", color: "#ccc", type: "started" },
         priority: 3,
         labels: [],
         updatedAt: tenDaysAgo,
@@ -194,6 +194,25 @@ describe("evaluateCoherence", () => {
     const alert = alerts.find((a) => a.type === "ticket-inactive");
     expect(alert).toBeDefined();
     expect(alert?.priority).toBe("low");
+  });
+
+  it("does not flag ticket-inactive for Todo/backlog idle tickets", () => {
+    const tenDaysAgo = new Date(Date.now() - 10 * 24 * 60 * 60 * 1000).toISOString();
+    const input = makeInput({
+      myTickets: [{
+        id: "t1",
+        identifier: "ENG-100",
+        title: "Someday task",
+        state: { name: "Todo", color: "#ccc", type: "unstarted" },
+        priority: 3,
+        labels: [],
+        updatedAt: tenDaysAgo,
+        providerUrl: "https://linear.app/eng/issue/ENG-100",
+      }],
+    });
+
+    const alerts = evaluateCoherence(input);
+    expect(alerts.find((a) => a.type === "ticket-inactive")).toBeUndefined();
   });
 
   it("detects CI failure on authored PR", () => {
@@ -350,7 +369,39 @@ describe("evaluateCoherence", () => {
       ticketToPRs: {},
     });
 
-    const alerts = evaluateCoherence(input);
+       const alerts = evaluateCoherence(input);
     expect(alerts.find((a) => a.type === "ticket-no-pr")).toBeUndefined();
+  });
+
+  it("omits PR alerts for globally muted repos", () => {
+    const input = makeInput({
+      mutedRepos: ["Org/Noisy-Repo"],
+      authoredPRs: [{
+        number: 1,
+        repo: "Org/Noisy-Repo",
+        title: "x",
+        branch: "b",
+        updatedAt: new Date().toISOString(),
+        checksStatus: "failure",
+        hasHumanApproval: false,
+        merged: false,
+        reviewers: [],
+      }],
+      reviewRequestedPRs: [{
+        number: 2,
+        repo: "org/noisy-repo",
+        title: "y",
+        branch: "c",
+        updatedAt: new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString(),
+        checksStatus: "success",
+        hasHumanApproval: false,
+        merged: false,
+        reviewers: [],
+      }],
+    });
+
+    const alerts = evaluateCoherence(input);
+    expect(alerts.find((a) => a.type === "ci-failure")).toBeUndefined();
+    expect(alerts.find((a) => a.type === "review-bottleneck")).toBeUndefined();
   });
 });

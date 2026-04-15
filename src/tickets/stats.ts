@@ -3,6 +3,12 @@ export interface RequestStatsSnapshot {
   byOperation: Record<string, number>;
 }
 
+/** Per-request stderr logging for Linear GraphQL when `CODE_TRIAGE_LOG_LINEAR=1`. Off under Vitest. */
+export function shouldLogLinearRequests(): boolean {
+  if (process.env.NODE_ENV === "test") return false;
+  return process.env.CODE_TRIAGE_LOG_LINEAR === "1";
+}
+
 let linearRequestStats: RequestStatsSnapshot = {
   total: 0,
   byOperation: {},

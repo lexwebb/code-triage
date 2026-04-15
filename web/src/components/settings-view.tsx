@@ -250,6 +250,20 @@ export default function SettingsView({
           />
         </section>
 
+        <section className="space-y-2">
+          <h2 className="text-xs text-gray-500 uppercase tracking-wide">Muted repositories</h2>
+          <p className="text-xs text-gray-600">
+            Whole repos to hide from the PR sidebar and attention feed (one <code className="text-gray-500">owner/repo</code> per line).
+            Opening a repo directly still works.
+          </p>
+          <textarea
+            className="w-full min-h-[88px] rounded-md border border-gray-700 bg-gray-900 px-3 py-2 text-sm font-mono"
+            value={form.mutedRepos}
+            onChange={(e) => updateField("mutedRepos", e.target.value)}
+            placeholder="acme/old-monolith"
+          />
+        </section>
+
         <section className="space-y-3">
           <h2 className="text-xs text-gray-500 uppercase tracking-wide">GitHub authentication</h2>
           <p className="text-xs text-gray-600">

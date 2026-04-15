@@ -22,10 +22,26 @@ import { enqueueEvaluation, drainOnce } from "./eval-queue.js";
 import { buildIgnoredBotSet } from "./poller.js";
 import { getRawSqlite } from "./db/client.js";
 import type { LinkablePR } from "./tickets/linker.js";
+import { filterSidebarRecordsByMutedRepos, mutedReposAsSet } from "./muted-repos.js";
 
 async function getUsernameOrNull(): Promise<string | null> {
   const u = await getGitHubViewerCached();
   return u?.login ?? null;
+}
+
+/** When `repo` query is absent, drop globally muted repos from sidebar lists (explicit repo view still works). */
+function filterPullSidebarResponse(
+  lists: {
+    authored: Array<Record<string, unknown>>;
+    reviewRequested: Array<Record<string, unknown>>;
+  },
+  repoFilter: string | null,
+): void {
+  if (repoFilter) return;
+  const muted = mutedReposAsSet(loadConfig().mutedRepos);
+  if (muted.size === 0) return;
+  lists.authored = filterSidebarRecordsByMutedRepos(lists.authored, muted);
+  lists.reviewRequested = filterSidebarRecordsByMutedRepos(lists.reviewRequested, muted);
 }
 
 interface GhPull {
@@ -307,6 +323,7 @@ export async function fetchMergedAuthoredLinkablePRs(
           title: pr.title,
           body: pr.body ?? "",
           mergedAt: pr.merged_at ?? undefined,
+          authorLogin: pr.user.login,
         });
       }
       saveClosedAuthoredCache(repoInfo.repo, repoItems);
@@ -334,6 +351,7 @@ export function serializeConfigForClient(c: Config): Record<string, unknown> {
     pollReviewRequested: c.pollReviewRequested ?? false,
     commentRetentionDays: c.commentRetentionDays ?? 0,
     ignoredBots: c.ignoredBots ?? [],
+    mutedRepos: c.mutedRepos ?? [],
     accounts: (c.accounts ?? []).map((a) => ({
       name: a.name,
       orgs: a.orgs,
@@ -401,6 +419,22 @@ export function mergeConfigFromBody(body: Record<string, unknown>, previous: Con
     ignoredBots = body.ignoredBots.filter((x): x is string => typeof x === "string").map((s) => s.trim()).filter(Boolean);
   } else {
     throw new Error("ignoredBots must be an array of strings");
+  }
+
+  let mutedRepos: string[] | undefined;
+  if (body.mutedRepos === undefined) {
+    mutedRepos = previous.mutedRepos;
+  } else if (Array.isArray(body.mutedRepos)) {
+    mutedRepos = [
+      ...new Set(
+        body.mutedRepos
+          .filter((x): x is string => typeof x === "string")
+          .map((s) => s.trim())
+          .filter(Boolean),
+      ),
+    ];
+  } else {
+    throw new Error("mutedRepos must be an array of strings");
   }
 
   let githubToken: string | undefined;
@@ -574,6 +608,7 @@ export function mergeConfigFromBody(body: Record<string, unknown>, previous: Con
     pollReviewRequested,
     commentRetentionDays: commentRetentionDays > 0 ? commentRetentionDays : undefined,
     ignoredBots: ignoredBots?.length ? ignoredBots : undefined,
+    mutedRepos: mutedRepos?.length ? mutedRepos : undefined,
     githubToken,
     accounts,
     evalPromptAppend,
@@ -748,6 +783,7 @@ export function registerRoutes(): void {
       ? getRepos().filter((r) => r.repo === repoFilter)
       : getRepos();
     const lists = await buildPullSidebarLists(targetRepos);
+    filterPullSidebarResponse(lists, repoFilter);
     json(res, lists);
   });
 
@@ -757,8 +793,9 @@ export function registerRoutes(): void {
     const targetRepos = repoFilter
       ? getRepos().filter((r) => r.repo === repoFilter)
       : getRepos();
-    const { authored } = await buildPullSidebarLists(targetRepos);
-    json(res, authored);
+    const lists = await buildPullSidebarLists(targetRepos);
+    filterPullSidebarResponse(lists, repoFilter);
+    json(res, lists.authored);
   });
 
   // GET /api/pulls/review-requested?repo=owner/repo (optional)
@@ -767,8 +804,9 @@ export function registerRoutes(): void {
     const targetRepos = repoFilter
       ? getRepos().filter((r) => r.repo === repoFilter)
       : getRepos();
-    const { reviewRequested } = await buildPullSidebarLists(targetRepos);
-    json(res, reviewRequested);
+    const lists = await buildPullSidebarLists(targetRepos);
+    filterPullSidebarResponse(lists, repoFilter);
+    json(res, lists.reviewRequested);
   });
 
   // GET /api/pulls/:number?repo=owner/repo

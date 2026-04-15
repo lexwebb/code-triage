@@ -8,6 +8,8 @@ export interface LinkablePR {
   body: string;
   /** ISO timestamp when merged (closed authored fetches only). */
   mergedAt?: string;
+  /** GitHub author login (filled when fetched from the API; may be absent in older cache rows). */
+  authorLogin?: string;
 }
 
 export interface LinkedPRRef {

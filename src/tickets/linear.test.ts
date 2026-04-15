@@ -58,18 +58,22 @@ function makeGqlIssueNode(overrides: Record<string, unknown> = {}) {
 }
 
 function gqlOk(data: unknown) {
+  const body = JSON.stringify({ data });
   return {
     ok: true,
     status: 200,
-    json: async () => ({ data }),
+    text: async () => body,
+    json: async () => JSON.parse(body) as { data: unknown },
   };
 }
 
 function gqlError(message: string) {
+  const body = JSON.stringify({ errors: [{ message }] });
   return {
     ok: true,
     status: 200,
-    json: async () => ({ errors: [{ message }] }),
+    text: async () => body,
+    json: async () => JSON.parse(body) as { errors: Array<{ message: string }> },
   };
 }
 
@@ -165,8 +169,11 @@ describe("LinearProvider", () => {
       const node = makeGqlIssueNode({
         attachments: { nodes: [] },
         syncedWith: [
-          { service: "github", metadata: { owner: "o", repo: "r", number: 10 } },
-          { service: "slack", metadata: {} },
+          {
+            service: "github",
+            metadata: { __typename: "ExternalEntityInfoGithubMetadata", owner: "o", repo: "r", number: 10 },
+          },
+          { service: "slack", metadata: { __typename: "ExternalEntitySlackMetadata" } },
         ],
       });
       mockFetch.mockResolvedValue(gqlOk({ issues: { pageInfo: { hasNextPage: false }, nodes: [node] } }));
@@ -218,6 +225,29 @@ describe("LinearProvider", () => {
       };
       expect(firstQuery.query).toContain("syncedWith");
       expect(secondQuery.query).not.toContain("syncedWith");
+    });
+
+    it("falls back when Linear returns HTTP 400 for syncedWith query", async () => {
+      mockViewer.mockResolvedValue({ id: "user-1" });
+      const node = makeGqlIssueNode({ identifier: "ENG-10" });
+      const errBody = JSON.stringify({
+        errors: [{ message: 'Cannot query field "syncedWith" on type "Issue".' }],
+      });
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: false,
+          status: 400,
+          text: async () => errBody,
+          json: async () => JSON.parse(errBody),
+        })
+        .mockResolvedValueOnce(
+          gqlOk({ issues: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [node] } }),
+        );
+
+      const issues = await provider.fetchMyIssues();
+
+      expect(issues).toHaveLength(1);
+      expect(mockFetch).toHaveBeenCalledTimes(2);
     });
   });
 

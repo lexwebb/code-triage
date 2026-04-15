@@ -133,6 +133,7 @@ export const createUiSlice: SliceCreator<UiSlice> = (set, get) => ({
         pollRateLimitAware: form.pollRateLimitAware,
         preferredEditor: form.preferredEditor,
         ignoredBots: form.ignoredBots.split("\n").map((s) => s.trim()).filter(Boolean),
+        mutedRepos: form.mutedRepos.split("\n").map((s) => s.trim()).filter(Boolean),
         evalPromptAppend: form.evalPromptAppend,
         evalPromptAppendByRepo,
         evalClaudeExtraArgs,

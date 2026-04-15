@@ -41,6 +41,7 @@ describe("serializeConfigForClient", () => {
     expect(out.commentRetentionDays).toBe(0);
     expect(out.hasGithubToken).toBe(true);
     expect(out.accounts).toEqual([{ name: "a1", orgs: ["o"], hasToken: true }]);
+    expect(out.mutedRepos).toEqual([]);
     expect(JSON.stringify(out)).not.toContain("secret");
   });
 
@@ -97,6 +98,26 @@ describe("mergeConfigFromBody", () => {
     expect(() =>
       mergeConfigFromBody({ root: "/x", ignoredBots: "nope" } as Record<string, unknown>, baseConfig),
     ).toThrow(/ignoredBots/);
+  });
+
+  it("merges mutedRepos (deduped, trimmed)", () => {
+    const prev: Config = { ...baseConfig, mutedRepos: ["a/b"] };
+    const next = mergeConfigFromBody(
+      { root: "/x", mutedRepos: ["  a/B ", "c/d", "c/d"] },
+      prev,
+    );
+    expect(next.mutedRepos).toEqual(["a/B", "c/d"]);
+  });
+
+  it("clears mutedRepos when body sends empty array", () => {
+    const prev: Config = { ...baseConfig, mutedRepos: ["x/y"] };
+    expect(mergeConfigFromBody({ root: "/x", mutedRepos: [] }, prev).mutedRepos).toBeUndefined();
+  });
+
+  it("throws when mutedRepos is not an array", () => {
+    expect(() =>
+      mergeConfigFromBody({ root: "/x", mutedRepos: "nope" } as Record<string, unknown>, baseConfig),
+    ).toThrow(/mutedRepos/);
   });
 
   it("parses accounts with comma-separated orgs string", () => {

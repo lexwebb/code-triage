@@ -645,6 +645,7 @@ async function poll(): Promise<void> {
           ticketInactivityDays: config.coherence?.ticketInactivityDays ?? 5,
         },
         now: Date.now(),
+        mutedRepos: config.mutedRepos ?? [],
       };
 
       if (shouldLogAttentionPipeline()) {

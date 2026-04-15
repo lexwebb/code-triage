@@ -15,6 +15,7 @@ export function payloadToForm(c: AppConfigPayload): SettingsFormState {
     pollRateLimitAware: c.pollRateLimitAware !== false,
     preferredEditor: c.preferredEditor ?? "vscode",
     ignoredBots: (c.ignoredBots ?? []).join("\n"),
+    mutedRepos: (c.mutedRepos ?? []).join("\n"),
     githubToken: "",
     hasGithubToken: Boolean(c.hasGithubToken),
     accounts: (c.accounts ?? []).map((a) => ({

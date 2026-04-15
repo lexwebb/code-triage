@@ -2,8 +2,22 @@ import { getRawSqlite } from "../db/client.js";
 import { loadConfig } from "../config.js";
 import { getRepos, getTicketState } from "../server.js";
 import { buildPullSidebarLists, fetchMergedAuthoredLinkablePRs } from "../api.js";
+import {
+  filterPrToTicketsRecordForMutedRepos,
+  filterPullRowsByMutedRepos,
+  filterSidebarRecordsByMutedRepos,
+  filterTicketToPRsRecordForMutedRepos,
+  mutedReposAsSet,
+} from "../muted-repos.js";
 import { evaluateCoherence, type CoherenceAlert, type CoherenceInput, type CoherencePR } from "../coherence.js";
 import type { TicketIssue } from "../tickets/types.js";
+import {
+  deriveTicketIssueLifecycleStage,
+  mergedPullLifecycleStage,
+  resolveAttentionLifecycleStage,
+  type LifecycleStage,
+  type OpenPullLike,
+} from "../lifecycle-stage.js";
 
 export interface TeamOverviewSnapshot {
   generatedAt: string;
@@ -14,11 +28,53 @@ export interface TeamOverviewSnapshot {
     unlinkedPrs: number;
     unlinkedTickets: number;
   };
-  stuck: Array<{ entityKind: "pr" | "ticket"; entityIdentifier: string; title: string }>;
-  awaitingReview: Array<{ repo: string; number: number; title: string; waitHours: number }>;
-  recentlyMerged: Array<{ repo: string; number: number; title: string; mergedAt: string }>;
-  unlinkedPrs: Array<{ repo: string; number: number; title: string }>;
-  unlinkedTickets: Array<{ identifier: string; title: string }>;
+  stuck: Array<{
+    entityKind: "pr" | "ticket";
+    entityIdentifier: string;
+    title: string;
+    lifecycleStage?: LifecycleStage;
+    /** When true, lifecycle bar uses amber for the current stage (attention parity for stuck work). */
+    lifecycleStuck?: boolean;
+    /** PR author login or ticket assignee display name. */
+    actorLabel?: string;
+    /** Ticket provider URL when known (e.g. Linear); omitted for PR rows. */
+    providerUrl?: string;
+  }>;
+  awaitingReview: Array<{
+    repo: string;
+    number: number;
+    title: string;
+    waitHours: number;
+    lifecycleStage?: LifecycleStage;
+    lifecycleStuck?: boolean;
+    actorLabel?: string;
+  }>;
+  recentlyMerged: Array<{
+    repo: string;
+    number: number;
+    title: string;
+    mergedAt: string;
+    lifecycleStage?: LifecycleStage;
+    lifecycleStuck?: boolean;
+    actorLabel?: string;
+  }>;
+  unlinkedPrs: Array<{
+    repo: string;
+    number: number;
+    title: string;
+    lifecycleStage?: LifecycleStage;
+    lifecycleStuck?: boolean;
+    actorLabel?: string;
+  }>;
+  unlinkedTickets: Array<{
+    identifier: string;
+    title: string;
+    lifecycleStage?: LifecycleStage;
+    lifecycleStuck?: boolean;
+    actorLabel?: string;
+    /** e.g. Linear issue URL from the API */
+    providerUrl?: string;
+  }>;
 }
 
 const STUCK_ALERT_TYPES = new Set([
@@ -51,6 +107,58 @@ function isDoneTicket(ticket: TicketIssue): boolean {
   return false;
 }
 
+function prEntityKey(repo: string, number: number): string {
+  return `${repo}#${number}`;
+}
+
+function parsePrEntityKey(key: string): { repo: string; number: number } | null {
+  const i = key.lastIndexOf("#");
+  if (i <= 0) return null;
+  const repo = key.slice(0, i);
+  const num = parseInt(key.slice(i + 1), 10);
+  if (!Number.isFinite(num)) return null;
+  return { repo, number: num };
+}
+
+function findSidebarRowForPrKey(
+  authored: Array<Record<string, unknown>>,
+  reviewRequested: Array<Record<string, unknown>>,
+  entityIdentifier: string,
+): Record<string, unknown> | undefined {
+  const parsed = parsePrEntityKey(entityIdentifier);
+  if (!parsed) return undefined;
+  for (const row of [...authored, ...reviewRequested]) {
+    if (row.repo === parsed.repo && row.number === parsed.number) return row;
+  }
+  return undefined;
+}
+
+function sidebarAuthorLogin(row: Record<string, unknown> | undefined): string | undefined {
+  const a = row?.author;
+  return typeof a === "string" && a.trim() ? a.trim() : undefined;
+}
+
+function buildOpenPulls(
+  authored: Array<Record<string, unknown>>,
+  reviewRequested: Array<Record<string, unknown>>,
+): OpenPullLike[] {
+  const seen = new Set<string>();
+  const out: OpenPullLike[] = [];
+  for (const row of [...authored, ...reviewRequested]) {
+    const repo = row.repo as string;
+    const number = row.number as number;
+    const k = prEntityKey(repo, number);
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push({
+      repo,
+      number,
+      hasHumanApproval: Boolean(row.hasHumanApproval),
+    });
+  }
+  return out;
+}
+
 function mapSidebarRowToCoherencePR(p: Record<string, unknown>): CoherencePR {
   return {
     number: p.number as number,
@@ -80,15 +188,40 @@ export function buildTeamOverviewSnapshotFromData(input: {
   repoLinkedIssues: TicketIssue[];
   ticketToPRs: Record<string, Array<{ number: number; repo: string; title: string }>>;
   prToTickets: Record<string, string[]>;
-  recentlyMerged: Array<{ repo: string; number: number; title: string; mergedAt: string }>;
+  recentlyMerged: Array<{ repo: string; number: number; title: string; mergedAt: string; authorLogin?: string }>;
 }): TeamOverviewSnapshot {
+  const openPulls = buildOpenPulls(input.authored, input.reviewRequested);
+  const lifecycleCtx = {
+    prToTickets: input.prToTickets,
+    openPulls,
+    myTickets: input.myIssues,
+    repoLinkedTickets: input.repoLinkedIssues,
+  };
+
   const stuck: TeamOverviewSnapshot["stuck"] = [];
   for (const a of input.alerts) {
     if (!STUCK_ALERT_TYPES.has(a.type)) continue;
+    const lifecycleStage = resolveAttentionLifecycleStage(
+      { entityKind: a.entityKind, entityIdentifier: a.entityIdentifier, stage: a.stage },
+      lifecycleCtx,
+    );
+    let actorLabel: string | undefined;
+    let providerUrl: string | undefined;
+    if (a.entityKind === "pr") {
+      actorLabel = sidebarAuthorLogin(findSidebarRowForPrKey(input.authored, input.reviewRequested, a.entityIdentifier));
+    } else {
+      const ticket = [...input.myIssues, ...input.repoLinkedIssues].find((t) => t.identifier === a.entityIdentifier);
+      actorLabel = ticket ? (ticket.assignee?.name?.trim() || "Unassigned") : undefined;
+      providerUrl = ticket?.providerUrl;
+    }
     stuck.push({
       entityKind: a.entityKind,
       entityIdentifier: a.entityIdentifier,
       title: a.title,
+      lifecycleStage,
+      lifecycleStuck: true,
+      actorLabel,
+      ...(providerUrl ? { providerUrl } : {}),
     });
   }
 
@@ -100,7 +233,17 @@ export function buildTeamOverviewSnapshotFromData(input: {
     const updatedAt = row.updatedAt as string;
     const waitMs = input.now - new Date(updatedAt).getTime();
     const waitHours = Math.max(0, Math.floor(waitMs / (1000 * 60 * 60)));
-    awaitingReview.push({ repo, number, title, waitHours });
+    const key = prEntityKey(repo, number);
+    const lifecycleStage = resolveAttentionLifecycleStage({ entityKind: "pr", entityIdentifier: key }, lifecycleCtx);
+    awaitingReview.push({
+      repo,
+      number,
+      title,
+      waitHours,
+      lifecycleStage,
+      lifecycleStuck: false,
+      actorLabel: sidebarAuthorLogin(row),
+    });
   }
   awaitingReview.sort((a, b) => b.waitHours - a.waitHours);
 
@@ -109,12 +252,20 @@ export function buildTeamOverviewSnapshotFromData(input: {
   for (const row of [...input.authored, ...input.reviewRequested]) {
     const repo = row.repo as string;
     const number = row.number as number;
-    const key = `${repo}#${number}`;
+    const key = prEntityKey(repo, number);
     const tickets = input.prToTickets[key];
     if (tickets && tickets.length > 0) continue;
     if (seenPr.has(key)) continue;
     seenPr.add(key);
-    unlinkedPrs.push({ repo, number, title: row.title as string });
+    const lifecycleStage = resolveAttentionLifecycleStage({ entityKind: "pr", entityIdentifier: key }, lifecycleCtx);
+    unlinkedPrs.push({
+      repo,
+      number,
+      title: row.title as string,
+      lifecycleStage,
+      lifecycleStuck: false,
+      actorLabel: sidebarAuthorLogin(row),
+    });
   }
 
   const unlinkedTickets: TeamOverviewSnapshot["unlinkedTickets"] = [];
@@ -127,13 +278,27 @@ export function buildTeamOverviewSnapshotFromData(input: {
     const linked = input.ticketToPRs[id] ?? [];
     const hasProviderPrs = (ticket.providerLinkedPulls?.length ?? 0) > 0;
     if (linked.length > 0 || hasProviderPrs) continue;
-    unlinkedTickets.push({ identifier: id, title: ticket.title });
+    const lifecycleStage = deriveTicketIssueLifecycleStage(ticket, input.prToTickets, openPulls);
+    unlinkedTickets.push({
+      identifier: id,
+      title: ticket.title,
+      lifecycleStage,
+      lifecycleStuck: false,
+      actorLabel: ticket.assignee?.name?.trim() || "Unassigned",
+      ...(ticket.providerUrl ? { providerUrl: ticket.providerUrl } : {}),
+    });
   }
 
   const recentlyMerged = [...input.recentlyMerged]
     .filter((r) => r.mergedAt)
     .sort((a, b) => new Date(b.mergedAt).getTime() - new Date(a.mergedAt).getTime())
-    .slice(0, 15);
+    .slice(0, 15)
+    .map(({ authorLogin, ...r }) => ({
+      ...r,
+      lifecycleStage: mergedPullLifecycleStage(),
+      lifecycleStuck: false,
+      actorLabel: authorLogin,
+    }));
 
   return {
     generatedAt: input.generatedAt,
@@ -199,24 +364,31 @@ export async function rebuildTeamOverviewSnapshot(): Promise<{ snapshot: TeamOve
       return { snapshot: snap, error: "GitHub user unavailable" };
     }
 
+    const muted = mutedReposAsSet(config.mutedRepos);
+    const authored = filterSidebarRecordsByMutedRepos(lists.authored, muted);
+    const reviewRequested = filterSidebarRecordsByMutedRepos(lists.reviewRequested, muted);
+    const mergedLinkableVisible = filterPullRowsByMutedRepos(mergedLinkable, muted);
+
     const tState = getTicketState();
-    const toPRsRecord: Record<string, Array<{ number: number; repo: string; title: string }>> = {};
+    const toPRsRaw: Record<string, Array<{ number: number; repo: string; title: string }>> = {};
     for (const [k, v] of tState.linkMap.ticketToPRs) {
-      toPRsRecord[k] = v;
+      toPRsRaw[k] = v;
     }
-    const toTicketsRecord: Record<string, string[]> = {};
+    const prToTicketsRaw: Record<string, string[]> = {};
     for (const [k, v] of tState.linkMap.prToTickets) {
-      toTicketsRecord[k] = v;
+      prToTicketsRaw[k] = v;
     }
+    const ticketToPRs = filterTicketToPRsRecordForMutedRepos(toPRsRaw, muted);
+    const prToTickets = filterPrToTicketsRecordForMutedRepos(prToTicketsRaw, muted);
 
     const now = Date.now();
     const coherenceInput: CoherenceInput = {
       myTickets: tState.myIssues,
       repoLinkedTickets: tState.repoLinkedIssues,
-      authoredPRs: lists.authored.map(mapSidebarRowToCoherencePR),
-      reviewRequestedPRs: lists.reviewRequested.map(mapSidebarRowToCoherencePR),
-      ticketToPRs: toPRsRecord,
-      prToTickets: toTicketsRecord,
+      authoredPRs: authored.map(mapSidebarRowToCoherencePR),
+      reviewRequestedPRs: reviewRequested.map(mapSidebarRowToCoherencePR),
+      ticketToPRs,
+      prToTickets,
       thresholds: {
         branchStalenessDays: config.coherence?.branchStalenessDays ?? 3,
         approvedUnmergedHours: config.coherence?.approvedUnmergedHours ?? 24,
@@ -224,28 +396,30 @@ export async function rebuildTeamOverviewSnapshot(): Promise<{ snapshot: TeamOve
         ticketInactivityDays: config.coherence?.ticketInactivityDays ?? 5,
       },
       now,
+      mutedRepos: config.mutedRepos ?? [],
     };
 
     const alerts = evaluateCoherence(coherenceInput);
-    const recentlyMerged = mergedLinkable
+    const recentlyMerged = mergedLinkableVisible
       .filter((p) => p.mergedAt)
       .map((p) => ({
         repo: p.repo,
         number: p.number,
         title: p.title,
         mergedAt: p.mergedAt!,
+        authorLogin: p.authorLogin,
       }));
 
     const snapshot = buildTeamOverviewSnapshotFromData({
       generatedAt,
       now,
       alerts,
-      authored: lists.authored,
-      reviewRequested: lists.reviewRequested,
+      authored,
+      reviewRequested,
       myIssues: tState.myIssues,
       repoLinkedIssues: tState.repoLinkedIssues,
-      ticketToPRs: toPRsRecord,
-      prToTickets: toTicketsRecord,
+      ticketToPRs,
+      prToTickets,
       recentlyMerged,
     });
 

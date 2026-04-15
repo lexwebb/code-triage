@@ -98,8 +98,16 @@ describe("buildTeamOverviewSnapshotFromData", () => {
       prToTickets: {},
       recentlyMerged: [],
     });
-    expect(snap.unlinkedPrs).toEqual([{ repo: "acme/app", number: 10, title: "Lonely PR" }]);
-    expect(snap.unlinkedTickets).toEqual([{ identifier: "ENG-1", title: "No PR yet" }]);
+    expect(snap.unlinkedPrs).toHaveLength(1);
+    expect(snap.unlinkedPrs[0]).toMatchObject({ repo: "acme/app", number: 10, title: "Lonely PR" });
+    expect(snap.unlinkedPrs[0]!.lifecycleStage).toBeDefined();
+    expect(snap.unlinkedTickets).toHaveLength(1);
+    expect(snap.unlinkedTickets[0]).toMatchObject({
+      identifier: "ENG-1",
+      title: "No PR yet",
+      providerUrl: "https://example.com",
+    });
+    expect(snap.unlinkedTickets[0]!.lifecycleStage).toBeDefined();
   });
 
   it("sorts recently merged by mergedAt descending", () => {
@@ -119,5 +127,6 @@ describe("buildTeamOverviewSnapshotFromData", () => {
       ],
     });
     expect(snap.recentlyMerged.map((r) => r.number)).toEqual([2, 1]);
+    expect(snap.recentlyMerged.every((r) => r.lifecycleStage === "merged")).toBe(true);
   });
 });

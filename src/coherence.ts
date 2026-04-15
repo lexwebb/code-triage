@@ -1,3 +1,11 @@
+import {
+  filterPrToTicketsRecordForMutedRepos,
+  filterPullRowsByMutedRepos,
+  filterTicketToPRsRecordForMutedRepos,
+  mutedReposAsSet,
+  normalizeRepoMuteKey,
+} from "./muted-repos.js";
+
 export interface CoherenceThresholds {
   branchStalenessDays: number;
   approvedUnmergedHours: number;
@@ -41,6 +49,8 @@ export interface CoherenceInput {
   prToTickets: Record<string, string[]>;
   thresholds: CoherenceThresholds;
   now: number;
+  /** `owner/repo` (case-insensitive); PRs in these repos are excluded from coherence and attention. */
+  mutedRepos?: string[];
 }
 
 export interface CoherenceAlert {
@@ -84,8 +94,19 @@ export function evaluateCoherence(input: CoherenceInput): CoherenceAlert[] {
   const alerts: CoherenceAlert[] = [];
   const { thresholds, now } = input;
 
+  const muted = mutedReposAsSet(input.mutedRepos);
+  const authoredPRs =
+    muted.size === 0 ? input.authoredPRs : filterPullRowsByMutedRepos(input.authoredPRs, muted);
+  const reviewRequestedPRs =
+    muted.size === 0 ? input.reviewRequestedPRs : filterPullRowsByMutedRepos(input.reviewRequestedPRs, muted);
+
+  const ticketToPRs =
+    muted.size === 0 ? input.ticketToPRs : filterTicketToPRsRecordForMutedRepos(input.ticketToPRs, muted);
+  const prToTickets =
+    muted.size === 0 ? input.prToTickets : filterPrToTicketsRecordForMutedRepos(input.prToTickets, muted);
+
   const prByKey = new Map<string, CoherencePR>();
-  for (const pr of [...input.authoredPRs, ...input.reviewRequestedPRs]) {
+  for (const pr of [...authoredPRs, ...reviewRequestedPRs]) {
     prByKey.set(`${pr.repo}#${pr.number}`, pr);
   }
 
@@ -95,10 +116,15 @@ export function evaluateCoherence(input: CoherenceInput): CoherenceAlert[] {
     if (seenTickets.has(ticket.identifier)) continue;
     seenTickets.add(ticket.identifier);
 
-    const linkedPRs = input.ticketToPRs[ticket.identifier] ?? [];
+    const linkedPRs = ticketToPRs[ticket.identifier] ?? [];
     const linkedPRData = linkedPRs
       .map((ref) => prByKey.get(`${ref.repo}#${ref.number}`))
       .filter((pr): pr is CoherencePR => Boolean(pr));
+
+    const visibleProviderPulls =
+      muted.size === 0
+        ? (ticket.providerLinkedPulls ?? [])
+        : (ticket.providerLinkedPulls ?? []).filter((p) => !muted.has(normalizeRepoMuteKey(p.repo)));
 
     if (ticket.state.type === "started" && linkedPRData.length > 0) {
       const mostRecentPRActivity = Math.max(
@@ -120,7 +146,7 @@ export function evaluateCoherence(input: CoherenceInput): CoherenceAlert[] {
     }
 
     // Rule: Ticket assigned with no PR signal (GitHub scrape + provider-linked PRs).
-    const hasProviderPrs = (ticket.providerLinkedPulls?.length ?? 0) > 0;
+    const hasProviderPrs = visibleProviderPulls.length > 0;
     if (ticket.state.type === "started" && linkedPRs.length === 0 && !hasProviderPrs && !isDoneTicket(ticket)) {
       alerts.push({
         id: `ticket-no-pr:${ticket.identifier}`,
@@ -147,7 +173,8 @@ export function evaluateCoherence(input: CoherenceInput): CoherenceAlert[] {
       }
     }
 
-    if (ticket.state.type === "unstarted") {
+    // "No activity" only once work has reached In Progress — not for Todo/backlog sitting idle.
+    if (ticket.state.type === "started" && !isDoneTicket(ticket)) {
       const daysSinceUpdate = msToDays(now - new Date(ticket.updatedAt).getTime());
       if (daysSinceUpdate >= thresholds.ticketInactivityDays && linkedPRData.length === 0) {
         alerts.push({
@@ -162,7 +189,7 @@ export function evaluateCoherence(input: CoherenceInput): CoherenceAlert[] {
     }
   }
 
-  for (const pr of input.authoredPRs) {
+  for (const pr of authoredPRs) {
     const prKey = `${pr.repo}#${pr.number}`;
 
     // Rule: CI failure
@@ -197,7 +224,7 @@ export function evaluateCoherence(input: CoherenceInput): CoherenceAlert[] {
       }
     }
 
-    const tickets = input.prToTickets[prKey];
+    const tickets = prToTickets[prKey];
     if (!tickets || tickets.length === 0) {
       alerts.push({
         id: `pr-without-ticket:${prKey}`,
@@ -210,7 +237,7 @@ export function evaluateCoherence(input: CoherenceInput): CoherenceAlert[] {
     }
   }
 
-  for (const pr of input.reviewRequestedPRs) {
+  for (const pr of reviewRequestedPRs) {
     const prKey = `${pr.repo}#${pr.number}`;
     const hoursSinceUpdate = msToHours(now - new Date(pr.updatedAt).getTime());
     if (hoursSinceUpdate >= thresholds.reviewWaitHours) {

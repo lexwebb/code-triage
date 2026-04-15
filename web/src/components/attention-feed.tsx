@@ -1,9 +1,12 @@
 import { useEffect } from "react";
 import { useNavigate } from "@tanstack/react-router";
-import { Clock, ExternalLink, Pin, X } from "lucide-react";
+import { Clock, ExternalLink, PanelRightOpen, Pin, X } from "lucide-react";
 import { useAppStore } from "../store";
 import { cn } from "../lib/utils";
+import { githubPullRequestUrl } from "../lib/github-url";
+import { linearIssueBrowserUrl } from "../lib/linear-url";
 import type { AttentionItem } from "../api";
+import type { TicketIssue } from "../types";
 import { LifecycleBar, resolveAttentionLifecycleStage } from "./lifecycle-bar";
 import { IconButton } from "./ui/icon-button";
 import { Skeleton } from "./ui/skeleton";
@@ -43,6 +46,26 @@ function timeAgo(iso: string): string {
   if (hours < 24) return `${hours}h ago`;
   const days = Math.floor(hours / 24);
   return `${days}d ago`;
+}
+
+function parsePrEntityId(entityIdentifier: string): { owner: string; repo: string; number: string } | null {
+  const match = entityIdentifier.match(/^(.+?)\/(.+?)#(\d+)$/);
+  if (!match) return null;
+  return { owner: match[1]!, repo: match[2]!, number: match[3]! };
+}
+
+function externalUrlForAttentionItem(
+  item: AttentionItem,
+  myTickets: TicketIssue[],
+  repoLinkedTickets: TicketIssue[],
+): string | null {
+  if (item.entityKind === "pr") {
+    const pr = parsePrEntityId(item.entityIdentifier);
+    if (!pr) return null;
+    return githubPullRequestUrl(`${pr.owner}/${pr.repo}`, Number(pr.number));
+  }
+  const ticket = [...myTickets, ...repoLinkedTickets].find((t) => t.identifier === item.entityIdentifier);
+  return linearIssueBrowserUrl({ providerUrl: ticket?.providerUrl, identifier: item.entityIdentifier });
 }
 
 function SnoozeMenu({ onSnooze }: { onSnooze: (hours: number | "forever") => void }) {
@@ -88,19 +111,21 @@ function AttentionItemRow({ item }: { item: AttentionItem }) {
     repoLinkedTickets,
   });
 
-  const handleJump = () => {
+  const handleOpenInApp = () => {
     if (item.entityKind === "pr") {
-      const match = item.entityIdentifier.match(/^(.+?)\/(.+?)#(\d+)$/);
-      if (!match) return;
+      const pr = parsePrEntityId(item.entityIdentifier);
+      if (!pr) return;
       void navigate({
         to: "/reviews/$owner/$repo/pull/$number",
-        params: { owner: match[1]!, repo: match[2]!, number: match[3]! },
+        params: { owner: pr.owner, repo: pr.repo, number: pr.number },
         search: { tab: "threads", file: undefined },
       });
       return;
     }
     void navigate({ to: "/tickets/$ticketId", params: { ticketId: item.entityIdentifier } });
   };
+
+  const externalHref = externalUrlForAttentionItem(item, myTickets, repoLinkedTickets);
 
   const handleSnooze = (hours: number | "forever") => {
     const until = hours === "forever"
@@ -133,7 +158,7 @@ function AttentionItemRow({ item }: { item: AttentionItem }) {
       <div className="min-w-0 flex-1">
         <button
           type="button"
-          onClick={handleJump}
+          onClick={handleOpenInApp}
           className="text-left text-sm text-zinc-200 transition-colors hover:text-white"
         >
           {item.title}
@@ -170,11 +195,28 @@ function AttentionItemRow({ item }: { item: AttentionItem }) {
           size="sm"
         />
         <IconButton
-          description="Jump to detail"
-          icon={<ExternalLink size={12} />}
-          onClick={handleJump}
+          description="Open in app"
+          icon={<PanelRightOpen size={12} />}
+          onClick={handleOpenInApp}
           size="sm"
         />
+        {externalHref ? (
+          <a
+            href={externalHref}
+            target="_blank"
+            rel="noopener noreferrer"
+            className={cn(
+              "inline-flex cursor-pointer items-center justify-center rounded p-1 transition-colors",
+              "text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300",
+              "focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500",
+            )}
+            title="Open in browser"
+            aria-label="Open in browser"
+          >
+            <ExternalLink size={12} />
+            <span className="sr-only">Open in browser</span>
+          </a>
+        ) : null}
       </div>
     </div>
   );

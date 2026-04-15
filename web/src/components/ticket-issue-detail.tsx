@@ -6,6 +6,7 @@ import { useAppStore } from "../store";
 import { Skeleton } from "./ui/skeleton";
 import { LifecycleBar, deriveTicketIssueLifecycleStage } from "./lifecycle-bar";
 import { useMemo } from "react";
+import { linearIssueBrowserUrl } from "../lib/linear-url";
 
 function TicketMarkdown({ children }: { children: string }) {
   return (
@@ -70,6 +71,10 @@ export function TicketIssueDetail() {
     return deriveTicketIssueLifecycleStage(ticketDetail, prToTickets, [...authored, ...reviewRequested]);
   }, [ticketDetail, prToTickets, authored, reviewRequested]);
 
+  const linearBrowserUrl = ticketDetail
+    ? linearIssueBrowserUrl({ providerUrl: ticketDetail.providerUrl, identifier: ticketDetail.identifier })
+    : null;
+
   if (!selectedTicket) {
     return (
       <div className="flex items-center justify-center h-full text-zinc-500 text-sm">
@@ -104,14 +109,16 @@ export function TicketIssueDetail() {
           <span>{ticketDetail.state.name}</span>
           <span className="mx-1">·</span>
           <span>{PRIORITY_LABELS[ticketDetail.priority] ?? "None"}</span>
-          <a
-            href={ticketDetail.providerUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="ml-auto text-blue-400 hover:underline text-xs"
-          >
-            Open in Linear ↗
-          </a>
+          {linearBrowserUrl ? (
+            <a
+              href={linearBrowserUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="ml-auto text-blue-400 hover:underline text-xs"
+            >
+              Open in Linear ↗
+            </a>
+          ) : null}
         </div>
         <h1 className="text-lg font-semibold text-zinc-100 mt-1">{ticketDetail.title}</h1>
         {lifecycleStage && (

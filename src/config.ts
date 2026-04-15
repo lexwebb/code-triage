@@ -19,6 +19,8 @@ export interface Config {
   /** Drop replied/dismissed/fixed comment rows older than this many days after each successful poll (0 = disabled). */
   commentRetentionDays?: number;
   ignoredBots?: string[]; // additional bot logins to ignore during polling
+  /** Whole repos (`owner/repo`) hidden from PR sidebars and attention; case-insensitive. */
+  mutedRepos?: string[];
   /** Optional default PAT if env and `gh auth token` are not used. */
   githubToken?: string;
   accounts?: Array<{ name: string; token: string; orgs: string[] }>; // multi-account support
@@ -94,6 +96,7 @@ const DEFAULTS: Config = {
     enabled: true,
     pollIntervalMinutes: 5,
   },
+  mutedRepos: [],
 };
 
 /** Team snapshot + dashboard; disabled only when `team.enabled` is explicitly `false`. */

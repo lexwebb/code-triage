@@ -80,6 +80,8 @@ export interface AppConfigPayload {
   pollReviewRequested: boolean;
   commentRetentionDays: number;
   ignoredBots: string[];
+  /** `owner/repo` hidden from PR sidebars and attention (global mute). */
+  mutedRepos: string[];
   accounts: Array<{ name: string; orgs: string[]; hasToken: boolean }>;
   /** True when a default PAT is stored in config (value not exposed). */
   hasGithubToken: boolean;
@@ -127,11 +129,49 @@ export interface TeamOverviewSnapshot {
     unlinkedPrs: number;
     unlinkedTickets: number;
   };
-  stuck: Array<{ entityKind: "pr" | "ticket"; entityIdentifier: string; title: string }>;
-  awaitingReview: Array<{ repo: string; number: number; title: string; waitHours: number }>;
-  recentlyMerged: Array<{ repo: string; number: number; title: string; mergedAt: string }>;
-  unlinkedPrs: Array<{ repo: string; number: number; title: string }>;
-  unlinkedTickets: Array<{ identifier: string; title: string }>;
+  stuck: Array<{
+    entityKind: "pr" | "ticket";
+    entityIdentifier: string;
+    title: string;
+    lifecycleStage?: string;
+    lifecycleStuck?: boolean;
+    actorLabel?: string;
+    providerUrl?: string;
+  }>;
+  awaitingReview: Array<{
+    repo: string;
+    number: number;
+    title: string;
+    waitHours: number;
+    lifecycleStage?: string;
+    lifecycleStuck?: boolean;
+    actorLabel?: string;
+  }>;
+  recentlyMerged: Array<{
+    repo: string;
+    number: number;
+    title: string;
+    mergedAt: string;
+    lifecycleStage?: string;
+    lifecycleStuck?: boolean;
+    actorLabel?: string;
+  }>;
+  unlinkedPrs: Array<{
+    repo: string;
+    number: number;
+    title: string;
+    lifecycleStage?: string;
+    lifecycleStuck?: boolean;
+    actorLabel?: string;
+  }>;
+  unlinkedTickets: Array<{
+    identifier: string;
+    title: string;
+    lifecycleStage?: string;
+    lifecycleStuck?: boolean;
+    actorLabel?: string;
+    providerUrl?: string;
+  }>;
 }
 
 export interface TeamOverviewResponse {

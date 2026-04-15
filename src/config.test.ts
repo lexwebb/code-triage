@@ -35,6 +35,7 @@ describe("loadConfig", () => {
     expect(c.root).toBe("/projects");
     expect(c.port).toBe(4000);
     expect(c.interval).toBe(1);
+    expect(c.mutedRepos).toEqual([]);
   });
 
   it("falls back to defaults on invalid JSON", () => {

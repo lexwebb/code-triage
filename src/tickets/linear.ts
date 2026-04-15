@@ -20,7 +20,10 @@ type IssueNode = {
     | undefined;
   labels: (vars?: Record<string, unknown>) => Promise<{ nodes: Array<{ name: string; color: string }> }>;
   attachments?: (vars?: Record<string, unknown>) => Promise<{ nodes: Array<{ url: string; title?: string }> }>;
-  syncedWith?: Array<{ service?: string; metadata?: unknown }>;
+  syncedWith?: Array<{
+    service?: string;
+    metadata?: { __typename?: string; owner?: string; repo?: string; number?: number };
+  }>;
   updatedAt: Date;
   completedAt?: Date | null;
   canceledAt?: Date | null;
@@ -37,7 +40,15 @@ type GqlIssueNode = {
   labels?: { nodes: Array<{ name: string; color: string }> } | null;
   attachments?: { nodes: Array<{ url: string; title?: string | null }> } | null;
   // Optional in query because older/stricter schemas may reject this field.
-  syncedWith?: Array<{ service?: string | null; metadata?: unknown }> | null;
+  syncedWith?: Array<{
+    service?: string | null;
+    metadata?: {
+      __typename?: string;
+      owner?: string;
+      repo?: string;
+      number?: number;
+    } | null;
+  }> | null;
   updatedAt: string;
   completedAt?: string | null;
   canceledAt?: string | null;
@@ -52,7 +63,15 @@ type GqlIssuesConnection = {
 };
 
 type SyncedWithCarrier = {
-  syncedWith?: Array<{ service?: string | null; metadata?: unknown }> | null;
+  syncedWith?: Array<{
+    service?: string | null;
+    metadata?: {
+      __typename?: string;
+      owner?: string;
+      repo?: string;
+      number?: number;
+    } | null;
+  }> | null;
 };
 
 const ISSUES_LIST_GQL_WITH_SYNCED_WITH = `
@@ -71,12 +90,21 @@ const ISSUES_LIST_GQL_WITH_SYNCED_WITH = `
         completedAt
         canceledAt
         url
-        description
         state { name color type }
         assignee { name avatarUrl }
-        labels { nodes { name color } }
-        attachments { nodes { url title } }
-        syncedWith { service metadata }
+        labels(first: 50) { nodes { name color } }
+        attachments(first: 100) { nodes { url title } }
+        syncedWith {
+          service
+          metadata {
+            __typename
+            ... on ExternalEntityInfoGithubMetadata {
+              owner
+              repo
+              number
+            }
+          }
+        }
       }
     }
   }
@@ -98,11 +126,10 @@ const ISSUES_LIST_GQL = `
         completedAt
         canceledAt
         url
-        description
         state { name color type }
         assignee { name avatarUrl }
-        labels { nodes { name color } }
-        attachments { nodes { url title } }
+        labels(first: 50) { nodes { name color } }
+        attachments(first: 100) { nodes { url title } }
       }
     }
   }
@@ -119,7 +146,7 @@ export class LinearProvider implements TicketProvider {
   constructor(apiKey: string, teamKeys?: string[]) {
     this.linearApiKey = apiKey;
     this.client = new LinearClient({ apiKey });
-    this.teamKeys = teamKeys;
+    this.teamKeys = teamKeys?.map((k) => k.trim()).filter((k) => k.length > 0);
   }
 
   /** Keep ticket identifier lookups warm across poll cycles to cut Linear request volume. */
@@ -421,8 +448,13 @@ export class LinearProvider implements TicketProvider {
     for (const s of node.syncedWith) {
       const svc = (s.service ?? "").toLowerCase();
       if (!svc.includes("github")) continue;
-      const m = s.metadata as { owner?: string; repo?: string; number?: number } | undefined;
-      if (m?.owner && m.repo != null && m.number != null) {
+      const m = s.metadata;
+      if (
+        m
+        && typeof m.owner === "string"
+        && typeof m.repo === "string"
+        && typeof m.number === "number"
+      ) {
         refs.push({ repo: `${m.owner}/${m.repo}`, number: m.number, title: "" });
       }
     }
@@ -439,7 +471,12 @@ export class LinearProvider implements TicketProvider {
 
 function isMissingSyncedWithFieldError(error: unknown): boolean {
   if (!(error instanceof Error)) return false;
-  return /cannot query field\s+"?syncedwith"?\s+on type\s+"?issue"?/i.test(error.message);
+  const m = error.message;
+  return (
+    /cannot query field\s+"?syncedwith"?\s+on type\s+"?issue"?/i.test(m)
+    // Linear sometimes returns HTTP 400 with the same message in the error text.
+    || (/Linear GraphQL HTTP 400/i.test(m) && /syncedwith/i.test(m))
+  );
 }
 
 function dedupeLinkedPrRefs(refs: LinkedPRRef[]): LinkedPRRef[] {

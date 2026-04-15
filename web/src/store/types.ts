@@ -262,6 +262,8 @@ export interface SettingsFormState {
   pollRateLimitAware: boolean;
   preferredEditor: string;
   ignoredBots: string;
+  /** One `owner/repo` per line; hidden from code and attention views. */
+  mutedRepos: string;
   githubToken: string;
   hasGithubToken: boolean;
   accounts: Array<{ name: string; orgs: string; token: string; hasToken: boolean }>;
