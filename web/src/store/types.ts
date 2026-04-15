@@ -100,7 +100,6 @@ export interface PrDetailSlice {
   setActiveTab: (tab: PrDetailSlice["activeTab"]) => void;
   reloadComments: () => Promise<void>;
   refreshIfMatch: (repo: string, prNumber: number) => Promise<void>;
-  handlePopState: () => void;
   submitReview: (event: "APPROVE" | "REQUEST_CHANGES" | "COMMENT", body?: string) => Promise<void>;
   setReviewBody: (text: string) => void;
   setShowRequestChanges: (show: boolean) => void;
@@ -227,7 +226,6 @@ export interface UiSlice {
   sidebarCollapsed: boolean;
   mobileDrawerOpen: boolean;
   isWide: boolean;
-  showSettings: boolean;
   settingsConfig: ConfigGetResponse | null;
   shortcutsOpen: boolean;
 
@@ -239,8 +237,7 @@ export interface UiSlice {
 
   toggleSidebar: () => void;
   setMobileDrawerOpen: (open: boolean) => void;
-  openSettings: () => Promise<void>;
-  closeSettings: () => void;
+  loadSettingsConfig: () => Promise<void>;
   toggleShortcuts: () => void;
   initMediaQuery: () => () => void;
   initKeyboardListener: () => () => void;
@@ -279,7 +276,6 @@ export interface SettingsFormState {
 // ── Tickets Slice ──
 
 export interface TicketsSlice {
-  activeMode: "code-review" | "tickets";
   myTickets: import("../types").TicketIssue[];
   repoLinkedTickets: (import("../types").TicketIssue & { linkedPRs: Array<{ number: number; repo: string; title: string }> })[];
   selectedTicket: string | null;
@@ -289,7 +285,6 @@ export interface TicketsSlice {
   ticketsError: string | null;
   prToTickets: Record<string, string[]>;
 
-  setActiveMode: (mode: "code-review" | "tickets") => void;
   fetchTickets: () => Promise<void>;
   selectTicket: (id: string) => Promise<void>;
   clearTicket: () => void;

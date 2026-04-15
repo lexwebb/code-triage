@@ -2,12 +2,12 @@ import { api } from "../api";
 import type { SliceCreator, UiSlice } from "./types";
 import { selectFlatPulls } from "./selectors";
 import { payloadToForm } from "./settings-form";
+import { router } from "../tanstack-router";
 
 export const createUiSlice: SliceCreator<UiSlice> = (set, get) => ({
   sidebarCollapsed: false,
   mobileDrawerOpen: false,
   isWide: typeof window !== "undefined" ? window.matchMedia("(min-width: 768px)").matches : true,
-  showSettings: false,
   settingsConfig: null,
   shortcutsOpen: false,
 
@@ -20,12 +20,11 @@ export const createUiSlice: SliceCreator<UiSlice> = (set, get) => ({
 
   setMobileDrawerOpen: (open) => set({ mobileDrawerOpen: open }),
 
-  openSettings: async () => {
+  loadSettingsConfig: async () => {
     try {
       const r = await api.getConfig();
       set({
         settingsConfig: r,
-        showSettings: true,
         settingsForm: payloadToForm(r.config),
         settingsSaving: false,
         settingsError: null,
@@ -33,14 +32,6 @@ export const createUiSlice: SliceCreator<UiSlice> = (set, get) => ({
       });
     } catch { /* ignore */ }
   },
-
-  closeSettings: () => set({
-    showSettings: false,
-    settingsConfig: null,
-    settingsForm: null,
-    settingsError: null,
-    settingsRestartHint: false,
-  }),
 
   toggleShortcuts: () => set((s) => ({ shortcutsOpen: !s.shortcutsOpen })),
 
@@ -94,7 +85,12 @@ export const createUiSlice: SliceCreator<UiSlice> = (set, get) => ({
         }
         const next = list[idx];
         if (next) {
-          void s.selectPR(next.number, next.repo);
+          const [owner, repoName] = next.repo.split("/");
+          void router.navigate({
+            to: "/reviews/$owner/$repo/pull/$number",
+            params: { owner: owner!, repo: repoName!, number: String(next.number) },
+            search: { tab: "threads", file: undefined },
+          });
         }
       }
     };
@@ -160,9 +156,9 @@ export const createUiSlice: SliceCreator<UiSlice> = (set, get) => ({
       }
 
       if (s.appGate === "setup") {
-        set({ appGate: "ready", pullsLoading: true, error: null, showSettings: false, settingsConfig: null, settingsForm: null });
+        set({ appGate: "ready", pullsLoading: true, error: null });
       } else {
-        set({ showSettings: false, settingsConfig: null, settingsForm: null });
+        set({ settingsConfig: null, settingsForm: null });
       }
     } catch (err) {
       set({ settingsError: (err as Error).message });

@@ -9,7 +9,7 @@ export const Route = createRoute({
   path: "settings",
   component: function SettingsPage() {
     useEffect(() => {
-      void useAppStore.getState().openSettings();
+      void useAppStore.getState().loadSettingsConfig();
     }, []);
 
     return (

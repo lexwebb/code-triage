@@ -1,19 +1,13 @@
 import { api } from "../api";
 import type { QueuedFixItem } from "../api";
-import { parseRoute, pushRoute } from "../router";
 import type { SliceCreator, PrDetailSlice } from "./types";
 
 export const createPrDetailSlice: SliceCreator<PrDetailSlice> = (set, get) => ({
-  selectedPR: (() => {
-    const initial = parseRoute();
-    return initial.repo && initial.prNumber
-      ? { repo: initial.repo, number: initial.prNumber }
-      : null;
-  })(),
+  selectedPR: null,
   detail: null,
   files: [],
   comments: [],
-  selectedFile: parseRoute().file,
+  selectedFile: null,
   activeTab: "threads",
   prDetailLoading: false,
 
@@ -94,7 +88,6 @@ export const createPrDetailSlice: SliceCreator<PrDetailSlice> = (set, get) => ({
       checksError: null,
       checksKey: "",
     });
-    pushRoute({ repo, prNumber: number, file: null });
 
     try {
       const [detail, files, comments] = await Promise.all([
@@ -120,8 +113,6 @@ export const createPrDetailSlice: SliceCreator<PrDetailSlice> = (set, get) => ({
 
   selectFile: (filename) => {
     set({ selectedFile: filename });
-    const pr = get().selectedPR;
-    pushRoute({ repo: pr?.repo ?? null, prNumber: pr?.number ?? null, file: filename });
   },
 
   setActiveTab: (tab) => set({ activeTab: tab }),
@@ -149,25 +140,6 @@ export const createPrDetailSlice: SliceCreator<PrDetailSlice> = (set, get) => ({
     } catch {
       /* background refresh — ignore */
     }
-  },
-
-  handlePopState: () => {
-    const route = parseRoute();
-    if (route.repo && route.prNumber) {
-      // Only re-fetch if PR actually changed
-      const current = get().selectedPR;
-      if (!current || current.number !== route.prNumber || current.repo !== route.repo) {
-        void get().selectPR(route.prNumber, route.repo);
-      }
-    } else {
-      set({
-        selectedPR: null,
-        detail: null,
-        files: [],
-        comments: [],
-      });
-    }
-    set({ selectedFile: route.file });
   },
 
   submitReview: async (event, body) => {

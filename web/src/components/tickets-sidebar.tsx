@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { useNavigate } from "@tanstack/react-router";
 import { useAppStore } from "../store";
 import { cn } from "../lib/utils";
 import type { TicketIssue } from "../types";
@@ -90,6 +91,7 @@ function CollapsibleSection({ title, count, color, children, defaultOpen = true 
 }
 
 export function TicketsSidebar() {
+  const navigate = useNavigate();
   const myTickets = useAppStore((s) => s.myTickets);
   const repoLinkedTickets = useAppStore((s) => s.repoLinkedTickets);
   const selectedTicket = useAppStore((s) => s.selectedTicket);
@@ -106,7 +108,7 @@ export function TicketsSidebar() {
         <p className="text-zinc-400 text-sm">
           Add your Linear API key in{" "}
           <button
-            onClick={() => useAppStore.getState().openSettings()}
+            onClick={() => void navigate({ to: "/settings" })}
             className="text-blue-400 hover:underline"
           >
             Settings
@@ -122,7 +124,7 @@ export function TicketsSidebar() {
       <div className="px-3 py-2 mx-2 mt-2 rounded bg-red-900/30 border border-red-800 text-red-300 text-xs">
         {ticketsError}
         <button
-          onClick={() => useAppStore.getState().openSettings()}
+          onClick={() => void navigate({ to: "/settings" })}
           className="ml-1 text-red-400 hover:underline"
         >
           Check settings

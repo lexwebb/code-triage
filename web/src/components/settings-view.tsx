@@ -1,3 +1,4 @@
+import { useNavigate } from "@tanstack/react-router";
 import { useAppStore } from "../store";
 import { Checkbox } from "./ui/checkbox";
 
@@ -6,6 +7,7 @@ export default function SettingsView({
 }: {
   mode: "setup" | "settings";
 }) {
+  const navigate = useNavigate();
   const form = useAppStore((s) => s.settingsForm);
   const saving = useAppStore((s) => s.settingsSaving);
   const error = useAppStore((s) => s.settingsError);
@@ -13,7 +15,6 @@ export default function SettingsView({
   const listenPort = useAppStore((s) => s.settingsConfig?.listenPort ?? 3100);
   const updateField = useAppStore((s) => s.updateSettingsField);
   const submit = useAppStore((s) => s.submitSettings);
-  const closeSettings = useAppStore((s) => s.closeSettings);
 
   if (form === null) return null;
 
@@ -44,7 +45,7 @@ export default function SettingsView({
         {mode === "settings" && (
           <button
             type="button"
-            onClick={closeSettings}
+            onClick={() => void navigate({ to: "/reviews" })}
             className="text-sm text-gray-500 hover:text-gray-300"
           >
             Close
@@ -422,7 +423,7 @@ export default function SettingsView({
             {saving ? "Saving…" : "Save"}
           </button>
           {mode === "settings" && (
-            <button type="button" onClick={closeSettings} className="rounded-md border border-gray-700 px-5 py-2.5 text-sm text-gray-300 hover:bg-gray-800">
+            <button type="button" onClick={() => void navigate({ to: "/reviews" })} className="rounded-md border border-gray-700 px-5 py-2.5 text-sm text-gray-300 hover:bg-gray-800">
               Cancel
             </button>
           )}

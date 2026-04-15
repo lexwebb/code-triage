@@ -1,8 +1,8 @@
 import { api } from "../api";
 import type { SliceCreator, TicketsSlice } from "./types";
+import { router } from "../tanstack-router";
 
 export const createTicketsSlice: SliceCreator<TicketsSlice> = (set, get) => ({
-  activeMode: "code-review",
   myTickets: [],
   repoLinkedTickets: [],
   selectedTicket: null,
@@ -11,8 +11,6 @@ export const createTicketsSlice: SliceCreator<TicketsSlice> = (set, get) => ({
   ticketDetailLoading: false,
   ticketsError: null,
   prToTickets: {},
-
-  setActiveMode: (mode) => set({ activeMode: mode }),
 
   fetchTickets: async () => {
     set({ ticketsLoading: true, ticketsError: null });
@@ -53,16 +51,21 @@ export const createTicketsSlice: SliceCreator<TicketsSlice> = (set, get) => ({
   clearTicket: () => set({ selectedTicket: null, ticketDetail: null }),
 
   navigateToLinkedPR: (number, repo) => {
-    set({ activeMode: "code-review" });
-    get().selectPR(number, repo);
+    const [owner, repoName] = repo.split("/");
+    if (owner && repoName) {
+      void router.navigate({
+        to: "/reviews/$owner/$repo/pull/$number",
+        params: { owner, repo: repoName, number: String(number) },
+        search: { tab: "threads", file: undefined },
+      });
+    }
   },
 
   navigateToLinkedTicket: (identifier) => {
     const issue = get().myTickets.find((t) => t.identifier === identifier)
       ?? get().repoLinkedTickets.find((t) => t.identifier === identifier);
     if (issue) {
-      set({ activeMode: "tickets" });
-      get().selectTicket(issue.id);
+      void router.navigate({ to: "/tickets/$ticketId", params: { ticketId: issue.id } });
     }
   },
 });
