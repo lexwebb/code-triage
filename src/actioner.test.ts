@@ -1,6 +1,18 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { clampEvalConcurrency, parseEvaluation, parseFixResponse } from "./actioner.js";
+import { clampEvalConcurrency, fixClaudePermissionArgv, parseEvaluation, parseFixResponse } from "./actioner.js";
 import { log } from "./logger.js";
+
+describe("fixClaudePermissionArgv", () => {
+  it("uses dontAsk mode and never bypasses permissions", () => {
+    const argv = fixClaudePermissionArgv();
+    const modeIdx = argv.indexOf("--permission-mode");
+    expect(modeIdx).toBeGreaterThanOrEqual(0);
+    expect(argv[modeIdx + 1]).toBe("dontAsk");
+    expect(argv.join(" ")).not.toContain("dangerously-skip-permissions");
+    expect(argv).toContain("--tools");
+    expect(argv).toContain("--allowed-tools");
+  });
+});
 
 describe("parseFixResponse", () => {
   it("parses a fix action from CLI JSON output", () => {

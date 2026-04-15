@@ -316,6 +316,109 @@ const FIX_JSON_SCHEMA = JSON.stringify({
   required: ["action", "message"],
 });
 
+/**
+ * Fix jobs run Claude with permission mode dontAsk: only listed tools/patterns run without prompts.
+ * We narrow the built-in tool set, allow file read/search/edit tools, read-only git, and Bash prefixes
+ * that match common test/lint/build entrypoints (no raw npx/dlx/curl/ssh, etc.).
+ */
+const FIX_CLAUDE_TOOL_SUBSET = "Bash,Edit,Read,Glob,Grep,Write";
+
+const FIX_CLAUDE_ALLOWED_TOOLS = [
+  "Read",
+  "Glob",
+  "Grep",
+  "Edit",
+  "Write",
+  "Bash(git status *)",
+  "Bash(git diff *)",
+  "Bash(git log *)",
+  "Bash(git show *)",
+  "Bash(git rev-parse *)",
+  "Bash(npm run *)",
+  "Bash(npm test *)",
+  "Bash(yarn run *)",
+  "Bash(yarn test *)",
+  "Bash(yarn workspace *)",
+  "Bash(pnpm run *)",
+  "Bash(pnpm test *)",
+  "Bash(pnpm -r *)",
+  "Bash(bun run *)",
+  "Bash(bun test *)",
+  "Bash(cargo test *)",
+  "Bash(cargo build *)",
+  "Bash(cargo check *)",
+  "Bash(cargo clippy *)",
+  "Bash(cargo fmt *)",
+  "Bash(cargo nextest *)",
+  "Bash(go test *)",
+  "Bash(go vet *)",
+  "Bash(go build *)",
+  "Bash(make test *)",
+  "Bash(make build *)",
+  "Bash(make check *)",
+  "Bash(make lint *)",
+  "Bash(pytest *)",
+  "Bash(python -m pytest *)",
+  "Bash(tox *)",
+  "Bash(./gradlew test *)",
+  "Bash(./gradlew build *)",
+  "Bash(./gradlew check *)",
+  "Bash(./gradlew assemble *)",
+  "Bash(gradlew test *)",
+  "Bash(gradlew build *)",
+  "Bash(gradlew check *)",
+  "Bash(mvn test *)",
+  "Bash(mvn verify *)",
+  "Bash(mvn package *)",
+  "Bash(dotnet test *)",
+  "Bash(dotnet build *)",
+  "Bash(rspec *)",
+  "Bash(rake test *)",
+  "Bash(turbo run *)",
+  "Bash(turbo test *)",
+  "Bash(nx test *)",
+  "Bash(nx lint *)",
+  "Bash(nx affected:test *)",
+  "Bash(vitest *)",
+  "Bash(jest *)",
+  "Bash(eslint *)",
+  "Bash(tsc *)",
+  "Bash(stylelint *)",
+  "Bash(biome *)",
+  "Bash(deno test *)",
+  "Bash(deno task *)",
+  "Bash(mix test *)",
+  "Bash(sbt test *)",
+  "Bash(swift test *)",
+  "Bash(ctest *)",
+  "Bash(cmake --build *)",
+  "Bash(flake8 *)",
+  "Bash(ruff *)",
+  "Bash(mypy *)",
+  "Bash(rubocop *)",
+  "Bash(poetry run pytest *)",
+  "Bash(pipenv run pytest *)",
+  "Bash(just test *)",
+  "Bash(just build *)",
+  "Bash(just check *)",
+  "Bash(just lint *)",
+  "Bash(task test *)",
+  "Bash(task build *)",
+].join(",");
+
+export function fixClaudePermissionArgv(): string[] {
+  return [
+    "--permission-mode",
+    "dontAsk",
+    "--tools",
+    FIX_CLAUDE_TOOL_SUBSET,
+    "--allowed-tools",
+    FIX_CLAUDE_ALLOWED_TOOLS,
+    "--disallowed-tools",
+    "WebFetch,WebSearch",
+  ];
+}
+
 /** Appended to fix prompts so Claude discovers repo-local commands instead of assuming stack. */
 const FIX_VALIDATION_INSTRUCTIONS = `After you implement the fix (or on any later turn where you change files):
 
@@ -349,7 +452,17 @@ export async function applyFixWithClaude(
       prompt +=
         "\n\nIMPORTANT: This is the final turn. You must now attempt the fix with what you know. Do not ask more questions. Respond with action \"fix\". Run documented tests and validation before responding; fix any failures your changes caused.";
     }
-    args.push("-p", prompt, "--dangerously-skip-permissions", "--resume", options.resumeSessionId, "--output-format", "json", "--json-schema", FIX_JSON_SCHEMA);
+    args.push(
+      "-p",
+      prompt,
+      ...fixClaudePermissionArgv(),
+      "--resume",
+      options.resumeSessionId,
+      "--output-format",
+      "json",
+      "--json-schema",
+      FIX_JSON_SCHEMA,
+    );
   } else {
     // Initial turn
     const userBlock = userInstructions?.trim()
@@ -368,7 +481,7 @@ ${FIX_VALIDATION_INSTRUCTIONS}
 If the comment is ambiguous, the intended behavior is unclear, or there are multiple valid approaches, respond with action "questions" and ask what you need to know. Otherwise, make the changes directly and respond with action "fix".
 
 Respond as JSON: { "action": "fix" | "questions", "message": "..." }`;
-    args.push("-p", prompt, "--dangerously-skip-permissions", "--output-format", "json", "--json-schema", FIX_JSON_SCHEMA);
+    args.push("-p", prompt, ...fixClaudePermissionArgv(), "--output-format", "json", "--json-schema", FIX_JSON_SCHEMA);
     if (options?.sessionId) {
       args.push("--session-id", options.sessionId);
     }
