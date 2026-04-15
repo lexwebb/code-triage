@@ -2,6 +2,7 @@ import { LinearClient } from "@linear/sdk";
 import type { TicketProvider, TicketIssue, TicketIssueDetail, TicketTeam, TicketUser } from "./types.js";
 import { parseGithubPullRequestUrl, type LinkedPRRef } from "./linker.js";
 import { recordLinearRequest } from "./stats.js";
+import { linearGraphQL } from "./linear-gql.js";
 
 type IssueNode = {
   id: string;
@@ -18,19 +19,105 @@ type IssueNode = {
     | null
     | undefined;
   labels: (vars?: Record<string, unknown>) => Promise<{ nodes: Array<{ name: string; color: string }> }>;
+  attachments?: (vars?: Record<string, unknown>) => Promise<{ nodes: Array<{ url: string; title?: string }> }>;
+  syncedWith?: Array<{ service?: string; metadata?: unknown }>;
   updatedAt: Date;
   completedAt?: Date | null;
   canceledAt?: Date | null;
   url: string;
 };
 
+type GqlIssueNode = {
+  id: string;
+  identifier: string;
+  title: string;
+  state?: { name: string; color: string; type: string } | null;
+  priority: number;
+  assignee?: { name: string; avatarUrl?: string | null } | null;
+  labels?: { nodes: Array<{ name: string; color: string }> } | null;
+  attachments?: { nodes: Array<{ url: string; title?: string | null }> } | null;
+  // Optional in query because older/stricter schemas may reject this field.
+  syncedWith?: Array<{ service?: string | null; metadata?: unknown }> | null;
+  updatedAt: string;
+  completedAt?: string | null;
+  canceledAt?: string | null;
+  url: string;
+};
+
+type GqlIssuesConnection = {
+  issues: {
+    pageInfo: { hasNextPage: boolean; endCursor?: string | null };
+    nodes: GqlIssueNode[];
+  };
+};
+
+type SyncedWithCarrier = {
+  syncedWith?: Array<{ service?: string | null; metadata?: unknown }> | null;
+};
+
+const ISSUES_LIST_GQL_WITH_SYNCED_WITH = `
+  query IssuesForCodeTriage($filter: IssueFilter!, $first: Int!, $after: String) {
+    issues(filter: $filter, first: $first, after: $after, orderBy: updatedAt) {
+      pageInfo {
+        hasNextPage
+        endCursor
+      }
+      nodes {
+        id
+        identifier
+        title
+        priority
+        updatedAt
+        completedAt
+        canceledAt
+        url
+        description
+        state { name color type }
+        assignee { name avatarUrl }
+        labels { nodes { name color } }
+        attachments { nodes { url title } }
+        syncedWith { service metadata }
+      }
+    }
+  }
+`;
+
+const ISSUES_LIST_GQL = `
+  query IssuesForCodeTriage($filter: IssueFilter!, $first: Int!, $after: String) {
+    issues(filter: $filter, first: $first, after: $after, orderBy: updatedAt) {
+      pageInfo {
+        hasNextPage
+        endCursor
+      }
+      nodes {
+        id
+        identifier
+        title
+        priority
+        updatedAt
+        completedAt
+        canceledAt
+        url
+        description
+        state { name color type }
+        assignee { name avatarUrl }
+        labels { nodes { name color } }
+        attachments { nodes { url title } }
+      }
+    }
+  }
+`;
+
 export class LinearProvider implements TicketProvider {
   private client: LinearClient;
+  private readonly linearApiKey: string;
   private teamKeys?: string[];
   private viewerId: string | null = null;
   private identifierCache = new Map<string, { at: number; issue: TicketIssue | null }>();
+  private issuesListQuerySupportsSyncedWith: boolean | null = null;
 
   constructor(apiKey: string, teamKeys?: string[]) {
+    this.linearApiKey = apiKey;
     this.client = new LinearClient({ apiKey });
     this.teamKeys = teamKeys;
   }
@@ -50,28 +137,9 @@ export class LinearProvider implements TicketProvider {
       ...(this.teamKeys?.length ? { team: { key: { in: this.teamKeys } } } : {}),
     };
 
-    recordLinearRequest("issues");
-    const connection = await this.client.issues({
-      filter,
-      orderBy: "updatedAt" as never,
-    });
-
-    // Linear defaults to ~50 issues per page; fetch the rest so /api/tickets/mine is complete.
-    const paginated = connection as {
-      nodes: unknown[];
-      pageInfo?: { hasNextPage?: boolean };
-      fetchNext?: () => Promise<unknown>;
-    };
-    while (paginated.pageInfo?.hasNextPage && typeof paginated.fetchNext === "function") {
-      recordLinearRequest("issues.fetchNext");
-      await paginated.fetchNext();
-    }
-
-    const mapped = await Promise.all(
-      paginated.nodes.map((n) => this.mapIssue(n as unknown as IssueNode)),
-    );
-    this.primeIdentifierCache(mapped);
-    return mapped;
+    const issues = await this.fetchIssuesByFilter(filter);
+    this.primeIdentifierCache(issues);
+    return issues;
   }
 
   async fetchIssuesByIdentifiers(identifiers: string[]): Promise<TicketIssue[]> {
@@ -112,16 +180,11 @@ export class LinearProvider implements TicketProvider {
 
     const allIssues: TicketIssue[] = [];
     for (const [teamKey, numbers] of Array.from(byTeam.entries())) {
-      recordLinearRequest("issues");
-      const result = await this.client.issues({
-        // one query per team bucket
-        filter: {
-          team: { key: { eq: teamKey } },
-          number: { in: numbers },
-        },
+      const teamIssues = await this.fetchIssuesByFilter({
+        team: { key: { eq: teamKey } },
+        number: { in: numbers },
       });
-      const mapped = await Promise.all(result.nodes.map((n) => this.mapIssue(n as unknown as IssueNode)));
-      allIssues.push(...mapped);
+      allIssues.push(...teamIssues);
     }
 
     this.primeIdentifierCache(allIssues);
@@ -133,6 +196,103 @@ export class LinearProvider implements TicketProvider {
     }
 
     return dedupeIssuesByIdentifier([...cachedOut, ...allIssues]);
+  }
+
+  private async fetchIssuesByFilter(filter: Record<string, unknown>): Promise<TicketIssue[]> {
+    const all: TicketIssue[] = [];
+    let after: string | undefined;
+    for (;;) {
+      const data = await this.fetchIssuesPage(filter, after);
+      for (const node of data.issues.nodes) {
+        all.push(this.ticketIssueFromGqlNode(node));
+      }
+      if (!data.issues.pageInfo.hasNextPage) break;
+      after = data.issues.pageInfo.endCursor ?? undefined;
+      if (!after) break;
+    }
+    return all;
+  }
+
+  private async fetchIssuesPage(
+    filter: Record<string, unknown>,
+    after?: string,
+  ): Promise<GqlIssuesConnection> {
+    const variables = {
+      filter,
+      first: 50,
+      after: after ?? null,
+    };
+
+    const shouldTrySyncedWith = this.issuesListQuerySupportsSyncedWith !== false;
+    if (shouldTrySyncedWith) {
+      try {
+        const data = await linearGraphQL<GqlIssuesConnection>(
+          this.linearApiKey,
+          ISSUES_LIST_GQL_WITH_SYNCED_WITH,
+          variables,
+        );
+        this.issuesListQuerySupportsSyncedWith = true;
+        return data;
+      } catch (error) {
+        if (!isMissingSyncedWithFieldError(error)) throw error;
+        // Some Linear schemas don't expose Issue.syncedWith. Fall back to attachments-only links.
+        this.issuesListQuerySupportsSyncedWith = false;
+      }
+    }
+
+    return linearGraphQL<GqlIssuesConnection>(
+      this.linearApiKey,
+      ISSUES_LIST_GQL,
+      variables,
+    );
+  }
+
+  private ticketIssueFromGqlNode(node: GqlIssueNode): TicketIssue {
+    const attachmentRefs: LinkedPRRef[] = [];
+    for (const attachment of node.attachments?.nodes ?? []) {
+      const parsed = parseGithubPullRequestUrl(attachment.url);
+      if (parsed) {
+        attachmentRefs.push({
+          repo: parsed.repo,
+          number: parsed.number,
+          title: attachment.title ?? "",
+        });
+      }
+    }
+    const providerLinkedPulls = dedupeLinkedPrRefs([
+      ...attachmentRefs,
+      ...this.syncedGithubPullRefs(node),
+    ]);
+
+    const state = node.state;
+    const stateName = state?.name ?? "";
+    const terminalByWorkflowName =
+      /\b(merged|done|complete|completed|closed|shipped|released|deployed)\b/i.test(stateName)
+      || /\b(wont fix|won't fix|cancelled|canceled)\b/i.test(stateName);
+
+    return {
+      id: node.id,
+      identifier: node.identifier,
+      title: node.title,
+      state: state
+        ? { name: state.name, color: state.color, type: state.type }
+        : { name: "Unknown", color: "#888888", type: "unstarted" },
+      priority: node.priority,
+      isDone: Boolean(
+        node.completedAt
+          || node.canceledAt
+          || state?.type === "completed"
+          || state?.type === "canceled"
+          || terminalByWorkflowName,
+      ),
+      providerLinkedPulls: providerLinkedPulls.length > 0 ? providerLinkedPulls : undefined,
+      assignee: node.assignee
+        ? { name: node.assignee.name, avatarUrl: node.assignee.avatarUrl ?? undefined }
+        : undefined,
+      labels: (node.labels?.nodes ?? []).map((label) => ({ name: label.name, color: label.color })),
+      updatedAt: node.updatedAt,
+      providerUrl: node.url,
+    };
   }
 
   async getIssueDetail(id: string): Promise<TicketIssueDetail> {
@@ -236,13 +396,10 @@ export class LinearProvider implements TicketProvider {
    * calling `attachments()` with no args often fails and was silently returning [].
    */
   private async attachmentGithubPullRefs(node: IssueNode): Promise<LinkedPRRef[]> {
-    const raw = node as unknown as {
-      attachments?: (vars?: Record<string, unknown>) => Promise<{ nodes: Array<{ url: string; title?: string }> }>;
-    };
-    if (typeof raw.attachments !== "function") return [];
+    if (typeof node.attachments !== "function") return [];
     try {
       recordLinearRequest("issue.attachments");
-      const conn = await raw.attachments({ first: 100 });
+      const conn = await node.attachments({ first: 100 });
       const nodes = conn?.nodes ?? [];
       const refs: LinkedPRRef[] = [];
       for (const n of nodes) {
@@ -258,13 +415,10 @@ export class LinearProvider implements TicketProvider {
   /**
    * GitHub entity metadata already loaded on the Issue fragment (`syncedWith`), no extra round-trip.
    */
-  private syncedGithubPullRefs(node: IssueNode): LinkedPRRef[] {
-    const raw = node as unknown as {
-      syncedWith?: Array<{ service?: string; metadata?: unknown }>;
-    };
-    if (!raw.syncedWith?.length) return [];
+  private syncedGithubPullRefs(node: SyncedWithCarrier): LinkedPRRef[] {
+    if (!node.syncedWith?.length) return [];
     const refs: LinkedPRRef[] = [];
-    for (const s of raw.syncedWith) {
+    for (const s of node.syncedWith) {
       const svc = (s.service ?? "").toLowerCase();
       if (!svc.includes("github")) continue;
       const m = s.metadata as { owner?: string; repo?: string; number?: number } | undefined;
@@ -281,6 +435,11 @@ export class LinearProvider implements TicketProvider {
       this.identifierCache.set(issue.identifier.toUpperCase(), { at: now, issue });
     }
   }
+}
+
+function isMissingSyncedWithFieldError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  return /cannot query field\s+"?syncedwith"?\s+on type\s+"?issue"?/i.test(error.message);
 }
 
 function dedupeLinkedPrRefs(refs: LinkedPRRef[]): LinkedPRRef[] {
