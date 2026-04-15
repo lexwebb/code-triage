@@ -316,6 +316,19 @@ const FIX_JSON_SCHEMA = JSON.stringify({
   required: ["action", "message"],
 });
 
+/** Appended to fix prompts so Claude discovers repo-local commands instead of assuming stack. */
+const FIX_VALIDATION_INSTRUCTIONS = `After you implement the fix (or on any later turn where you change files):
+
+1. Discover how this repository runs tests and routine validation: read README, CONTRIBUTING, package.json "scripts", Makefile, pyproject.toml, Cargo.toml, go.mod, and CI workflow files under .github/workflows. Prefer documented commands over guessing.
+2. From the repository root of this checkout, run the appropriate test command(s) and any clearly defined lint or typecheck steps the project uses in those docs or scripts.
+3. If the project uses path aliases, workspaces, or monorepo package linking (for example tsconfig paths, Yarn/npm workspaces, Go module replaces), ensure imports and references still resolve; fix anything broken checks reveal.
+4. If a command fails because of your edits, repair it before you finish. If you are blocked, respond with action "questions" instead of claiming success.
+
+When action is "fix", your message must briefly state which commands you ran and that they passed, or note that no automated checks were documented.`;
+
+const FIX_RESUME_VALIDATION_NUDGE =
+  "If you edit files in this turn: afterward, discover and run this repo's documented tests and validation from the root, fix failures, then reply with JSON.";
+
 export async function applyFixWithClaude(
   worktreePath: string,
   comment: { path: string; line: number; body: string; diffHunk: string },
@@ -327,9 +340,14 @@ export async function applyFixWithClaude(
 
   if (options?.resumeSessionId) {
     // Follow-up turn: prompt is the user's message (passed as userInstructions)
-    prompt = userInstructions ?? "";
+    prompt = (userInstructions ?? "").trimEnd();
+    if (prompt.length > 0) {
+      prompt += "\n\n";
+    }
+    prompt += FIX_RESUME_VALIDATION_NUDGE;
     if (options.isLastTurn) {
-      prompt += "\n\nIMPORTANT: This is the final turn. You must now attempt the fix with what you know. Do not ask more questions. Respond with action \"fix\".";
+      prompt +=
+        "\n\nIMPORTANT: This is the final turn. You must now attempt the fix with what you know. Do not ask more questions. Respond with action \"fix\". Run documented tests and validation before responding; fix any failures your changes caused.";
     }
     args.push("-p", prompt, "--dangerously-skip-permissions", "--resume", options.resumeSessionId, "--output-format", "json", "--json-schema", FIX_JSON_SCHEMA);
   } else {
@@ -344,6 +362,8 @@ export async function applyFixWithClaude(
 
 Diff context:
 ${comment.diffHunk}${userBlock}
+
+${FIX_VALIDATION_INSTRUCTIONS}
 
 If the comment is ambiguous, the intended behavior is unclear, or there are multiple valid approaches, respond with action "questions" and ask what you need to know. Otherwise, make the changes directly and respond with action "fix".
 
