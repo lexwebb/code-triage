@@ -1831,6 +1831,50 @@ export function registerRoutes(): void {
     }
   });
 
+  // ── Team overview (cached snapshot) ──
+
+  addRoute("GET", "/api/team/overview", async (_req, res) => {
+    const c = loadConfig();
+    if (!c.team?.enabled) {
+      json(res, { error: "Team features disabled" }, 404);
+      return;
+    }
+    const { readTeamOverviewCache } = await import("./team/overview.js");
+    const row = readTeamOverviewCache();
+    if (!row) {
+      json(res, {
+        snapshot: null,
+        updatedAtMs: null,
+        refreshError: null,
+        stale: true,
+      });
+      return;
+    }
+    json(res, {
+      snapshot: row.snapshot,
+      updatedAtMs: row.updatedAtMs,
+      refreshError: row.refreshError,
+      stale: false,
+    });
+  });
+
+  addRoute("POST", "/api/team/overview/refresh", async (_req, res) => {
+    const c = loadConfig();
+    if (!c.team?.enabled) {
+      json(res, { error: "Team features disabled" }, 404);
+      return;
+    }
+    const { rebuildTeamOverviewSnapshot, writeTeamOverviewCache } = await import("./team/overview.js");
+    try {
+      const { snapshot, error } = await rebuildTeamOverviewSnapshot();
+      writeTeamOverviewCache(snapshot, error);
+      json(res, { ok: true, snapshot, error });
+    } catch (e) {
+      const msg = (e as Error).message;
+      json(res, { ok: false, error: msg }, 500);
+    }
+  });
+
   // ── Attention feed ──
 
   addRoute("GET", "/api/attention", async (_req, res, _params, query) => {
