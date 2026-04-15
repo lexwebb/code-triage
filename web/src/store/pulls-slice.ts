@@ -1,4 +1,5 @@
 import { api } from "../api";
+import { router } from "../tanstack-router";
 import type { SliceCreator, PullsSlice } from "./types";
 
 export const createPullsSlice: SliceCreator<PullsSlice> = (set, get) => ({
@@ -37,8 +38,14 @@ export const createPullsSlice: SliceCreator<PullsSlice> = (set, get) => ({
             // URL had a PR route — load its detail now that pulls are ready
             void get().selectPR(current.number, current.repo);
           } else if (authored.length > 0) {
-            // No PR in URL — auto-select first authored PR
-            void get().selectPR(authored[0].number, authored[0].repo);
+            // No PR in URL — auto-select first authored PR and navigate
+            const pr = authored[0];
+            const [owner, repoName] = pr.repo.split("/");
+            void router.navigate({
+              to: "/reviews/$owner/$repo/pull/$number",
+              params: { owner: owner!, repo: repoName!, number: String(pr.number) },
+              search: { tab: "threads", file: undefined },
+            });
           }
         }
       } catch (err) {

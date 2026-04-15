@@ -3,6 +3,7 @@ import { cn } from "../lib/utils";
 import { Check, X, Circle } from "lucide-react";
 import { StatusBadge } from "./ui/status-badge";
 import { useAppStore } from "../store";
+import { useNavigate } from "@tanstack/react-router";
 
 interface PRListProps {
   pulls: PullRequest[];
@@ -38,8 +39,8 @@ function StatusIcon({ pr }: { pr: PullRequest }) {
 
 export default function PRList({ pulls, showRepo }: PRListProps) {
   const selectedPR = useAppStore((s) => s.selectedPR);
-  const selectPR = useAppStore((s) => s.selectPR);
   const setMobileDrawerOpen = useAppStore((s) => s.setMobileDrawerOpen);
+  const navigate = useNavigate();
   if (pulls.length === 0) {
     return (
       <div className="p-4 text-gray-500 text-sm">
@@ -70,7 +71,15 @@ export default function PRList({ pulls, showRepo }: PRListProps) {
           <button
             key={key}
             type="button"
-            onClick={() => { void selectPR(pr.number, pr.repo); setMobileDrawerOpen(false); }}
+            onClick={() => {
+              const [owner, repoName] = pr.repo.split("/");
+              void navigate({
+                to: "/reviews/$owner/$repo/pull/$number",
+                params: { owner: owner!, repo: repoName!, number: String(pr.number) },
+                search: { tab: "threads", file: undefined },
+              });
+              setMobileDrawerOpen(false);
+            }}
             className={cn("text-left px-4 py-3 border-b border-gray-800 hover:bg-gray-800/50 transition-colors rounded-none focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-inset", bgClass)}
           >
             <div className="flex items-center justify-between">
