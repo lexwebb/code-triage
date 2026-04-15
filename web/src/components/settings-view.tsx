@@ -483,6 +483,29 @@ export default function SettingsView({
           </div>
         </section>
 
+        <section className="space-y-3">
+          <h2 className="text-xs text-gray-500 uppercase tracking-wide">Team</h2>
+          <label className="flex items-center gap-2 cursor-pointer">
+            <Checkbox
+              checked={form.teamEnabled}
+              onCheckedChange={(v) => updateField("teamEnabled", v === true)}
+            />
+            <span className="text-sm text-gray-300">Enable team overview snapshot</span>
+          </label>
+          <div className="grid grid-cols-2 gap-4">
+            <label className="block space-y-1">
+              <span className="text-sm text-gray-400">Snapshot refresh interval (minutes)</span>
+              <input
+                type="number"
+                min={1}
+                className="w-full rounded-md border border-gray-700 bg-gray-900 px-3 py-2 text-sm"
+                value={form.teamPollIntervalMinutes}
+                onChange={(e) => updateField("teamPollIntervalMinutes", Math.max(1, parseInt(e.target.value, 10) || 1))}
+              />
+            </label>
+          </div>
+        </section>
+
         <div className="flex gap-3 pt-4 border-t border-gray-800">
           <button
             type="submit"

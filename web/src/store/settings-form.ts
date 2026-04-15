@@ -38,5 +38,7 @@ export function payloadToForm(c: AppConfigPayload): SettingsFormState {
     coherenceApprovedUnmergedHours: c.coherence?.approvedUnmergedHours ?? 24,
     coherenceReviewWaitHours: c.coherence?.reviewWaitHours ?? 24,
     coherenceTicketInactivityDays: c.coherence?.ticketInactivityDays ?? 5,
+    teamEnabled: c.team.enabled,
+    teamPollIntervalMinutes: c.team.pollIntervalMinutes,
   };
 }

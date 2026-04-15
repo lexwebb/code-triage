@@ -74,6 +74,10 @@ export const createPollStatusSlice: SliceCreator<PollStatusSlice> = (set, get) =
       void getQueryClient().invalidateQueries({ queryKey: qk.attention.root });
     });
 
+    es.addEventListener("team-overview", () => {
+      void getQueryClient().invalidateQueries({ queryKey: qk.team.root });
+    });
+
     es.addEventListener("poll", () => {
       void getQueryClient().invalidateQueries({ queryKey: qk.attention.root });
     });

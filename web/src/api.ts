@@ -112,6 +112,33 @@ export interface AppConfigPayload {
     reviewWaitHours: number;
     ticketInactivityDays: number;
   };
+  team: {
+    enabled: boolean;
+    pollIntervalMinutes: number;
+  };
+}
+
+export interface TeamOverviewSnapshot {
+  generatedAt: string;
+  summaryCounts: {
+    stuck: number;
+    awaitingReview: number;
+    recentlyMerged: number;
+    unlinkedPrs: number;
+    unlinkedTickets: number;
+  };
+  stuck: Array<{ entityKind: "pr" | "ticket"; entityIdentifier: string; title: string }>;
+  awaitingReview: Array<{ repo: string; number: number; title: string; waitHours: number }>;
+  recentlyMerged: Array<{ repo: string; number: number; title: string; mergedAt: string }>;
+  unlinkedPrs: Array<{ repo: string; number: number; title: string }>;
+  unlinkedTickets: Array<{ identifier: string; title: string }>;
+}
+
+export interface TeamOverviewResponse {
+  snapshot: TeamOverviewSnapshot | null;
+  updatedAtMs: number | null;
+  refreshError: string | null;
+  stale: boolean;
 }
 
 export interface AttentionItem {
@@ -176,6 +203,18 @@ export interface PollStatus {
   linearRequestStats?: {
     total: number;
     byOperation: Record<string, number>;
+  };
+  githubRequestRates?: {
+    actualRpm: number;
+    actualRph: number;
+    predictedRpm: number;
+    predictedRph: number;
+  };
+  linearRequestRates?: {
+    actualRpm: number;
+    actualRph: number;
+    predictedRpm: number;
+    predictedRph: number;
   };
 }
 
@@ -271,4 +310,25 @@ export const api = {
     postJSON<{ ok: boolean }>(`/api/attention/${encodeURIComponent(id)}/dismiss`, {}),
   pinAttentionItem: (id: string) =>
     postJSON<{ ok: boolean }>(`/api/attention/${encodeURIComponent(id)}/pin`, {}),
+  getTeamOverview: () => fetchJSON<TeamOverviewResponse>("/api/team/overview"),
+  refreshTeamOverview: async () => {
+    const res = await fetch(`${BASE}/api/team/overview/refresh`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    const data = (await res.json().catch(() => ({}))) as {
+      ok?: boolean;
+      snapshot?: TeamOverviewSnapshot;
+      error?: string | null;
+    };
+    if (!res.ok && res.status !== 500) {
+      throw new Error(typeof data.error === "string" ? data.error : `API error: ${res.status}`);
+    }
+    return {
+      ok: data.ok === true,
+      ...(data.snapshot ? { snapshot: data.snapshot } : {}),
+      ...(data.error !== undefined ? { error: data.error } : {}),
+    } as { ok: boolean; snapshot?: TeamOverviewSnapshot; error?: string | null };
+  },
 };

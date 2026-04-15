@@ -18,6 +18,10 @@ export const qk = {
     root: ["attention"] as const,
     list: (all: boolean) => ["attention", "list", all] as const,
   },
+  team: {
+    root: ["team"] as const,
+    overview: ["team", "overview"] as const,
+  },
   tickets: {
     root: ["tickets"] as const,
     bundle: ["tickets", "bundle"] as const,

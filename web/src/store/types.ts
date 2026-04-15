@@ -276,6 +276,8 @@ export interface SettingsFormState {
   coherenceApprovedUnmergedHours: number;
   coherenceReviewWaitHours: number;
   coherenceTicketInactivityDays: number;
+  teamEnabled: boolean;
+  teamPollIntervalMinutes: number;
 }
 
 // ── Tickets Slice ──

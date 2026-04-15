@@ -143,6 +143,10 @@ export const createUiSlice: SliceCreator<UiSlice> = (set, get) => ({
           reviewWaitHours: form.coherenceReviewWaitHours,
           ticketInactivityDays: form.coherenceTicketInactivityDays,
         },
+        team: {
+          enabled: form.teamEnabled,
+          pollIntervalMinutes: form.teamPollIntervalMinutes,
+        },
         accounts: form.accounts.map((a) => ({
           name: a.name,
           orgs: a.orgs.split(",").map((o) => o.trim()).filter(Boolean),
