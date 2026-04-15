@@ -59,7 +59,7 @@ describe("serializeConfigForClient", () => {
 
   it("serializes team snapshot settings", () => {
     expect(serializeConfigForClient(baseConfig).team).toEqual({
-      enabled: false,
+      enabled: true,
       pollIntervalMinutes: 5,
     });
     const c: Config = { ...baseConfig, team: { enabled: true, pollIntervalMinutes: 9 } };
@@ -142,7 +142,7 @@ describe("mergeConfigFromBody", () => {
 
   it("merges team snapshot settings", () => {
     expect(mergeConfigFromBody({ root: "/x" }, baseConfig).team).toEqual({
-      enabled: false,
+      enabled: true,
       pollIntervalMinutes: 5,
     });
     const prev: Config = { ...baseConfig, team: { enabled: true, pollIntervalMinutes: 7 } };

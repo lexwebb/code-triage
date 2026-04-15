@@ -1,5 +1,5 @@
 import { Link, useMatchRoute } from "@tanstack/react-router";
-import { BarChart3, Inbox } from "lucide-react";
+import { BarChart3, Inbox, Users } from "lucide-react";
 import { useAppStore } from "../store";
 import { cn } from "../lib/utils";
 
@@ -30,10 +30,12 @@ function GearIcon({ className }: { className?: string }) {
 
 export function IconRail() {
   const hasLinearApiKey = useAppStore((s) => s.config?.hasLinearApiKey ?? false);
+  const teamEnabled = useAppStore((s) => s.config?.team?.enabled !== false);
   const attentionCount = useAppStore((s) => s.attentionItems.length);
   const matchRoute = useMatchRoute();
 
   const isAttention = !!matchRoute({ to: "/attention" });
+  const isTeam = !!matchRoute({ to: "/team" });
   const isCodeReview = !!matchRoute({ to: "/reviews", fuzzy: true });
   const isTickets = !!matchRoute({ to: "/tickets", fuzzy: true });
   const isStats = !!matchRoute({ to: "/stats" });
@@ -57,6 +59,19 @@ export function IconRail() {
           </span>
         )}
       </Link>
+      {teamEnabled && (
+        <Link
+          to="/team"
+          className={cn("flex items-center justify-center w-9 h-9 rounded-lg transition-colors",
+            isTeam
+              ? "bg-zinc-700 text-white"
+              : "text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800"
+          )}
+          title="Team radar"
+        >
+          <Users size={20} />
+        </Link>
+      )}
       <Link
         to="/reviews"
         className={cn("flex items-center justify-center w-9 h-9 rounded-lg transition-colors",

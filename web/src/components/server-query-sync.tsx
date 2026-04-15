@@ -11,7 +11,7 @@ import { useAppStore } from "../store";
 export function useServerQuerySync() {
   const appGate = useAppStore((s) => s.appGate);
   const repoFilter = useAppStore((s) => s.repoFilter);
-  const teamEnabled = useAppStore((s) => s.config?.team?.enabled === true);
+  const teamEnabled = useAppStore((s) => s.config?.team?.enabled !== false);
 
   const pullsQuery = useQuery({
     queryKey: qk.pulls.bundle(repoFilter),

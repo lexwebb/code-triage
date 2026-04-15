@@ -10,6 +10,8 @@ interface TeamSnapshotPanelProps {
   loading: boolean;
   error: string | null;
   onRefresh: () => Promise<void>;
+  /** When false, hides the link to the full-page team radar (e.g. on `/team`). Default true. */
+  showRadarLink?: boolean;
 }
 
 function formatCooldownMs(ms: number): string {
@@ -29,7 +31,13 @@ function emptyState(label: string) {
   return <li className="text-xs text-zinc-600">{label}</li>;
 }
 
-export function TeamSnapshotPanel({ data, loading, error, onRefresh }: TeamSnapshotPanelProps) {
+export function TeamSnapshotPanel({
+  data,
+  loading,
+  error,
+  onRefresh,
+  showRadarLink = true,
+}: TeamSnapshotPanelProps) {
   const [lastManualRefreshMs, setLastManualRefreshMs] = useState<number | null>(null);
   const [cooldownNowMs, setCooldownNowMs] = useState<number>(() => Date.now());
   const [refreshError, setRefreshError] = useState<string | null>(null);
@@ -100,11 +108,13 @@ export function TeamSnapshotPanel({ data, loading, error, onRefresh }: TeamSnaps
             Manual refresh available in {formatCooldownMs(remainingCooldownMs)}.
           </p>
         )}
-        <div className="mt-2 text-xs">
-          <Link to={"/team" as never} className="text-blue-300 hover:text-blue-200 hover:underline">
-            Open team radar
-          </Link>
-        </div>
+        {showRadarLink && (
+          <div className="mt-2 text-xs">
+            <Link to="/team" className="text-blue-300 hover:text-blue-200 hover:underline">
+              Open team radar
+            </Link>
+          </div>
+        )}
       </header>
 
       <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">

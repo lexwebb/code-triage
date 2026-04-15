@@ -59,7 +59,7 @@ export default function SettingsView({
   const portMismatch = form.port !== listenPort;
 
   return (
-    <div className="min-h-full bg-gray-950 text-gray-200 flex flex-col">
+    <div className="flex h-full min-h-0 flex-col bg-gray-950 text-gray-200">
       <header className="border-b border-gray-800 px-6 py-4 shrink-0 flex items-center justify-between">
         <div className="flex items-center gap-3">
           <img src="/logo.png" alt="" className="w-8 h-8 rounded-md" />
@@ -76,7 +76,7 @@ export default function SettingsView({
         )}
       </header>
 
-      <form onSubmit={handleSubmit} className="flex-1 overflow-y-auto px-6 py-6 max-w-3xl w-full mx-auto space-y-8 pb-24">
+      <form onSubmit={handleSubmit} className="min-h-0 flex-1 overflow-y-auto px-6 py-6 max-w-3xl w-full mx-auto space-y-8 pb-24">
         {mode === "setup" && (
           <p className="text-sm text-gray-400">
             Configure your install. Defaults are loaded from the app; nothing is written until you save.

@@ -13,7 +13,7 @@ export const Route = createRoute({
     }, []);
 
     return (
-      <div className="flex-1 overflow-hidden">
+      <div className="min-h-0 flex-1 overflow-hidden">
         <SettingsView mode="settings" />
       </div>
     );

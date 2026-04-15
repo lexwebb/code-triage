@@ -47,7 +47,7 @@ import { evaluateCoherence, type CoherenceInput, type CoherencePR } from "./cohe
 import { refreshAttentionFeed, shouldLogAttentionPipeline } from "./attention.js";
 import { discoverRepos, type RepoInfo } from "./discovery.js";
 import { filterRepoPathsWithPushAccess, loadCachedPushAccess } from "./github-batching.js";
-import { loadConfig, saveConfig, configExists, type Config } from "./config.js";
+import { loadConfig, saveConfig, configExists, isTeamFeaturesEnabled, type Config } from "./config.js";
 import { computeEffectivePollIntervalMs, estimatePollRequestCount } from "./poll-rate-budget.js";
 
 function delay(ms: number): Promise<void> {
@@ -696,8 +696,8 @@ async function poll(): Promise<void> {
     } catch (err) {
       console.error(`\n  Coherence evaluation error: ${(err as Error).message}`);
     }
-    if (config.team?.enabled === true) {
-      const intervalMs = (config.team.pollIntervalMinutes ?? 5) * 60_000;
+    if (isTeamFeaturesEnabled(config)) {
+      const intervalMs = (config.team?.pollIntervalMinutes ?? 5) * 60_000;
       if (Date.now() - lastTeamOverviewRefreshMs >= intervalMs) {
         lastTeamOverviewRefreshMs = Date.now();
         try {

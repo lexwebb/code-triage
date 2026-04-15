@@ -91,10 +91,15 @@ const DEFAULTS: Config = {
     ticketInactivityDays: 5,
   },
   team: {
-    enabled: false,
+    enabled: true,
     pollIntervalMinutes: 5,
   },
 };
+
+/** Team snapshot + dashboard; disabled only when `team.enabled` is explicitly `false`. */
+export function isTeamFeaturesEnabled(c: Config): boolean {
+  return c.team?.enabled !== false;
+}
 
 export function loadConfig(): Config {
   if (!existsSync(CONFIG_FILE)) {

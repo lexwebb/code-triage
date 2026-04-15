@@ -137,6 +137,77 @@ const pollState = {
   pollPausedReason: null as string | null,
 };
 
+type CounterSample = { at: number; total: number };
+type RequestRateSummary = {
+  actualRpm: number;
+  actualRph: number;
+  predictedRpm: number;
+  predictedRph: number;
+};
+
+const githubCounterHistory: CounterSample[] = [];
+const linearCounterHistory: CounterSample[] = [];
+const COUNTER_HISTORY_MAX = 30;
+const COUNTER_IDLE_SAMPLE_MS = 5_000;
+
+function recordCounterSample(history: CounterSample[], now: number, total: number): void {
+  const last = history.length > 0 ? history[history.length - 1] : null;
+  if (last && total < last.total) {
+    history.length = 0; // process reset / counter reset
+  }
+  const freshLast = history.length > 0 ? history[history.length - 1] : null;
+  if (!freshLast) {
+    history.push({ at: now, total });
+    return;
+  }
+  const changed = total !== freshLast.total;
+  const idleTick = now - freshLast.at >= COUNTER_IDLE_SAMPLE_MS;
+  if (!changed && !idleTick) return;
+  history.push({ at: now, total });
+  if (history.length > COUNTER_HISTORY_MAX) {
+    history.splice(0, history.length - COUNTER_HISTORY_MAX);
+  }
+}
+
+function summarizeCounterRates(history: CounterSample[]): RequestRateSummary {
+  if (history.length < 2) {
+    return { actualRpm: 0, actualRph: 0, predictedRpm: 0, predictedRph: 0 };
+  }
+  const deltas: number[] = [];
+  for (let i = 1; i < history.length; i++) {
+    const prev = history[i - 1]!;
+    const cur = history[i]!;
+    const dt = Math.max(1, cur.at - prev.at);
+    const dc = Math.max(0, cur.total - prev.total);
+    deltas.push((dc * 60_000) / dt);
+  }
+  const actualRpm = deltas[deltas.length - 1] ?? 0;
+  const recent = deltas.slice(-6);
+  const predictedRpm = recent.length > 0
+    ? recent.reduce((sum, v) => sum + v, 0) / recent.length
+    : 0;
+  return {
+    actualRpm,
+    actualRph: actualRpm * 60,
+    predictedRpm,
+    predictedRph: predictedRpm * 60,
+  };
+}
+
+function getRequestStatsSnapshot(now = Date.now()) {
+  const githubRequestStats = getGitHubRequestStatsSnapshot();
+  const linearRequestStats = getLinearRequestStatsSnapshot();
+  recordCounterSample(githubCounterHistory, now, githubRequestStats.total);
+  recordCounterSample(linearCounterHistory, now, linearRequestStats.total);
+  return {
+    at: now,
+    githubRequestStats,
+    linearRequestStats,
+    githubRequestRates: summarizeCounterRates(githubCounterHistory),
+    linearRequestRates: summarizeCounterRates(linearCounterHistory),
+  };
+}
+
 // --- Claude/AI usage tracking ---
 let claudeActiveEvals = 0;
 let claudeActiveFixJobs = 0;
@@ -229,6 +300,12 @@ export function sseBroadcast(event: string, data: unknown): void {
     }
   }
 }
+
+// Separate high-frequency telemetry stream for stats UI.
+setInterval(() => {
+  if (sseClients.size === 0) return;
+  sseBroadcast("request-stats", getRequestStatsSnapshot());
+}, 5_000);
 
 /** Long-lived SSE stream for instant poll / fix-job hints (browser uses EventSource). */
 export function subscribeSse(req: IncomingMessage, res: ServerResponse): void {
@@ -406,6 +483,7 @@ export function getPollState() {
   const rl = getRateLimitState();
   const eff = pollState.intervalMs;
   const perPoll = pollState.estimatedPollRequests ?? 0;
+  const reqStats = getRequestStatsSnapshot();
   const estimatedGithubRequestsPerHour =
     eff > 0 && perPoll > 0 ? Math.round((3600000 / eff) * perPoll) : 0;
   return {
@@ -430,8 +508,10 @@ export function getPollState() {
     rateLimitResource: rl.resource,
     rateLimitUpdatedAt: rl.updatedAt,
     claude: getClaudeStats(),
-    githubRequestStats: getGitHubRequestStatsSnapshot(),
-    linearRequestStats: getLinearRequestStatsSnapshot(),
+    githubRequestStats: reqStats.githubRequestStats,
+    linearRequestStats: reqStats.linearRequestStats,
+    githubRequestRates: reqStats.githubRequestRates,
+    linearRequestRates: reqStats.linearRequestRates,
   };
 }
 

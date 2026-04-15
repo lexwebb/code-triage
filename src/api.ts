@@ -4,7 +4,7 @@ import { getVapidKeys } from "./vapid.js";
 import { savePushSubscription, deletePushSubscription, mutePR as dbMutePR, unmutePR as dbUnmutePR, getMutedPRs as dbGetMutedPRs } from "./push-db.js";
 import { sendTestPush } from "./push.js";
 import type { RepoInfo } from "./discovery.js";
-import { loadConfig, saveConfig, configExists, type Config } from "./config.js";
+import { loadConfig, saveConfig, configExists, isTeamFeaturesEnabled, type Config } from "./config.js";
 import { loadState, markComment, patchCommentTriage, saveState, addFixJob as addFixJobState, removeFixJob as removeFixJobState, getFixJobs, getPendingTriageCountsByPr, needsEvaluation, reconcileResolvedComments } from "./state.js";
 import { postReply, resolveThread, applyFixWithClaude, clampEvalConcurrency } from "./actioner.js";
 import { createWorktree, getWorktreePath, getDiffInWorktree, removeWorktree, commitAndPushWorktree } from "./worktree.js";
@@ -360,7 +360,7 @@ export function serializeConfigForClient(c: Config): Record<string, unknown> {
       ticketInactivityDays: c.coherence?.ticketInactivityDays ?? 5,
     },
     team: {
-      enabled: c.team?.enabled === true,
+      enabled: isTeamFeaturesEnabled(c),
       pollIntervalMinutes: c.team?.pollIntervalMinutes ?? 5,
     },
   };
@@ -555,13 +555,14 @@ export function mergeConfigFromBody(body: Record<string, unknown>, previous: Con
 
   const teamBody =
     typeof body.team === "object" && body.team !== null ? (body.team as Record<string, unknown>) : undefined;
-  const previousTeam = previous.team ?? {};
   const team = {
     enabled:
-      typeof teamBody?.enabled === "boolean" ? teamBody.enabled : (previousTeam.enabled === true),
+      typeof teamBody?.enabled === "boolean"
+        ? teamBody.enabled
+        : isTeamFeaturesEnabled(previous),
     pollIntervalMinutes: Math.max(
       1,
-      toInt(teamBody?.pollIntervalMinutes, previousTeam.pollIntervalMinutes ?? 5),
+      toInt(teamBody?.pollIntervalMinutes, previous.team?.pollIntervalMinutes ?? 5),
     ),
   };
 
@@ -1836,7 +1837,7 @@ export function registerRoutes(): void {
 
   addRoute("GET", "/api/team/overview", async (_req, res) => {
     const c = loadConfig();
-    if (!c.team?.enabled) {
+    if (!isTeamFeaturesEnabled(c)) {
       json(res, { error: "Team features disabled" }, 404);
       return;
     }
@@ -1861,7 +1862,7 @@ export function registerRoutes(): void {
 
   addRoute("POST", "/api/team/overview/refresh", async (_req, res) => {
     const c = loadConfig();
-    if (!c.team?.enabled) {
+    if (!isTeamFeaturesEnabled(c)) {
       json(res, { error: "Team features disabled" }, 404);
       return;
     }

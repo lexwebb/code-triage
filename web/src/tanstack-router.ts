@@ -9,10 +9,12 @@ import { Route as ticketsIndexRoute } from "./routes/_sidebar/tickets";
 import { Route as ticketsDetailRoute } from "./routes/_sidebar/tickets-detail";
 import { Route as settingsRoute } from "./routes/settings";
 import { Route as attentionRoute } from "./routes/attention";
+import { Route as teamRoute } from "./routes/team";
 import { Route as statsRoute } from "./routes/stats";
 
 const routeTree = rootRoute.addChildren([
   attentionRoute,
+  teamRoute,
   statsRoute,
   sidebarRoute.addChildren([
     indexRedirectRoute,

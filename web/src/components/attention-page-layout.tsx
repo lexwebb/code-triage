@@ -24,7 +24,7 @@ function compactSummaryLine(
 export function AttentionPageLayout() {
   const queryClient = useQueryClient();
   const appGate = useAppStore((s) => s.appGate);
-  const teamEnabled = useAppStore((s) => s.config?.team?.enabled === true);
+  const teamEnabled = useAppStore((s) => s.config?.team?.enabled !== false);
 
   const teamOverviewQuery = useQuery({
     queryKey: qk.team.overview,
