@@ -26,7 +26,7 @@ import csharpLang from "refractor/csharp";
 import type { ReviewComment } from "../types";
 import { cn } from "../lib/utils";
 import { Button } from "./ui/button";
-import Comment from "./Comment";
+import Comment from "./comment";
 import { useAppStore } from "../store";
 
 // Adapter: refractor v5 highlight() returns a Root node, but react-diff-view's

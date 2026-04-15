@@ -1,6 +1,6 @@
 import { api } from "../api";
 import type { SliceCreator, AppSlice } from "./types";
-import { payloadToForm } from "./settingsForm";
+import { payloadToForm } from "./settings-form";
 
 export const createAppSlice: SliceCreator<AppSlice> = (set, get) => ({
   appGate: "loading",

@@ -1,14 +1,14 @@
 import { create } from "zustand";
 import { subscribeWithSelector } from "zustand/middleware";
 import type { AppStore } from "./types";
-import { createAppSlice } from "./appSlice";
-import { createPullsSlice } from "./pullsSlice";
-import { createPrDetailSlice } from "./prDetailSlice";
-import { createPollStatusSlice } from "./pollStatusSlice";
-import { createFixJobsSlice } from "./fixJobsSlice";
-import { createNotificationsSlice } from "./notificationsSlice";
-import { createUiSlice } from "./uiSlice";
-import { createTicketsSlice } from "./ticketsSlice";
+import { createAppSlice } from "./app-slice";
+import { createPullsSlice } from "./pulls-slice";
+import { createPrDetailSlice } from "./pr-detail-slice";
+import { createPollStatusSlice } from "./poll-status-slice";
+import { createFixJobsSlice } from "./fix-jobs-slice";
+import { createNotificationsSlice } from "./notifications-slice";
+import { createUiSlice } from "./ui-slice";
+import { createTicketsSlice } from "./tickets-slice";
 
 export const useAppStore = create<AppStore>()(
   subscribeWithSelector((...a) => ({

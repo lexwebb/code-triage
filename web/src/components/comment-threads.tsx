@@ -1,7 +1,7 @@
 import React, { useEffect, useLayoutEffect, useRef } from "react";
 import type { ReviewComment } from "../types";
 import { useAppStore } from "../store";
-import Comment from "./Comment";
+import Comment from "./comment";
 import { Check, ChevronRight, ChevronDown, HelpCircle } from "lucide-react";
 import { IconButton } from "./ui/icon-button";
 import { CollapsibleSection } from "./ui/collapsible-section";

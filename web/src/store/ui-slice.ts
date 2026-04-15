@@ -1,7 +1,7 @@
 import { api } from "../api";
 import type { SliceCreator, UiSlice } from "./types";
 import { selectFlatPulls } from "./selectors";
-import { payloadToForm } from "./settingsForm";
+import { payloadToForm } from "./settings-form";
 
 export const createUiSlice: SliceCreator<UiSlice> = (set, get) => ({
   sidebarCollapsed: false,
