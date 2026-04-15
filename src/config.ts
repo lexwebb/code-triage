@@ -65,6 +65,11 @@ export interface Config {
     reviewWaitHours?: number;
     ticketInactivityDays?: number;
   };
+  team?: {
+    enabled?: boolean;
+    /** Minutes between CLI-driven team snapshot refreshes. Default 5. */
+    pollIntervalMinutes?: number;
+  };
 }
 
 const DEFAULTS: Config = {
@@ -84,6 +89,10 @@ const DEFAULTS: Config = {
     approvedUnmergedHours: 24,
     reviewWaitHours: 24,
     ticketInactivityDays: 5,
+  },
+  team: {
+    enabled: false,
+    pollIntervalMinutes: 5,
   },
 };
 

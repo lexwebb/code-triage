@@ -98,3 +98,13 @@ describe("coherence config", () => {
     });
   });
 });
+
+describe("team config", () => {
+  it("provides default team snapshot settings", () => {
+    const config = loadConfig();
+    expect(config.team).toEqual({
+      enabled: false,
+      pollIntervalMinutes: 5,
+    });
+  });
+});

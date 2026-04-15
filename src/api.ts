@@ -358,6 +358,10 @@ export function serializeConfigForClient(c: Config): Record<string, unknown> {
       reviewWaitHours: c.coherence?.reviewWaitHours ?? 24,
       ticketInactivityDays: c.coherence?.ticketInactivityDays ?? 5,
     },
+    team: {
+      enabled: c.team?.enabled === true,
+      pollIntervalMinutes: c.team?.pollIntervalMinutes ?? 5,
+    },
   };
 }
 
@@ -548,6 +552,18 @@ export function mergeConfigFromBody(body: Record<string, unknown>, previous: Con
     ),
   };
 
+  const teamBody =
+    typeof body.team === "object" && body.team !== null ? (body.team as Record<string, unknown>) : undefined;
+  const previousTeam = previous.team ?? {};
+  const team = {
+    enabled:
+      typeof teamBody?.enabled === "boolean" ? teamBody.enabled : (previousTeam.enabled === true),
+    pollIntervalMinutes: Math.max(
+      1,
+      toInt(teamBody?.pollIntervalMinutes, previousTeam.pollIntervalMinutes ?? 5),
+    ),
+  };
+
   return {
     root,
     port,
@@ -571,6 +587,7 @@ export function mergeConfigFromBody(body: Record<string, unknown>, previous: Con
     linearApiKey,
     linearTeamKeys,
     coherence,
+    team,
   };
 }
 

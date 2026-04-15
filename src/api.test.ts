@@ -56,6 +56,15 @@ describe("serializeConfigForClient", () => {
     expect(out.evalPromptAppendByRepo).toEqual({ "o/r": "repo bit" });
     expect(out.evalClaudeExtraArgs).toEqual(["--model", "opus"]);
   });
+
+  it("serializes team snapshot settings", () => {
+    expect(serializeConfigForClient(baseConfig).team).toEqual({
+      enabled: false,
+      pollIntervalMinutes: 5,
+    });
+    const c: Config = { ...baseConfig, team: { enabled: true, pollIntervalMinutes: 9 } };
+    expect(serializeConfigForClient(c).team).toEqual({ enabled: true, pollIntervalMinutes: 9 });
+  });
 });
 
 describe("mergeConfigFromBody", () => {
@@ -129,5 +138,22 @@ describe("mergeConfigFromBody", () => {
     expect(() =>
       mergeConfigFromBody({ root: "/x", evalClaudeExtraArgs: "bad" }, baseConfig),
     ).toThrow(/evalClaudeExtraArgs/);
+  });
+
+  it("merges team snapshot settings", () => {
+    expect(mergeConfigFromBody({ root: "/x" }, baseConfig).team).toEqual({
+      enabled: false,
+      pollIntervalMinutes: 5,
+    });
+    const prev: Config = { ...baseConfig, team: { enabled: true, pollIntervalMinutes: 7 } };
+    expect(
+      mergeConfigFromBody({ root: "/x", team: { enabled: false, pollIntervalMinutes: "2" } }, prev).team,
+    ).toEqual({ enabled: false, pollIntervalMinutes: 2 });
+    expect(
+      mergeConfigFromBody({ root: "/x", team: { enabled: true, pollIntervalMinutes: 0 } }, baseConfig).team,
+    ).toEqual({ enabled: true, pollIntervalMinutes: 1 });
+    expect(
+      mergeConfigFromBody({ root: "/x", team: {} }, prev).team,
+    ).toEqual({ enabled: true, pollIntervalMinutes: 7 });
   });
 });
