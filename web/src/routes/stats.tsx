@@ -4,6 +4,7 @@ import { createRoute } from "@tanstack/react-router";
 import { BarChart3, Brain } from "lucide-react";
 import { Route as rootRoute } from "./__root";
 import { api, type PollStatus } from "../api";
+import { subscribeReconnectingSse } from "../lib/sse-reconnecting";
 
 function topEntries(map: Record<string, number> | undefined, limit = 8): Array<[string, number]> {
   return Object.entries(map ?? {})
@@ -128,28 +129,56 @@ export const Route = createRoute({
           setError((e as Error).message);
         });
 
-      const es = new EventSource("/api/events");
-      es.addEventListener("request-stats", (ev) => {
-        try {
-          applyRequestEvent(JSON.parse((ev as MessageEvent).data) as RequestStatsEvent);
-        } catch {
-          /* ignore malformed events */
-        }
-      });
-      es.addEventListener("poll-status", (ev) => {
-        try {
-          const data = JSON.parse((ev as MessageEvent).data) as { status?: PollStatus };
-          if (!data.status) return;
-          applyStats(data.status);
-        } catch {
-          /* ignore malformed events */
-        }
-      });
-      es.onerror = () => { /* browser auto-reconnect */ };
+      const dispose = subscribeReconnectingSse(
+        "/api/events",
+        (es) => {
+          es.addEventListener("request-stats", (ev) => {
+            try {
+              applyRequestEvent(JSON.parse((ev as MessageEvent).data) as RequestStatsEvent);
+            } catch {
+              /* ignore malformed events */
+            }
+          });
+          es.addEventListener("poll-status", (ev) => {
+            try {
+              const data = JSON.parse((ev as MessageEvent).data) as { status?: PollStatus };
+              if (!data.status) return;
+              applyStats(data.status);
+            } catch {
+              /* ignore malformed events */
+            }
+          });
+        },
+        {
+          onOpen: () => {
+            void api
+              .getPollStatus()
+              .then((s) => {
+                if (!active) return;
+                applyStats(s);
+              })
+              .catch((e) => {
+                if (!active) return;
+                setError((e as Error).message);
+              });
+          },
+          onResync: () =>
+            api
+              .getPollStatus()
+              .then((s) => {
+                if (!active) return;
+                applyStats(s);
+              })
+              .catch((e) => {
+                if (!active) return;
+                setError((e as Error).message);
+              }),
+        },
+      );
 
       return () => {
         active = false;
-        es.close();
+        dispose();
       };
     }, []);
 

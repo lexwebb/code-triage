@@ -1,7 +1,8 @@
 import { api } from "../api";
-import type { PollStatus, QueuedFixItem } from "../api";
+import type { FixJobStatus, PollStatus, QueuedFixItem } from "../api";
 import { getQueryClient } from "../lib/query-client";
 import { invalidatePrPullQueries, invalidatePullBundleQueries, qk } from "../lib/query-keys";
+import { subscribeReconnectingSse } from "../lib/sse-reconnecting";
 import type { SliceCreator, PollStatusSlice } from "./types";
 
 export const createPollStatusSlice: SliceCreator<PollStatusSlice> = (set, get) => ({
@@ -27,10 +28,10 @@ export const createPollStatusSlice: SliceCreator<PollStatusSlice> = (set, get) =
   _countdownInterval: null,
   _rateLimitPollInterval: null,
   _lastPoll: 0,
+  _sseDispose: null,
 
   connectSSE: () => {
     get().disconnectSSE();
-    const es = new EventSource("/api/events");
     let pendingEvalRefresh: ReturnType<typeof setTimeout> | null = null;
     const schedulePullsRefresh = () => {
       if (pendingEvalRefresh) return;
@@ -40,74 +41,112 @@ export const createPollStatusSlice: SliceCreator<PollStatusSlice> = (set, get) =
       }, 300);
     };
 
-    es.addEventListener("poll-status", (ev) => {
-      try {
-        const data = JSON.parse((ev as MessageEvent).data) as { status?: PollStatus };
-        if (data.status) get().applyPollStatus(data.status);
-      } catch { /* ignore */ }
-    });
+    const dispose = subscribeReconnectingSse(
+      "/api/events",
+      (es) => {
+        set({ _eventSource: es });
 
-    es.addEventListener("fix-queue", (ev) => {
-      try {
-        const data = JSON.parse((ev as MessageEvent).data) as QueuedFixItem[];
-        get().setQueue(data);
-      } catch { /* ignore */ }
-    });
+        es.addEventListener("poll-status", (ev) => {
+          try {
+            const data = JSON.parse((ev as MessageEvent).data) as { status?: PollStatus };
+            if (data.status) get().applyPollStatus(data.status);
+          } catch { /* ignore */ }
+        });
 
-    es.addEventListener("eval-complete", (ev) => {
-      try {
-        const data = JSON.parse((ev as MessageEvent).data) as { repo?: string; prNumber?: number };
-        // Keep sidebar PR badges/counts in sync when evaluations finish.
-        schedulePullsRefresh();
-        if (data.repo && data.prNumber) {
-          void invalidatePrPullQueries(getQueryClient(), data.repo, data.prNumber);
-          void get().refreshIfMatch(data.repo, data.prNumber);
-        }
-      } catch { /* ignore */ }
-    });
+        es.addEventListener("fix-queue", (ev) => {
+          try {
+            const data = JSON.parse((ev as MessageEvent).data) as QueuedFixItem[];
+            get().setQueue(data);
+          } catch { /* ignore */ }
+        });
 
-    es.addEventListener("ticket-status", () => {
-      void get().fetchTickets();
-    });
+        es.addEventListener("fix-job", (ev) => {
+          try {
+            const raw = JSON.parse((ev as MessageEvent).data) as Partial<FixJobStatus> & { commentId?: unknown };
+            if (typeof raw.commentId !== "number") return;
+            const patch: Partial<FixJobStatus> & { commentId: number } = { ...raw, commentId: raw.commentId };
+            get().mergeFixJob(patch);
+            const st = patch.status;
+            if (
+              (st === "completed" || st === "failed" || st === "no_changes")
+              && patch.repo
+              && patch.prNumber != null
+            ) {
+              void invalidatePrPullQueries(getQueryClient(), patch.repo, patch.prNumber);
+              void get().refreshIfMatch(patch.repo, patch.prNumber);
+            }
+          } catch { /* ignore */ }
+        });
 
-    es.addEventListener("attention", () => {
-      void getQueryClient().invalidateQueries({ queryKey: qk.attention.root });
-    });
+        es.addEventListener("eval-complete", (ev) => {
+          try {
+            const data = JSON.parse((ev as MessageEvent).data) as { repo?: string; prNumber?: number };
+            // Keep sidebar PR badges/counts in sync when evaluations finish.
+            schedulePullsRefresh();
+            if (data.repo && data.prNumber) {
+              void invalidatePrPullQueries(getQueryClient(), data.repo, data.prNumber);
+              void get().refreshIfMatch(data.repo, data.prNumber);
+            }
+          } catch { /* ignore */ }
+        });
 
-    es.addEventListener("team-overview", () => {
-      void getQueryClient().invalidateQueries({ queryKey: qk.team.root });
-    });
+        es.addEventListener("ticket-status", () => {
+          void get().fetchTickets();
+        });
 
-    es.addEventListener("poll", (ev) => {
-      void getQueryClient().invalidateQueries({ queryKey: qk.attention.root });
-      try {
-        const data = JSON.parse((ev as MessageEvent).data) as { ok?: boolean };
-        if (data.ok === false) return;
-      } catch {
-        /* ignore parse errors */
-      }
-      void invalidatePullBundleQueries(getQueryClient());
-    });
+        es.addEventListener("attention", () => {
+          void getQueryClient().invalidateQueries({ queryKey: qk.attention.root });
+        });
 
-    es.onerror = () => { /* browser auto-reconnects */ };
+        es.addEventListener("team-overview", () => {
+          void getQueryClient().invalidateQueries({ queryKey: qk.team.root });
+        });
 
-    set({ _eventSource: es });
+        es.addEventListener("poll", (ev) => {
+          void getQueryClient().invalidateQueries({ queryKey: qk.attention.root });
+          try {
+            const data = JSON.parse((ev as MessageEvent).data) as { ok?: boolean };
+            if (data.ok === false) return;
+          } catch {
+            /* ignore parse errors */
+          }
+          void invalidatePullBundleQueries(getQueryClient());
+        });
+      },
+      {
+        onOpen: () => void get().fetchInitialStatus(),
+        onResync: () => get().fetchInitialStatus(),
+        maxBackoffMs: 60_000,
+      },
+    );
+
+    set({ _sseDispose: dispose });
+
     return () => {
       if (pendingEvalRefresh) {
         clearTimeout(pendingEvalRefresh);
         pendingEvalRefresh = null;
       }
-      es.close();
-      set({ _eventSource: null });
+      get().disconnectSSE();
     };
   },
 
   disconnectSSE: () => {
-    const es = get()._eventSource;
-    if (es) {
-      es.close();
-      set({ _eventSource: null });
+    const dispose = get()._sseDispose;
+    if (dispose) {
+      dispose();
+      set({ _sseDispose: null });
+    } else {
+      const es = get()._eventSource;
+      if (es) {
+        try {
+          es.close();
+        } catch {
+          /* ignore */
+        }
+      }
     }
+    set({ _eventSource: null });
   },
 
   fetchInitialStatus: async () => {

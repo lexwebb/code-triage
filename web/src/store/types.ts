@@ -167,6 +167,8 @@ export interface PollStatusSlice {
   countdown: number;
   rateLimitNow: number;
   _eventSource: EventSource | null;
+  /** Full teardown for reconnecting SSE (timer + EventSource). */
+  _sseDispose: (() => void) | null;
   _countdownInterval: ReturnType<typeof setInterval> | null;
   _rateLimitPollInterval: ReturnType<typeof setInterval> | null;
   _lastPoll: number;
@@ -183,15 +185,22 @@ export interface PollStatusSlice {
 
 // ── Fix Jobs Slice ──
 
+/** Apply & Push: short vs long in-flight messaging (worktree may be recreated server-side). */
+export type FixApplyPhase = "in_progress" | "extended";
+
 export interface FixJobsSlice {
   jobs: FixJobStatus[];
   queue: QueuedFixItem[];
   replyText: Record<number, string>;
   noChangesReply: Record<number, string>;
   acting: Record<number, boolean>;
+  /** While Apply HTTP is running — `extended` after a delay for “still working” copy. */
+  fixApplyPhase: Record<number, FixApplyPhase>;
   selectedJobId: number | null;
 
   setJobs: (jobs: FixJobStatus[]) => void;
+  /** Merge one job from `fix-job` SSE (or other partial updates); preserves existing fields. */
+  mergeFixJob: (patch: Partial<FixJobStatus> & { commentId: number }) => void;
   setQueue: (items: QueuedFixItem[]) => void;
   cancelQueued: (commentId: number) => Promise<void>;
   setReplyText: (commentId: number, text: string) => void;

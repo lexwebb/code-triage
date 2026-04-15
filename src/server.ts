@@ -315,7 +315,7 @@ export function subscribeSse(req: IncomingMessage, res: ServerResponse): void {
     Connection: "keep-alive",
     "Access-Control-Allow-Origin": "*",
   });
-  res.write("\n");
+  res.write("retry: 5000\n\n");
 
   try {
     const snapshot = getPollState();
@@ -388,6 +388,8 @@ export function setFixJobStatus(job: FixJobStatus): void {
     status: job.status,
     path: job.path,
     error: job.error,
+    branch: job.branch,
+    diff: job.diff,
     sessionId: job.sessionId,
     conversation: job.conversation,
     suggestedReply: job.suggestedReply,
