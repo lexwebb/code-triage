@@ -121,6 +121,12 @@ function ensureSchema(raw: Database.Database): void {
       data_json TEXT NOT NULL,
       fetched_at_ms INTEGER NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS team_overview_cache (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      payload_json TEXT NOT NULL,
+      updated_at_ms INTEGER NOT NULL,
+      refresh_error TEXT
+    );
   `);
   raw.prepare("INSERT OR IGNORE INTO meta (id, last_poll) VALUES (1, NULL)").run();
   migrateCommentsColumns(raw);

@@ -79,3 +79,11 @@ export const attentionItems = sqliteTable("attention_items", {
   dismissedAt: text("dismissed_at"),
   pinned: integer("pinned").notNull().default(0),
 });
+
+/** Single-row team overview snapshot: id is always 1 (enforced in DDL). */
+export const teamOverviewCache = sqliteTable("team_overview_cache", {
+  id: integer("id").primaryKey(),
+  payloadJson: text("payload_json").notNull(),
+  updatedAtMs: integer("updated_at_ms").notNull(),
+  refreshError: text("refresh_error"),
+});
