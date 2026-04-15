@@ -149,14 +149,28 @@ export const Route = createRoute({
 });
 ```
 
-`web/src/routes/_sidebar/index.tsx`:
+`web/src/routes/_sidebar/index.tsx` (redirect from `/` to `/reviews`):
+```tsx
+import { createRoute, redirect } from "@tanstack/react-router";
+import { Route as sidebarRoute } from "../_sidebar";
+
+export const Route = createRoute({
+  getParentRoute: () => sidebarRoute,
+  path: "/",
+  beforeLoad: () => {
+    throw redirect({ to: "/reviews" });
+  },
+});
+```
+
+`web/src/routes/_sidebar/reviews.tsx`:
 ```tsx
 import { createRoute } from "@tanstack/react-router";
 import { Route as sidebarRoute } from "../_sidebar";
 
 export const Route = createRoute({
   getParentRoute: () => sidebarRoute,
-  path: "/",
+  path: "reviews",
   component: function CodeReviewIndex() {
     return <div>Code Review</div>;
   },
@@ -199,7 +213,8 @@ Replace the existing `web/src/router.ts` (the custom pushState/popState router) 
 import { createRouter } from "@tanstack/react-router";
 import { Route as rootRoute } from "./routes/__root";
 import { Route as sidebarRoute } from "./routes/_sidebar";
-import { Route as codeReviewIndexRoute } from "./routes/_sidebar/index";
+import { Route as indexRedirectRoute } from "./routes/_sidebar/index";
+import { Route as reviewsIndexRoute } from "./routes/_sidebar/reviews";
 import { Route as codeReviewRepoRoute } from "./routes/_sidebar/code-review-repo";
 import { Route as codeReviewPRRoute } from "./routes/_sidebar/code-review-pr";
 import { Route as ticketsIndexRoute } from "./routes/_sidebar/tickets";
@@ -208,7 +223,8 @@ import { Route as settingsRoute } from "./routes/settings";
 
 const routeTree = rootRoute.addChildren([
   sidebarRoute.addChildren([
-    codeReviewIndexRoute,
+    indexRedirectRoute,
+    reviewsIndexRoute,
     codeReviewRepoRoute,
     codeReviewPRRoute,
     ticketsIndexRoute,
@@ -235,7 +251,7 @@ import { Route as sidebarRoute } from "../_sidebar";
 
 export const Route = createRoute({
   getParentRoute: () => sidebarRoute,
-  path: "$owner/$repo",
+  path: "reviews/$owner/$repo",
   component: function CodeReviewRepo() {
     return <div>Code Review Repo</div>;
   },
@@ -249,7 +265,7 @@ import { Route as sidebarRoute } from "../_sidebar";
 
 export const Route = createRoute({
   getParentRoute: () => sidebarRoute,
-  path: "$owner/$repo/pull/$number",
+  path: "reviews/$owner/$repo/pull/$number",
   validateSearch: (search: Record<string, unknown>) => ({
     tab: (search.tab as "overview" | "threads" | "files" | "checks") ?? "threads",
     file: (search.file as string) ?? undefined,
@@ -544,7 +560,7 @@ git commit -m "feat(web): implement SidebarLayout with PR list and tickets sideb
 **Files:**
 - Modify: `web/src/routes/_sidebar/index.tsx` (code review index — `/`)
 - Modify: `web/src/routes/_sidebar/code-review-repo.tsx` (`/$owner/$repo`)
-- Modify: `web/src/routes/_sidebar/code-review-pr.tsx` (`/$owner/$repo/pull/$number`)
+- Modify: `web/src/routes/_sidebar/code-review-pr.tsx` (`/reviews/$owner/$repo/pull/$number`)
 - Create: `web/src/components/code-review-detail.tsx` (shared component for the detail area)
 
 All three code review routes render the same detail area (or empty state). The difference is what path params are available. Extract the shared detail rendering into a component.
@@ -628,7 +644,7 @@ export function CodeReviewDetail({ owner, repo, number, tab = "threads", file }:
   function setTab(newTab: "overview" | "threads" | "files" | "checks") {
     if (owner && repo && number) {
       void navigate({
-        to: "/$owner/$repo/pull/$number",
+        to: "/reviews/$owner/$repo/pull/$number",
         params: { owner, repo, number: String(number) },
         search: (prev) => ({ ...prev, tab: newTab }),
       });
@@ -638,7 +654,7 @@ export function CodeReviewDetail({ owner, repo, number, tab = "threads", file }:
   function selectFile(path: string | null) {
     if (owner && repo && number) {
       void navigate({
-        to: "/$owner/$repo/pull/$number",
+        to: "/reviews/$owner/$repo/pull/$number",
         params: { owner, repo, number: String(number) },
         search: (prev) => ({ ...prev, file: path ?? undefined, tab: "files" }),
       });
@@ -735,7 +751,21 @@ export function CodeReviewDetail({ owner, repo, number, tab = "threads", file }:
 
 - [ ] **Step 2: Update route components to use CodeReviewDetail**
 
-`web/src/routes/_sidebar/index.tsx`:
+`web/src/routes/_sidebar/index.tsx` (redirect `/` → `/reviews`):
+```tsx
+import { createRoute, redirect } from "@tanstack/react-router";
+import { Route as sidebarRoute } from "../_sidebar";
+
+export const Route = createRoute({
+  getParentRoute: () => sidebarRoute,
+  path: "/",
+  beforeLoad: () => {
+    throw redirect({ to: "/reviews" });
+  },
+});
+```
+
+`web/src/routes/_sidebar/reviews.tsx` (code review index at `/reviews`):
 ```tsx
 import { createRoute } from "@tanstack/react-router";
 import { Route as sidebarRoute } from "../_sidebar";
@@ -743,7 +773,7 @@ import { CodeReviewDetail } from "../../components/code-review-detail";
 
 export const Route = createRoute({
   getParentRoute: () => sidebarRoute,
-  path: "/",
+  path: "reviews",
   component: function CodeReviewIndex() {
     return <CodeReviewDetail />;
   },
@@ -758,7 +788,7 @@ import { CodeReviewDetail } from "../../components/code-review-detail";
 
 export const Route = createRoute({
   getParentRoute: () => sidebarRoute,
-  path: "$owner/$repo",
+  path: "reviews/$owner/$repo",
   component: function CodeReviewRepo() {
     const { owner, repo } = useParams({ from: Route.id });
     return <CodeReviewDetail owner={owner} repo={repo} />;
@@ -774,7 +804,7 @@ import { CodeReviewDetail } from "../../components/code-review-detail";
 
 export const Route = createRoute({
   getParentRoute: () => sidebarRoute,
-  path: "$owner/$repo/pull/$number",
+  path: "reviews/$owner/$repo/pull/$number",
   validateSearch: (search: Record<string, unknown>) => ({
     tab: (["overview", "threads", "files", "checks"].includes(search.tab as string)
       ? search.tab as "overview" | "threads" | "files" | "checks"
@@ -975,14 +1005,14 @@ export function IconRail() {
   const hasLinearApiKey = useAppStore((s) => s.config?.hasLinearApiKey ?? false);
   const matchRoute = useMatchRoute();
 
-  const isCodeReview = matchRoute({ to: "/", fuzzy: true }) && !matchRoute({ to: "/tickets", fuzzy: true }) && !matchRoute({ to: "/settings" });
+  const isCodeReview = matchRoute({ to: "/reviews", fuzzy: true });
   const isTickets = matchRoute({ to: "/tickets", fuzzy: true });
   const isSettings = matchRoute({ to: "/settings" });
 
   return (
     <div className="flex flex-col items-center w-12 shrink-0 bg-zinc-900 border-r border-zinc-800 py-3 gap-2">
       <Link
-        to="/"
+        to="/reviews"
         className={cn("flex items-center justify-center w-9 h-9 rounded-lg transition-colors",
           isCodeReview
             ? "bg-zinc-700 text-white"
@@ -1071,8 +1101,9 @@ yarn build:all
 - [ ] **Step 3: Manual smoke test**
 
 Run `yarn dev` and verify:
-- `/` loads Code Review with PR list
-- Clicking a PR navigates to `/$owner/$repo/pull/$number`
+- `/` redirects to `/reviews`
+- `/reviews` loads Code Review with PR list
+- Clicking a PR navigates to `/reviews/$owner/$repo/pull/$number`
 - Tab switching updates `?tab=` search param
 - File selection updates `?file=` search param
 - Back/forward buttons work
@@ -1129,7 +1160,7 @@ import { router } from "../router";
 if (next) {
   const [owner, repo] = next.repo.split("/");
   void router.navigate({
-    to: "/$owner/$repo/pull/$number",
+    to: "/reviews/$owner/$repo/pull/$number",
     params: { owner: owner!, repo: repo!, number: String(next.number) },
   });
 }
@@ -1147,7 +1178,7 @@ import { router } from "../router";
 navigateToLinkedPR: (number, repo) => {
   const [owner, repoName] = repo.split("/");
   void router.navigate({
-    to: "/$owner/$repo/pull/$number",
+    to: "/reviews/$owner/$repo/pull/$number",
     params: { owner: owner!, repo: repoName!, number: String(number) },
   });
 },
@@ -1174,7 +1205,7 @@ import { useNavigate } from "@tanstack/react-router";
 // ...
 const navigate = useNavigate();
 // Replace closeSettings() calls with:
-void navigate({ to: "/" });
+void navigate({ to: "/reviews" });
 ```
 
 - Update `submitSettings` in the store: after successful save, don't clear `showSettings`. The settings page component will handle navigation after save.
@@ -1605,8 +1636,8 @@ Fix any remaining references.
 - [ ] **Step 4: Manual smoke test**
 
 Comprehensive test:
-1. Navigate to `/` — see PR list, select a PR
-2. URL updates to `/$owner/$repo/pull/$number`
+1. Navigate to `/` — redirects to `/reviews`, see PR list, select a PR
+2. URL updates to `/reviews/$owner/$repo/pull/$number`
 3. Click "Files" tab — URL updates to `?tab=files`
 4. Select a file — URL updates to `?tab=files&file=path`
 5. Browser back — returns to previous tab

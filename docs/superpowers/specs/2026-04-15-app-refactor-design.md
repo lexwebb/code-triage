@@ -22,13 +22,16 @@ Replace the custom `pushState`/`popState` router with TanStack Router, split the
 ## Route Tree
 
 ```
-/                                -> CodeReviewPage (all repos)
-/$owner/$repo                    -> CodeReviewPage (filtered to repo)
-/$owner/$repo/pull/$number       -> CodeReviewPage (PR detail)
-/tickets                         -> TicketsPage (index)
-/tickets/$ticketId               -> TicketsPage (ticket detail)
-/settings                        -> SettingsPage (full page, no sidebar)
+/                                       -> redirects to /reviews
+/reviews                                -> CodeReviewPage (all repos)
+/reviews/$owner/$repo                   -> CodeReviewPage (filtered to repo)
+/reviews/$owner/$repo/pull/$number      -> CodeReviewPage (PR detail)
+/tickets                                -> TicketsPage (index)
+/tickets/$ticketId                      -> TicketsPage (ticket detail)
+/settings                               -> SettingsPage (full page, no sidebar)
 ```
+
+Code review lives under `/reviews` to avoid route ambiguity with dynamic `$owner/$repo` params matching static routes like `tickets` or `settings`.
 
 ### Search Params (PR detail route only)
 
@@ -74,7 +77,7 @@ Responsibilities:
 
 ### CodeReviewPage (`routes/_sidebar/index.tsx`)
 
-Covers all three code review route patterns (`/`, `/$owner/$repo`, `/$owner/$repo/pull/$number`). These are defined as three separate TanStack route objects in `router.ts` that all render the same `CodeReviewPage` component. The component reads optional path params (`owner`, `repo`, `number`) to determine what to show -- all params absent means "all repos, no PR selected".
+Covers all three code review route patterns (`/reviews`, `/reviews/$owner/$repo`, `/reviews/$owner/$repo/pull/$number`). These are defined as three separate TanStack route objects in `router.ts` that all render the same `CodeReviewPage` component. The component reads optional path params (`owner`, `repo`, `number`) to determine what to show -- all params absent means "all repos, no PR selected".
 
 Responsibilities:
 - Read path params to determine repo filter and selected PR
@@ -114,12 +117,12 @@ Responsibilities:
 | State                | Router equivalent                                  |
 |----------------------|----------------------------------------------------|
 | `activeMode`         | Current route determines mode                      |
-| `selectedPR` (identity) | Path params `$owner`, `$repo`, `$number`        |
+| `selectedPR` (identity) | Path params `/reviews/$owner/$repo/pull/$number`  |
 | `activeTab`          | Search param `tab`                                 |
 | `selectedFile`       | Search param `file`                                |
 | `showSettings`       | Route is `/settings`                               |
 | `openSettings()`     | `navigate({ to: '/settings' })`                    |
-| `closeSettings()`    | `navigate({ to: '/' })` or `router.history.back()` |
+| `closeSettings()`    | `navigate({ to: '/reviews' })` or `router.history.back()` |
 
 ### Stays in Zustand
 
@@ -143,7 +146,7 @@ selectFile(path)
 navigateToLinkedTicket(id)
 
 // After (router)
-navigate({ to: '/$owner/$repo/pull/$number', params: { owner, repo, number } })
+navigate({ to: '/reviews/$owner/$repo/pull/$number', params: { owner, repo, number } })
 navigate({ search: (prev) => ({ ...prev, tab }) })
 navigate({ search: (prev) => ({ ...prev, file: path, tab: 'files' }) })
 navigate({ to: '/tickets/$ticketId', params: { ticketId } })
