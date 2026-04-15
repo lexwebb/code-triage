@@ -11,6 +11,7 @@ import { useAppStore } from "../store";
 export function useServerQuerySync() {
   const appGate = useAppStore((s) => s.appGate);
   const repoFilter = useAppStore((s) => s.repoFilter);
+  const teamEnabled = useAppStore((s) => s.config?.team?.enabled === true);
 
   const pullsQuery = useQuery({
     queryKey: qk.pulls.bundle(repoFilter),
@@ -24,6 +25,13 @@ export function useServerQuerySync() {
     queryFn: () => api.getAttentionItems(),
     staleTime: 15_000,
     enabled: appGate === "ready",
+  });
+
+  useQuery({
+    queryKey: qk.team.overview,
+    queryFn: () => api.getTeamOverview(),
+    staleTime: 60_000,
+    enabled: appGate === "ready" && teamEnabled,
   });
 
   useEffect(() => {
