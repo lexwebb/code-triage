@@ -21,6 +21,7 @@ The CLI embeds an HTTP server (default port **3100**, configurable). All routes 
 | `GET` | `/api/events` | **Server-Sent Events** (`text/event-stream`). Emits `poll` after each poll cycle (`{ ok, at, error? }`) and `fix-job` when fix-job status updates (`commentId`, `repo`, `prNumber`, `status`, …). Browser reconnects automatically on disconnect. |
 | `GET` | `/api/poll-status` | Server poll timer state, in-memory fix-job statuses, test-notification flag, rate-limit hint. |
 | `GET` | `/api/version` | Short SHAs and “commits behind `origin/main`” (best-effort; cached ~10 min). |
+| `GET` | `/api/reviews/companion/session` | PR assistant chat transcript for a PR. Query: `repo` (`owner/name`), `prNumber`. Returns `messages` (`role` `user` \| `assistant`, `content`), `bundleThreadCount`, `bundleUpdatedAtMs`. |
 | `GET` | `/api/fix-jobs/recover` | Lists persisted fix jobs from state; includes whether a worktree diff exists; prunes dead entries. |
 | `GET` | `/api/config` | Settings for the web UI and `config.json`. Returns `config` (same fields as on disk, but **account tokens are never sent**—each account has `hasToken` instead; default PAT is indicated by **`hasGithubToken`** only), `needsSetup` (`true` when `~/.code-triage/config.json` does not exist yet), and `listenPort` (the port the server process is actually bound to). |
 
@@ -47,6 +48,21 @@ The CLI embeds an HTTP server (default port **3100**, configurable). All routes 
 | `/api/actions/review` | `repo`, `prNumber`, `event` (`APPROVE` \| `REQUEST_CHANGES` \| `COMMENT`), optional `body` | Submit PR review. |
 | `/api/actions/comment` | `repo`, `prNumber`, `commitId`, `path`, `line`, `side`, `body` | Create a new review line comment. |
 | `/api/actions/clear-repo-poll-schedule` | _(empty)_ | Deletes SQLite `repo_poll` rows so the **CLI poller** recomputes adaptive hot/cold on the next cycle. Used by the web refresh control. |
+
+## Reviews PR assistant (`POST`)
+
+Companion chat for the web reviews page: summarizes review threads and answers questions in prose. The model may include a machine-readable **queue-fixes** fenced block; the server strips it from `messages` / `assistantMessage` and returns the parsed list as **`queueFixes`**. The web UI then calls the same **`POST /api/actions/fix`** flow as the thread buttons (start or enqueue with optional `userInstructions`). Nothing is auto-applied to GitHub from this endpoint alone.
+
+| Path | Body (summary) | Response |
+|------|----------------|----------|
+| `/api/reviews/companion/message` | `repo`, `prNumber`, `userMessage`, optional `threadBundle` (array of thread objects from the UI), optional `refreshContext` | `assistantMessage`, `messages` (full transcript), `contextNote`, `bundleThreadCount`, `bundleUpdatedAtMs`, optional `queueFixes` (`{ commentId, userInstructions? }[]`) |
+| `/api/reviews/companion/reset` | `repo`, `prNumber` | `{ ok: true }` — clears stored session for that PR |
+
+**`threadBundle`:** Required for the first message in a PR session (or whenever `refreshContext` is `true`). Omit on later turns to reuse the last stored bundle; the web UI typically sends an updated bundle on every message to keep context fresh.
+
+**Queue directive:** Fence label `code-triage-queue-fixes`, body JSON `{"queueFixes":[{"commentId":123,"userInstructions":"optional"}]}`. Documented in the PR assistant system prompt; not shown in the saved chat transcript.
+
+**Errors:** **413** if the serialized bundle exceeds the server limit; **400** for missing `repo` / `prNumber` / `userMessage` or invalid body.
 
 ## Errors
 

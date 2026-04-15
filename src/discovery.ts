@@ -1,7 +1,7 @@
 import { readdirSync, statSync, existsSync } from "fs";
 import { join } from "path";
-import { execFileSync } from "child_process";
 import { homedir } from "os";
+import { execGitSync } from "./git-exec.js";
 
 export interface RepoInfo {
   repo: string;      // "owner/repo"
@@ -24,7 +24,7 @@ export function parseGitHubRemote(url: string): string | null {
 
 function getGitHubRepo(dir: string): string | null {
   try {
-    const remote = execFileSync("git", ["remote", "get-url", "origin"], {
+    const remote = execGitSync(["remote", "get-url", "origin"], {
       cwd: dir,
       encoding: "utf-8",
       timeout: 5000,

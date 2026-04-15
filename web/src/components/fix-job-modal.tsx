@@ -1,7 +1,7 @@
 import React from "react";
 import { cn } from "../lib/utils";
 import { useAppStore } from "../store";
-import { X } from "lucide-react";
+import { Loader2, X } from "lucide-react";
 import { IconButton } from "./ui/icon-button";
 import { Button } from "./ui/button";
 import { Skeleton } from "./ui/skeleton";
@@ -10,6 +10,7 @@ import { elapsed, statusColors } from "./fix-job-row";
 export function FixJobModal({ commentId }: { commentId: number }) {
   const job = useAppStore((s) => s.jobs.find((j) => j.commentId === commentId));
   const acting = useAppStore((s) => s.acting[commentId] ?? false);
+  const fixApplyPhase = useAppStore((s) => s.fixApplyPhase[commentId]);
   const replyText = useAppStore((s) => s.replyText[commentId] ?? "");
   const noChangesReply = useAppStore((s) => s.noChangesReply[commentId] ?? "");
   const setReplyText = useAppStore((s) => s.setReplyText);
@@ -225,8 +226,19 @@ export function FixJobModal({ commentId }: { commentId: number }) {
             <Button variant="gray" size="xs" onClick={handleDiscard} disabled={acting}>
               Discard
             </Button>
-            <Button variant="green" size="xs" onClick={handleApply} disabled={acting}>
-              {acting ? "Pushing..." : "Apply & Push"}
+            <Button variant="green" size="xs" onClick={handleApply} disabled={acting} className="gap-1.5">
+              {acting ? (
+                <>
+                  <Loader2 className="size-3.5 shrink-0 animate-spin" aria-hidden />
+                  <span>
+                    {fixApplyPhase === "extended"
+                      ? "Restoring worktree & pushing…"
+                      : "Pushing…"}
+                  </span>
+                </>
+              ) : (
+                "Apply & Push"
+              )}
             </Button>
           </div>
         )}

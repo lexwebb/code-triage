@@ -71,6 +71,17 @@ export interface FixJobStatus {
   suggestedReply?: string;
 }
 
+/** PR assistant panel on the reviews page (`/api/reviews/companion/*`). */
+export interface PrCompanionChatMessage {
+  role: "user" | "assistant";
+  content: string;
+}
+
+export interface PrCompanionQueueFix {
+  commentId: number;
+  userInstructions?: string;
+}
+
 /** Mirrors `GET /api/config` — safe for the browser (account tokens omitted). */
 export interface AppConfigPayload {
   root: string;
@@ -309,7 +320,12 @@ export const api = {
   cancelQueuedFix: (commentId: number) =>
     deleteJSON<{ success: boolean }>(`/api/fix-queue/${commentId}`, {}),
   fixApply: (repo: string, commentId: number, prNumber: number, branch: string) =>
-    postJSON<{ success: boolean }>("/api/actions/fix-apply", { repo, commentId, prNumber, branch }),
+    postJSON<{ success: boolean; recoveredWorktree?: boolean }>("/api/actions/fix-apply", {
+      repo,
+      commentId,
+      prNumber,
+      branch,
+    }),
   fixDiscard: (branch: string, commentId?: number) =>
     postJSON<{ success: boolean }>("/api/actions/fix-discard", { branch, commentId }),
   fixReply: (repo: string, commentId: number, message: string) =>
@@ -371,4 +387,27 @@ export const api = {
       ...(data.error !== undefined ? { error: data.error } : {}),
     } as { ok: boolean; snapshot?: TeamOverviewSnapshot; error?: string | null };
   },
+  getPrCompanionSession: (repo: string, prNumber: number) =>
+    fetchJSON<{
+      messages: PrCompanionChatMessage[];
+      bundleThreadCount: number;
+      bundleUpdatedAtMs: number | null;
+    }>(`/api/reviews/companion/session?repo=${encodeURIComponent(repo)}&prNumber=${prNumber}`),
+  postPrCompanionMessage: (body: {
+    repo: string;
+    prNumber: number;
+    userMessage: string;
+    threadBundle?: unknown;
+    refreshContext?: boolean;
+  }) =>
+    postJSON<{
+      assistantMessage: string;
+      messages: PrCompanionChatMessage[];
+      contextNote?: string;
+      bundleThreadCount: number;
+      bundleUpdatedAtMs: number | null;
+      queueFixes?: PrCompanionQueueFix[];
+    }>("/api/reviews/companion/message", body),
+  resetPrCompanionSession: (repo: string, prNumber: number) =>
+    postJSON<{ ok: boolean }>("/api/reviews/companion/reset", { repo, prNumber }),
 };

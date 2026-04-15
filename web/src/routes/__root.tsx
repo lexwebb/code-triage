@@ -7,6 +7,7 @@ import FixJobsBanner from "../components/fix-jobs-banner";
 import KeyboardShortcutsModal from "../components/keyboard-shortcuts-modal";
 import SettingsView from "../components/settings-view";
 import { IconButton } from "../components/ui/icon-button";
+import { Toaster } from "../components/ui/sonner";
 import { AppShellSkeleton } from "../components/app-shell-skeleton";
 import { useServerQuerySync } from "../components/server-query-sync";
 import { X, ArrowRight, RefreshCw, Bell, Settings, HelpCircle } from "lucide-react";
@@ -193,6 +194,7 @@ export const Route = createRootRoute({
         </div>
         <FixJobsBanner />
         <KeyboardShortcutsModal />
+        <Toaster />
       </div>
     );
   },

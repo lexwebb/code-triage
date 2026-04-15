@@ -186,6 +186,8 @@ export default function CommentThreads() {
           <div className="px-6 pb-3 space-y-3 pt-3">
             {threads.map((thread, idx) => {
               const isActionable = actionableThreads.some((t) => t.root.id === thread.root.id);
+              const qIdx = queue.findIndex((q) => q.commentId === thread.root.id);
+              const fixQueueSlot = qIdx >= 0 ? { place: qIdx + 1, total: queue.length } : null;
               return (
                 <div key={thread.root.id} className="flex items-start gap-2">
                   {isActionable && (
@@ -200,7 +202,7 @@ export default function CommentThreads() {
                       rootId={thread.root.id}
                       thread={thread}
                       fixBlocked={hasActiveFix}
-                      queuedCommentIds={queue.map((q) => q.commentId)}
+                      fixQueueSlot={fixQueueSlot}
                       isFocused={focusedIdx === idx}
                       registerRowEl={registerRowEl}
                       threadActionsRef={threadActionsRef}

@@ -4,6 +4,7 @@ import PRDetail from "./pr-detail";
 import FileList from "./file-list";
 import DiffView from "./diff-view";
 import CommentThreads from "./comment-threads";
+import { PrCompanionPanel } from "./pr-companion-panel";
 import PROverview from "./pr-overview";
 import ChecksPanel from "./checks-panel";
 import { cn } from "../lib/utils";
@@ -112,7 +113,7 @@ export function CodeReviewDetail({ owner, repo, number, tab, file }: Props) {
       when={prDetailLoading}
       fallback={<PrReviewDetailSkeleton />}
     >
-    <>
+    <div className="flex flex-col flex-1 min-h-0 overflow-hidden">
       <PRDetail />
       {/* Tab bar */}
       <div className="flex border-b border-gray-800 shrink-0">
@@ -176,7 +177,14 @@ export function CodeReviewDetail({ owner, repo, number, tab, file }: Props) {
           })()}
         </>
       )}
-      {activeTab === "threads" && <CommentThreads />}
+      {activeTab === "threads" && (
+        <div className="flex flex-1 flex-col md:flex-row min-h-0 overflow-hidden">
+          <div className="flex-1 min-h-0 min-w-0 flex flex-col overflow-hidden">
+            <CommentThreads />
+          </div>
+          <PrCompanionPanel repo={detail.repo} prNumber={detail.number} comments={comments} />
+        </div>
+      )}
       {activeTab === "files" && (
         <>
           <FileList onSelectFile={selectFile} />
@@ -188,7 +196,7 @@ export function CodeReviewDetail({ owner, repo, number, tab, file }: Props) {
         </>
       )}
       {activeTab === "checks" && <ChecksPanel />}
-    </>
+    </div>
     </LoadingBoundary>
   );
 }

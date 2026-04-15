@@ -503,3 +503,29 @@ Respond as JSON: { "action": "fix" | "questions", "message": "..." }`;
   return { ...parsed, rawOutput };
 }
 
+/**
+ * PR assistant panel (reviews page): one-shot prose from Claude. Uses the same JSON CLI wrapper as evaluation (`result` string).
+ * Read-only triage — no repo tools or permissions flags.
+ */
+export async function runPrCompanionPrompt(prompt: string): Promise<string> {
+  const cfg = loadConfig();
+  const rawExtra = cfg.evalClaudeExtraArgs;
+  const extraArgs = Array.isArray(rawExtra)
+    ? rawExtra.filter((a): a is string => typeof a === "string" && a.length > 0)
+    : [];
+  const result = await spawnTracked(
+    "claude",
+    ["-p", prompt, "--output-format", "json", ...extraArgs],
+    { stdio: ["pipe", "pipe", "pipe"] },
+  );
+  try {
+    const parsed = JSON.parse(result) as { result?: string };
+    if (typeof parsed.result === "string" && parsed.result.trim()) {
+      return parsed.result;
+    }
+  } catch {
+    /* use raw stdout */
+  }
+  return result.trim();
+}
+

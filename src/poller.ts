@@ -1,4 +1,4 @@
-import { execFileSync } from "child_process";
+import { execGitSync } from "./git-exec.js";
 import type { CrComment, PrInfo, PollResult } from "./types.js";
 import { ghAsync, getGitHubViewerCached } from "./exec.js";
 import { loadConfig } from "./config.js";
@@ -32,7 +32,7 @@ export function selectPollPulls(pulls: OpenPull[], username: string, pollReviewR
 }
 
 export function getRepoFromGit(): string {
-  const remote = execFileSync("git", ["remote", "get-url", "origin"], {
+  const remote = execGitSync(["remote", "get-url", "origin"], {
     encoding: "utf-8",
   }).trim();
   const match = remote.match(/github\.com[:/](.+?)(?:\.git)?$/);

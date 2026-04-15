@@ -127,6 +127,15 @@ function ensureSchema(raw: Database.Database): void {
       updated_at_ms INTEGER NOT NULL,
       refresh_error TEXT
     );
+    CREATE TABLE IF NOT EXISTS pr_companion_sessions (
+      repo TEXT NOT NULL,
+      pr_number INTEGER NOT NULL,
+      messages_json TEXT NOT NULL DEFAULT '[]',
+      bundle_json TEXT,
+      bundle_updated_at_ms INTEGER,
+      updated_at_ms INTEGER NOT NULL,
+      PRIMARY KEY (repo, pr_number)
+    );
   `);
   raw.prepare("INSERT OR IGNORE INTO meta (id, last_poll) VALUES (1, NULL)").run();
   migrateCommentsColumns(raw);

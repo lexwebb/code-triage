@@ -7,7 +7,16 @@ import type { RepoInfo } from "./discovery.js";
 import { loadConfig, saveConfig, configExists, isTeamFeaturesEnabled, type Config } from "./config.js";
 import { loadState, markComment, patchCommentTriage, saveState, addFixJob as addFixJobState, removeFixJob as removeFixJobState, getFixJobs, getPendingTriageCountsByPr, needsEvaluation, reconcileResolvedComments } from "./state.js";
 import { postReply, resolveThread, applyFixWithClaude, clampEvalConcurrency } from "./actioner.js";
-import { createWorktree, getWorktreePath, getDiffInWorktree, removeWorktree, commitAndPushWorktree } from "./worktree.js";
+import { existsSync } from "fs";
+import {
+  applyPatchInWorktree,
+  createWorktree,
+  getWorktreePath,
+  getDiffInWorktree,
+  removeWorktree,
+  commitAndPushWorktree,
+} from "./worktree.js";
+import { formatGitExecError } from "./git-exec.js";
 import { ghAsync, ghAsyncSinglePage, ghPost, getGitHubViewerCached } from "./exec.js";
 import {
   batchPullPollData,
@@ -21,6 +30,12 @@ import { clearRepoPollSchedule } from "./repo-poll-schedule.js";
 import { enqueueEvaluation, drainOnce } from "./eval-queue.js";
 import { buildIgnoredBotSet } from "./poller.js";
 import { getRawSqlite } from "./db/client.js";
+import {
+  appendUserMessageAndRunAssistant,
+  clearCompanionSession,
+  loadCompanionSession,
+  validateBundleItems,
+} from "./pr-companion.js";
 import type { LinkablePR } from "./tickets/linker.js";
 import { filterSidebarRecordsByMutedRepos, mutedReposAsSet } from "./muted-repos.js";
 
@@ -1170,15 +1185,15 @@ export function registerRoutes(): void {
       return;
     }
     try {
-      const { execFileSync } = await import("child_process");
+      const { execGitSync } = await import("./git-exec.js");
       const cwd = new URL(".", import.meta.url).pathname;
       // Fetch latest from remote (silent)
-      try { execFileSync("git", ["fetch", "origin", "main", "--quiet"], { cwd, stdio: "pipe", timeout: 10000 }); } catch { /* offline */ }
-      const localSha = execFileSync("git", ["rev-parse", "HEAD"], { cwd, encoding: "utf-8", timeout: 5000 }).trim();
-      const remoteSha = execFileSync("git", ["rev-parse", "origin/main"], { cwd, encoding: "utf-8", timeout: 5000 }).trim();
+      try { execGitSync(["fetch", "origin", "main", "--quiet"], { cwd, stdio: "pipe", timeout: 10000 }); } catch { /* offline */ }
+      const localSha = execGitSync(["rev-parse", "HEAD"], { cwd, encoding: "utf-8", timeout: 5000 }).trim();
+      const remoteSha = execGitSync(["rev-parse", "origin/main"], { cwd, encoding: "utf-8", timeout: 5000 }).trim();
       let behind = 0;
       if (localSha !== remoteSha) {
-        const count = execFileSync("git", ["rev-list", "--count", `HEAD..origin/main`], { cwd, encoding: "utf-8", timeout: 5000 }).trim();
+        const count = execGitSync(["rev-list", "--count", `HEAD..origin/main`], { cwd, encoding: "utf-8", timeout: 5000 }).trim();
         behind = parseInt(count, 10) || 0;
       }
       versionCache = { localSha: localSha.slice(0, 7), remoteSha: remoteSha.slice(0, 7), behind, checkedAt: Date.now() };
@@ -1497,6 +1512,44 @@ export function registerRoutes(): void {
 
     try {
       const worktreePath = getWorktreePath(body.branch, repoInfo.localPath);
+      let recoveredWorktree = false;
+
+      if (!existsSync(worktreePath)) {
+        const job = getFixJobStatus(body.commentId);
+        if (!job || job.status !== "completed" || !job.diff?.trim()) {
+          json(
+            res,
+            {
+              error:
+                "Fix worktree is missing and cannot be restored without the saved diff. Re-run 'Fix with Claude', then apply again.",
+            },
+            400,
+          );
+          return;
+        }
+        console.error(`[fix-apply] recreating missing worktree at ${worktreePath} (commentId=${body.commentId})`);
+        try {
+          createWorktree(body.branch, repoInfo.localPath);
+          applyPatchInWorktree(worktreePath, job.diff);
+          recoveredWorktree = true;
+        } catch (recErr) {
+          console.error(`[fix-apply] worktree restore failed: ${formatGitExecError(recErr)}`);
+          try {
+            removeWorktree(body.branch, repoInfo.localPath);
+          } catch {
+            /* ignore */
+          }
+          json(
+            res,
+            {
+              error: `Could not restore worktree from saved diff (branch may have diverged). ${(recErr as Error).message}`,
+            },
+            500,
+          );
+          return;
+        }
+      }
+
       const commitMsg = `fix: apply CodeRabbit suggestion for PR #${body.prNumber}`;
       commitAndPushWorktree(worktreePath, commitMsg, body.branch);
       removeWorktree(body.branch, repoInfo?.localPath);
@@ -1507,8 +1560,12 @@ export function registerRoutes(): void {
       clearFixJobStatus(body.commentId);
       advanceQueue();
 
-      json(res, { success: true, status: "fixed" });
+      json(res, { success: true, status: "fixed", ...(recoveredWorktree ? { recoveredWorktree: true } : {}) });
     } catch (err) {
+      console.error(
+        `[fix-apply] repo=${body.repo} pr=#${body.prNumber} commentId=${body.commentId} branch=${body.branch}`,
+      );
+      console.error(`[fix-apply] ${formatGitExecError(err)}`);
       json(res, { error: `Push failed: ${(err as Error).message}` }, 500);
     }
   });
@@ -1652,6 +1709,94 @@ export function registerRoutes(): void {
       });
       advanceQueue();
     }
+  });
+
+  // POST /api/reviews/companion/message — PR assistant panel (optional queue-fix directives in model reply)
+  addRoute("POST", "/api/reviews/companion/message", async (req, res) => {
+    const body = getBody<{
+      repo: string;
+      prNumber: number;
+      userMessage: string;
+      threadBundle?: unknown;
+      refreshContext?: boolean;
+    }>(req);
+    if (typeof body.repo !== "string" || !body.repo.includes("/")) {
+      json(res, { error: "Invalid or missing repo (expected owner/name)" }, 400);
+      return;
+    }
+    if (!Number.isFinite(body.prNumber) || body.prNumber < 1) {
+      json(res, { error: "Invalid or missing prNumber" }, 400);
+      return;
+    }
+    try {
+      const out = await appendUserMessageAndRunAssistant({
+        repo: body.repo,
+        prNumber: body.prNumber,
+        userMessage: body.userMessage,
+        threadBundle: body.threadBundle,
+        refreshContext: body.refreshContext === true,
+      });
+      json(res, {
+        assistantMessage: out.assistantMessage,
+        messages: out.messages,
+        contextNote: `${out.bundleThreadCount} thread(s) in bundle`,
+        bundleThreadCount: out.bundleThreadCount,
+        bundleUpdatedAtMs: out.bundleUpdatedAtMs,
+        queueFixes: out.queueFixes,
+      });
+    } catch (err) {
+      const msg = (err as Error).message;
+      const status = msg.includes("too large") ? 413 : msg.includes("required") ? 400 : 500;
+      json(res, { error: msg }, status);
+    }
+  });
+
+  // GET /api/reviews/companion/session — restore transcript + bundle metadata for a PR
+  addRoute("GET", "/api/reviews/companion/session", (req, res, _params, query) => {
+    const repo = query.get("repo") ?? "";
+    const prRaw = query.get("prNumber") ?? "";
+    const prNumber = Number(prRaw);
+    if (!repo.includes("/")) {
+      json(res, { error: "Invalid or missing repo" }, 400);
+      return;
+    }
+    if (!Number.isFinite(prNumber) || prNumber < 1) {
+      json(res, { error: "Invalid or missing prNumber" }, 400);
+      return;
+    }
+    const row = loadCompanionSession(repo, prNumber);
+    if (!row) {
+      json(res, { messages: [], bundleThreadCount: 0, bundleUpdatedAtMs: null });
+      return;
+    }
+    let bundleThreadCount = 0;
+    if (row.bundleJson) {
+      try {
+        bundleThreadCount = validateBundleItems(JSON.parse(row.bundleJson)).length;
+      } catch {
+        bundleThreadCount = 0;
+      }
+    }
+    json(res, {
+      messages: row.messages,
+      bundleThreadCount,
+      bundleUpdatedAtMs: row.bundleUpdatedAtMs,
+    });
+  });
+
+  // POST /api/reviews/companion/reset — clear stored PR assistant session
+  addRoute("POST", "/api/reviews/companion/reset", (req, res) => {
+    const body = getBody<{ repo: string; prNumber: number }>(req);
+    if (typeof body.repo !== "string" || !body.repo.includes("/")) {
+      json(res, { error: "Invalid or missing repo" }, 400);
+      return;
+    }
+    if (!Number.isFinite(body.prNumber) || body.prNumber < 1) {
+      json(res, { error: "Invalid or missing prNumber" }, 400);
+      return;
+    }
+    clearCompanionSession(body.repo, body.prNumber);
+    json(res, { ok: true });
   });
 
   // GET /api/fix-jobs/recover — check for stale fix jobs from a previous session

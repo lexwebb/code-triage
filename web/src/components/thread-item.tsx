@@ -1,7 +1,7 @@
 import React, { useEffect, useLayoutEffect } from "react";
 import { useAppStore } from "../store";
 import Comment from "./comment";
-import { ChevronRight, ChevronDown } from "lucide-react";
+import { ChevronRight, ChevronDown, ListOrdered } from "lucide-react";
 import { Button } from "./ui/button";
 import { StatusBadge } from "./ui/status-badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "./ui/dialog";
@@ -80,11 +80,12 @@ function FixConversation({ commentId, repo }: { commentId: number; repo: string 
   );
 }
 
-export function ThreadItem({ rootId, thread, fixBlocked, queuedCommentIds, isFocused, registerRowEl, threadActionsRef }: {
+export function ThreadItem({ rootId, thread, fixBlocked, fixQueueSlot, isFocused, registerRowEl, threadActionsRef }: {
   rootId: number;
   thread: Thread;
   fixBlocked: boolean;
-  queuedCommentIds: number[];
+  /** When this thread’s fix is waiting in the server queue (place/total among pending fixes). */
+  fixQueueSlot: { place: number; total: number } | null;
   isFocused: boolean;
   registerRowEl: (id: number, el: HTMLDivElement | null) => void;
   threadActionsRef: React.RefObject<Map<number, ThreadKeyActions>>;
@@ -96,7 +97,7 @@ export function ThreadItem({ rootId, thread, fixBlocked, queuedCommentIds, isFoc
   const expanded = useAppStore((s) => s.expandedThreads.has(rootId));
   const acting = useAppStore((s) => s.actingThreads.has(rootId));
   const fixing = useAppStore((s) => s.fixingThreads.has(rootId));
-  const isQueued = queuedCommentIds.includes(rootId);
+  const isQueued = fixQueueSlot != null;
   const fixError = useAppStore((s) => s.fixErrors[rootId] ?? null);
   const fixModalOpen = useAppStore((s) => s.fixModalOpenThreads.has(rootId));
   const fixInstructions = useAppStore((s) => s.threadFixInstructions[rootId] ?? "");
@@ -131,6 +132,8 @@ export function ThreadItem({ rootId, thread, fixBlocked, queuedCommentIds, isFoc
   const fixJob = jobs.find((j) => j.commentId === thread.root.id);
   const isAwaitingResponse = fixJob?.status === "awaiting_response";
   const isFixRunning = fixJob?.status === "running";
+  const suppressEvalForFixOutcome =
+    !!fixJob && (fixJob.status === "completed" || fixJob.status === "no_changes" || fixJob.status === "failed");
 
   // Sync triage note / priority drafts when thread data changes
   useEffect(() => {
@@ -239,8 +242,24 @@ export function ThreadItem({ rootId, thread, fixBlocked, queuedCommentIds, isFoc
           {isEvaluating && <ThreadStatusBadge status="evaluating" />}
           {!isEvaluating && isAwaitingResponse && <StatusBadge color="blue">Claude Asking</StatusBadge>}
           {!isEvaluating && isFixRunning && <StatusBadge color="yellow">Fix Running</StatusBadge>}
+          {!isEvaluating && !isAwaitingResponse && !isFixRunning && fixJob?.status === "completed" && !isActedOn && (
+            <StatusBadge color="green">Fix ready</StatusBadge>
+          )}
+          {!isEvaluating && !isAwaitingResponse && !isFixRunning && fixJob?.status === "no_changes" && !isActedOn && (
+            <StatusBadge color="blue">No code change</StatusBadge>
+          )}
+          {!isEvaluating && !isAwaitingResponse && !isFixRunning && fixJob?.status === "failed" && !isActedOn && (
+            <StatusBadge color="red">Fix failed</StatusBadge>
+          )}
+          {!isEvaluating && !isAwaitingResponse && !isFixRunning && fixQueueSlot && !fixJob && (
+            <StatusBadge color="gray" icon={<ListOrdered size={12} className="shrink-0" aria-hidden />}>
+              {fixQueueSlot.total > 1 ? `Queued ${fixQueueSlot.place}/${fixQueueSlot.total}` : "Queued"}
+            </StatusBadge>
+          )}
           {!isEvaluating && !isAwaitingResponse && !isFixRunning && isActedOn && <ThreadStatusBadge status={status!} />}
-          {!isEvaluating && !isAwaitingResponse && !isFixRunning && !isActedOn && eval_ && <EvalBadge action={eval_.action} />}
+          {!isEvaluating && !isAwaitingResponse && !isFixRunning && !isActedOn && eval_ && !suppressEvalForFixOutcome && (
+            <EvalBadge action={eval_.action} />
+          )}
           {!isEvaluating && !isActedOn && !eval_ && thread.root.evalFailed && (
             <StatusBadge color="gray" className="text-red-400">Eval failed</StatusBadge>
           )}

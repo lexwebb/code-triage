@@ -1,5 +1,10 @@
+import { toast } from "sonner";
 import { api } from "../api";
+import type { FixJobStatus } from "../api";
+import { celebrateFixApplied } from "../lib/fix-apply-celebration";
 import type { SliceCreator, FixJobsSlice } from "./types";
+
+const FIX_APPLY_EXTENDED_MS = 1200;
 
 export const createFixJobsSlice: SliceCreator<FixJobsSlice> = (set, get) => ({
   jobs: [],
@@ -7,6 +12,7 @@ export const createFixJobsSlice: SliceCreator<FixJobsSlice> = (set, get) => ({
   replyText: {},
   noChangesReply: {},
   acting: {},
+  fixApplyPhase: {},
   selectedJobId: null,
 
   setQueue: (items) => set({ queue: items }),
@@ -31,6 +37,30 @@ export const createFixJobsSlice: SliceCreator<FixJobsSlice> = (set, get) => ({
     set({ jobs, noChangesReply: newReplies });
   },
 
+  mergeFixJob: (patch) => {
+    set((s) => {
+      const idx = s.jobs.findIndex((j) => j.commentId === patch.commentId);
+      const prev = idx >= 0 ? s.jobs[idx]! : undefined;
+      const base: FixJobStatus = prev ?? {
+        commentId: patch.commentId,
+        repo: patch.repo ?? "",
+        prNumber: patch.prNumber ?? 0,
+        path: patch.path ?? "",
+        startedAt: patch.startedAt ?? Date.now(),
+        status: patch.status ?? "running",
+      };
+      const merged: FixJobStatus = { ...base, ...patch, commentId: patch.commentId };
+      const nextJobs =
+        idx >= 0 ? s.jobs.map((j, i) => (i === idx ? merged : j)) : [...s.jobs, merged];
+
+      const newReplies = { ...s.noChangesReply };
+      if (merged.status === "no_changes" && merged.suggestedReply && !(merged.commentId in newReplies)) {
+        newReplies[merged.commentId] = merged.suggestedReply;
+      }
+      return { jobs: nextJobs, noChangesReply: newReplies };
+    });
+  },
+
   setReplyText: (commentId, text) =>
     set((s) => ({ replyText: { ...s.replyText, [commentId]: text } })),
 
@@ -40,15 +70,37 @@ export const createFixJobsSlice: SliceCreator<FixJobsSlice> = (set, get) => ({
   setSelectedJobId: (id) => set({ selectedJobId: id }),
 
   apply: async (repo, commentId, prNumber, branch) => {
-    set((s) => ({ acting: { ...s.acting, [commentId]: true } }));
+    set((s) => ({
+      acting: { ...s.acting, [commentId]: true },
+      fixApplyPhase: { ...s.fixApplyPhase, [commentId]: "in_progress" },
+    }));
+    const phaseTimer = window.setTimeout(() => {
+      set((s) => {
+        if (!s.acting[commentId]) return s;
+        return { fixApplyPhase: { ...s.fixApplyPhase, [commentId]: "extended" } };
+      });
+    }, FIX_APPLY_EXTENDED_MS);
     try {
-      await api.fixApply(repo, commentId, prNumber, branch);
+      const result = await api.fixApply(repo, commentId, prNumber, branch);
+      if (result.recoveredWorktree) {
+        toast.success("Fix applied and pushed. Missing worktree was restored from your saved diff.");
+      } else {
+        toast.success("Fix applied and pushed!");
+      }
+      celebrateFixApplied();
       set({ selectedJobId: null });
       await get().reloadComments();
     } catch (err) {
       console.error("Apply failed:", err);
     } finally {
-      set((s) => ({ acting: { ...s.acting, [commentId]: false } }));
+      window.clearTimeout(phaseTimer);
+      set((s) => {
+        const { [commentId]: _phase, ...restPhase } = s.fixApplyPhase;
+        return {
+          acting: { ...s.acting, [commentId]: false },
+          fixApplyPhase: restPhase,
+        };
+      });
     }
   },
 

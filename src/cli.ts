@@ -6,7 +6,8 @@ import { fetchNewComments, fetchNewCommentsBatch, getGitHubLogin } from "./polle
 import { clampEvalConcurrency, killAllChildren } from "./actioner.js";
 import { enqueueMany, recoverQueue, startWorker, stopWorker } from "./eval-queue.js";
 import { loadFixQueue, advanceQueue as advanceFixQueue } from "./fix-queue.js";
-import { cleanupAllWorktrees, pruneOrphanedWorktrees } from "./worktree.js";
+import { reconcileOrphanInFlightFixJobs } from "./fix-job-recover.js";
+import { cleanupAllWorktrees, getWorktreePath, pruneOrphanedWorktrees } from "./worktree.js";
 import {
   setTokenResolver,
   resolveGitHubTokenFromSources,
@@ -33,6 +34,7 @@ import {
   loadPersistedFixJobResults,
   updateTicketState,
   getTicketState,
+  getAllFixJobStatuses,
 } from "./server.js";
 import { getTicketProvider, clearTicketProviderCache } from "./tickets/index.js";
 import {
@@ -52,6 +54,22 @@ import { computeEffectivePollIntervalMs, estimatePollRequestCount } from "./poll
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Worktrees that must not be pruned: SQLite `fixJobs` rows plus server jobs still needing disk (e.g. completed, awaiting apply). */
+function protectedWorktreePathsForRepo(repoLocalPath: string, repoFullName: string): Set<string> {
+  const paths = new Set<string>();
+  const state = loadState();
+  for (const j of state.fixJobs ?? []) {
+    if (j.worktreePath) paths.add(j.worktreePath);
+  }
+  for (const j of getAllFixJobStatuses()) {
+    if (j.repo !== repoFullName) continue;
+    if (j.status === "failed" || j.status === "no_changes") continue;
+    if (!j.branch) continue;
+    paths.add(getWorktreePath(j.branch, repoLocalPath));
+  }
+  return paths;
 }
 import { recordPollOutcomes, selectReposToPoll } from "./repo-poll-schedule.js";
 
@@ -341,15 +359,14 @@ if (isDev) {
 startServer(port, repos);
 loadPersistedFixJobResults();
 loadFixQueue();
+reconcileOrphanInFlightFixJobs();
 initPush();
 const stopReviewReminder = startReviewReminder();
 
 // Prune any orphaned worktrees from previous crashed sessions
 {
-  const state = loadState();
-  const activeJobs = state.fixJobs ?? [];
   for (const r of repos) {
-    if (r.localPath) pruneOrphanedWorktrees(r.localPath, activeJobs);
+    if (r.localPath) pruneOrphanedWorktrees(r.localPath, protectedWorktreePathsForRepo(r.localPath, r.repo));
   }
 }
 
@@ -405,10 +422,13 @@ async function applyConfigReload(): Promise<void> {
       console.log(`    ${r.repo}`);
     }
     updateRepos(repos);
-    const state = loadState();
-    const activeJobs = state.fixJobs ?? [];
     for (const repoInfo of repos) {
-      if (repoInfo.localPath) pruneOrphanedWorktrees(repoInfo.localPath, activeJobs);
+      if (repoInfo.localPath) {
+        pruneOrphanedWorktrees(
+          repoInfo.localPath,
+          protectedWorktreePathsForRepo(repoInfo.localPath, repoInfo.repo),
+        );
+      }
     }
   }
   schedulePoll(repos.length);

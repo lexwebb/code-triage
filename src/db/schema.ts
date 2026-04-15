@@ -1,4 +1,4 @@
-import { integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
+import { integer, primaryKey, sqliteTable, text } from "drizzle-orm/sqlite-core";
 
 /** Single-row table: id is always 1. */
 export const meta = sqliteTable("meta", {
@@ -87,3 +87,19 @@ export const teamOverviewCache = sqliteTable("team_overview_cache", {
   updatedAtMs: integer("updated_at_ms").notNull(),
   refreshError: text("refresh_error"),
 });
+
+/** PR-scoped multi-turn chat for the web reviews “PR assistant” panel (soft companion; not fix jobs). */
+export const prCompanionSessions = sqliteTable(
+  "pr_companion_sessions",
+  {
+    repo: text("repo").notNull(),
+    prNumber: integer("pr_number").notNull(),
+    messagesJson: text("messages_json").notNull(),
+    bundleJson: text("bundle_json"),
+    bundleUpdatedAtMs: integer("bundle_updated_at_ms"),
+    updatedAtMs: integer("updated_at_ms").notNull(),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.repo, t.prNumber] }),
+  }),
+);
