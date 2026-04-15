@@ -1,5 +1,6 @@
 import { createRoute } from "@tanstack/react-router";
 import { Route as sidebarRoute } from "../_sidebar";
+import { CodeReviewDetail } from "../../components/code-review-detail";
 
 export const Route = createRoute({
   getParentRoute: () => sidebarRoute,
@@ -11,6 +12,16 @@ export const Route = createRoute({
     file: typeof search.file === "string" ? search.file : undefined,
   }),
   component: function CodeReviewPR() {
-    return <div>Code Review PR</div>;
+    const { owner, repo, number } = Route.useParams();
+    const { tab, file } = Route.useSearch();
+    return (
+      <CodeReviewDetail
+        owner={owner}
+        repo={repo}
+        number={parseInt(number, 10)}
+        tab={tab}
+        file={file}
+      />
+    );
   },
 });
