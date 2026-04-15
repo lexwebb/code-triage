@@ -1,5 +1,7 @@
 import { api } from "../api";
 import type { QueuedFixItem } from "../api";
+import { getQueryClient } from "../lib/query-client";
+import { invalidatePullBundleQueries, qk } from "../lib/query-keys";
 import type { SliceCreator, PrDetailSlice } from "./types";
 
 function isAuthoredPR(
@@ -98,11 +100,21 @@ export const createPrDetailSlice: SliceCreator<PrDetailSlice> = (set, get) => ({
     });
 
     try {
+      const qc = getQueryClient();
       const autoEvaluate = isAuthoredPR(get().authored, { number, repo });
       const [detail, files, comments] = await Promise.all([
-        api.getPull(number, repo),
-        api.getPullFiles(number, repo),
-        api.getPullComments(number, repo, { autoEvaluate }),
+        qc.fetchQuery({
+          queryKey: qk.pull.detail(repo, number),
+          queryFn: () => api.getPull(number, repo),
+        }),
+        qc.fetchQuery({
+          queryKey: qk.pull.files(repo, number),
+          queryFn: () => api.getPullFiles(number, repo),
+        }),
+        qc.fetchQuery({
+          queryKey: qk.pull.comments(repo, number, autoEvaluate),
+          queryFn: () => api.getPullComments(number, repo, { autoEvaluate }),
+        }),
       ]);
       // Bail if user navigated away
       const current = get().selectedPR;
@@ -131,7 +143,13 @@ export const createPrDetailSlice: SliceCreator<PrDetailSlice> = (set, get) => ({
     if (!pr) return;
     try {
       const autoEvaluate = isAuthoredPR(get().authored, pr);
-      const comments = await api.getPullComments(pr.number, pr.repo, { autoEvaluate });
+      const qc = getQueryClient();
+      await qc.invalidateQueries({ queryKey: qk.pull.comments(pr.repo, pr.number, autoEvaluate) });
+      const comments = await qc.fetchQuery({
+        queryKey: qk.pull.comments(pr.repo, pr.number, autoEvaluate),
+        queryFn: () => api.getPullComments(pr.number, pr.repo, { autoEvaluate }),
+        staleTime: 0,
+      });
       set({ comments });
     } catch (err) {
       console.error("Failed to reload comments:", err);
@@ -142,10 +160,18 @@ export const createPrDetailSlice: SliceCreator<PrDetailSlice> = (set, get) => ({
     const current = get().selectedPR;
     if (!current || current.repo !== repo || current.number !== prNumber) return;
     try {
+      const qc = getQueryClient();
       const autoEvaluate = isAuthoredPR(get().authored, { number: prNumber, repo });
       const [detail, comments] = await Promise.all([
-        api.getPull(prNumber, repo),
-        api.getPullComments(prNumber, repo, { autoEvaluate }),
+        qc.fetchQuery({
+          queryKey: qk.pull.detail(repo, prNumber),
+          queryFn: () => api.getPull(prNumber, repo),
+        }),
+        qc.fetchQuery({
+          queryKey: qk.pull.comments(repo, prNumber, autoEvaluate),
+          queryFn: () => api.getPullComments(prNumber, repo, { autoEvaluate }),
+          staleTime: 0,
+        }),
       ]);
       set({ detail, comments });
     } catch {
@@ -163,7 +189,12 @@ export const createPrDetailSlice: SliceCreator<PrDetailSlice> = (set, get) => ({
       set({ showRequestChanges: false, reviewBody: "" });
       // Refresh detail to update reviewer states
       try {
-        const updated = await api.getPull(pr.number, pr.repo);
+        const qc = getQueryClient();
+        const updated = await qc.fetchQuery({
+          queryKey: qk.pull.detail(pr.repo, pr.number),
+          queryFn: () => api.getPull(pr.number, pr.repo),
+          staleTime: 0,
+        });
         set({ detail: updated });
       } catch { /* ignore */ }
     } catch (err) {
@@ -281,8 +312,7 @@ export const createPrDetailSlice: SliceCreator<PrDetailSlice> = (set, get) => ({
     set((s) => ({ reEvaluatingThreads: new Set(s.reEvaluatingThreads).add(commentId) }));
     try {
       await api.reEvaluate(pr.repo, commentId, pr.number);
-      // Reflect "evaluating" status in sidebar badges immediately.
-      void get().fetchPulls();
+      void invalidatePullBundleQueries(getQueryClient());
       await get().reloadComments();
     } finally {
       set((s) => {
@@ -298,10 +328,14 @@ export const createPrDetailSlice: SliceCreator<PrDetailSlice> = (set, get) => ({
     if (!pr) return;
     set({ runningAllEvals: true });
     try {
-      const comments = await api.getPullComments(pr.number, pr.repo, { autoEvaluate: true });
+      const qc = getQueryClient();
+      const comments = await qc.fetchQuery({
+        queryKey: qk.pull.comments(pr.repo, pr.number, true),
+        queryFn: () => api.getPullComments(pr.number, pr.repo, { autoEvaluate: true }),
+        staleTime: 0,
+      });
       set({ comments });
-      // Reflect freshly queued evaluations in sidebar badges immediately.
-      void get().fetchPulls();
+      void invalidatePullBundleQueries(qc);
     } catch (err) {
       console.error("Failed to run evaluations:", err);
     } finally {
@@ -429,7 +463,12 @@ export const createPrDetailSlice: SliceCreator<PrDetailSlice> = (set, get) => ({
     if (key === get().checksKey && get().checkSuites !== null) return;
     set({ checksKey: key, checkSuites: null, checksError: null });
     try {
-      const suites = await api.getChecks(pr.number, pr.repo, headSha);
+      const sha = headSha ?? "";
+      const qc = getQueryClient();
+      const suites = await qc.fetchQuery({
+        queryKey: qk.pull.checks(pr.repo, pr.number, sha),
+        queryFn: () => api.getChecks(pr.number, pr.repo, headSha),
+      });
       // Bail if PR changed while loading
       if (get().checksKey !== key) return;
       set({ checkSuites: suites });

@@ -137,6 +137,12 @@ export const createUiSlice: SliceCreator<UiSlice> = (set, get) => ({
         evalPromptAppendByRepo,
         evalClaudeExtraArgs,
         fixConversationMaxTurns: form.fixConversationMaxTurns,
+        coherence: {
+          branchStalenessDays: form.coherenceBranchStalenessDays,
+          approvedUnmergedHours: form.coherenceApprovedUnmergedHours,
+          reviewWaitHours: form.coherenceReviewWaitHours,
+          ticketInactivityDays: form.coherenceTicketInactivityDays,
+        },
         accounts: form.accounts.map((a) => ({
           name: a.name,
           orgs: a.orgs.split(",").map((o) => o.trim()).filter(Boolean),

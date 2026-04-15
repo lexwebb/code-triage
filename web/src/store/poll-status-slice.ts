@@ -1,5 +1,7 @@
 import { api } from "../api";
 import type { PollStatus, QueuedFixItem } from "../api";
+import { getQueryClient } from "../lib/query-client";
+import { invalidatePrPullQueries, invalidatePullBundleQueries, qk } from "../lib/query-keys";
 import type { SliceCreator, PollStatusSlice } from "./types";
 
 export const createPollStatusSlice: SliceCreator<PollStatusSlice> = (set, get) => ({
@@ -34,7 +36,7 @@ export const createPollStatusSlice: SliceCreator<PollStatusSlice> = (set, get) =
       if (pendingEvalRefresh) return;
       pendingEvalRefresh = setTimeout(() => {
         pendingEvalRefresh = null;
-        void get().fetchPulls();
+        void invalidatePullBundleQueries(getQueryClient());
       }, 300);
     };
 
@@ -58,6 +60,7 @@ export const createPollStatusSlice: SliceCreator<PollStatusSlice> = (set, get) =
         // Keep sidebar PR badges/counts in sync when evaluations finish.
         schedulePullsRefresh();
         if (data.repo && data.prNumber) {
+          void invalidatePrPullQueries(getQueryClient(), data.repo, data.prNumber);
           void get().refreshIfMatch(data.repo, data.prNumber);
         }
       } catch { /* ignore */ }
@@ -65,6 +68,14 @@ export const createPollStatusSlice: SliceCreator<PollStatusSlice> = (set, get) =
 
     es.addEventListener("ticket-status", () => {
       void get().fetchTickets();
+    });
+
+    es.addEventListener("attention", () => {
+      void getQueryClient().invalidateQueries({ queryKey: qk.attention.root });
+    });
+
+    es.addEventListener("poll", () => {
+      void getQueryClient().invalidateQueries({ queryKey: qk.attention.root });
     });
 
     es.onerror = () => { /* browser auto-reconnects */ };
@@ -126,9 +137,9 @@ export const createPollStatusSlice: SliceCreator<PollStatusSlice> = (set, get) =
       get().setQueue(status.fixQueue);
     }
 
-    // Refresh pulls if backend has new data
+    // Refresh pulls if backend has new data. Attention follows the `poll` SSE (after coherence writes).
     if (status.lastPoll > get()._lastPoll && get()._lastPoll > 0) {
-      void get().fetchPulls();
+      void invalidatePullBundleQueries(getQueryClient());
       void get().refreshIfMatch(
         get().selectedPR?.repo ?? "",
         get().selectedPR?.number ?? 0,

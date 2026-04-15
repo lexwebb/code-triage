@@ -4,6 +4,7 @@ import { useAppStore } from "../store";
 import { X } from "lucide-react";
 import { IconButton } from "./ui/icon-button";
 import { Button } from "./ui/button";
+import { Skeleton } from "./ui/skeleton";
 import { elapsed, statusColors } from "./fix-job-row";
 
 export function FixJobModal({ commentId }: { commentId: number }) {
@@ -30,7 +31,6 @@ export function FixJobModal({ commentId }: { commentId: number }) {
     if (!job || !job.branch) return;
     try {
       await applyFix(job.repo, job.commentId, job.prNumber, job.branch);
-      await reloadComments();
       close(null);
     } catch (err) {
       console.error("Apply failed:", err);
@@ -41,7 +41,6 @@ export function FixJobModal({ commentId }: { commentId: number }) {
     if (!job || !job.branch) return;
     try {
       await discardFix(job.branch, job.commentId);
-      await reloadComments();
       close(null);
     } catch (err) {
       console.error("Discard failed:", err);
@@ -182,10 +181,11 @@ export function FixJobModal({ commentId }: { commentId: number }) {
           </div>
         )}
 
-        {/* Running spinner */}
         {job.status === "running" && (
-          <div className="flex-1 flex items-center justify-center py-12 text-gray-500 text-sm">
-            Claude is working on the fix...
+          <div className="flex-1 space-y-3 px-4 py-8">
+            <Skeleton className="mx-auto h-4 w-full max-w-md" />
+            <Skeleton className="h-28 w-full" />
+            <Skeleton className="h-16 w-full" />
           </div>
         )}
 

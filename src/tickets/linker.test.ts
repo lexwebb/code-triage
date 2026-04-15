@@ -1,5 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { extractTicketIdentifiers, buildLinkMap, type LinkablePR } from "./linker.js";
+import {
+  extractTicketIdentifiers,
+  buildLinkMap,
+  mergeProviderPullLinksIntoLinkMap,
+  parseGithubPullRequestUrl,
+  type LinkablePR,
+} from "./linker.js";
 
 describe("extractTicketIdentifiers", () => {
   it("extracts identifiers from branch name", () => {
@@ -17,9 +23,15 @@ describe("extractTicketIdentifiers", () => {
     expect(extractTicketIdentifiers(pr)).toEqual(["PROD-789"]);
   });
 
-  it("returns first match only per source", () => {
-    const pr: LinkablePR = { number: 1, repo: "org/repo", branch: "ENG-1-and-ENG-2", title: "", body: "" };
-    expect(extractTicketIdentifiers(pr)).toEqual(["ENG-1"]);
+  it("collects every ticket id in each source", () => {
+    const pr: LinkablePR = {
+      number: 1,
+      repo: "org/repo",
+      branch: "ENG-1-and-ENG-2",
+      title: "Fixes CHA-10 and CHA-11",
+      body: "",
+    };
+    expect(extractTicketIdentifiers(pr)).toEqual(["ENG-1", "ENG-2", "CHA-10", "CHA-11"]);
   });
 
   it("returns empty array when no match", () => {
@@ -30,6 +42,48 @@ describe("extractTicketIdentifiers", () => {
   it("handles identifiers with various team key lengths", () => {
     const pr: LinkablePR = { number: 1, repo: "org/repo", branch: "FE-42-styles", title: "", body: "" };
     expect(extractTicketIdentifiers(pr)).toEqual(["FE-42"]);
+  });
+
+  it("normalizes lowercase ticket keys (Linear git branches)", () => {
+    const pr: LinkablePR = { number: 1, repo: "org/repo", branch: "cha-6269-app-store-compliance", title: "", body: "" };
+    expect(extractTicketIdentifiers(pr)).toEqual(["CHA-6269"]);
+  });
+});
+
+describe("parseGithubPullRequestUrl", () => {
+  it("parses standard GitHub pull URLs", () => {
+    expect(
+      parseGithubPullRequestUrl("https://github.com/chaching-engineering/price-comparison-tool/pull/741"),
+    ).toEqual({ repo: "chaching-engineering/price-comparison-tool", number: 741 });
+  });
+
+  it("parses pull URLs with extra path segments", () => {
+    expect(
+      parseGithubPullRequestUrl(
+        "https://github.com/chaching-engineering/price-comparison-tool/pull/741/files",
+      ),
+    ).toEqual({ repo: "chaching-engineering/price-comparison-tool", number: 741 });
+  });
+
+  it("returns null for non-pull URLs", () => {
+    expect(parseGithubPullRequestUrl("https://linear.app/foo")).toBeNull();
+  });
+});
+
+describe("mergeProviderPullLinksIntoLinkMap", () => {
+  it("adds ticket and PR keys without duplicating", () => {
+    const prs: LinkablePR[] = [
+      { number: 10, repo: "org/repo", branch: "ENG-1-fix", title: "", body: "" },
+    ];
+    const map = buildLinkMap(prs, new Set(["ENG-1"]));
+    mergeProviderPullLinksIntoLinkMap(map, "ENG-1", [
+      { number: 99, repo: "org/other", title: "from Linear" },
+    ]);
+    expect(map.ticketToPRs.get("ENG-1")).toEqual([
+      { number: 10, repo: "org/repo", title: "" },
+      { number: 99, repo: "org/other", title: "from Linear" },
+    ]);
+    expect(map.prToTickets.get("org/other#99")).toEqual(["ENG-1"]);
   });
 });
 

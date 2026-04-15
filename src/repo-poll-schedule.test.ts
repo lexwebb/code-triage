@@ -39,6 +39,29 @@ describe("repo poll schedule", () => {
     expect(selectReposToPoll(["idle"], t0 + coldMs + 1, { staleAfterDays: 7, coldIntervalMinutes: 60 })).toEqual(["idle"]);
   });
 
+  it("super-cold multiplier delays repos with no recorded activity", () => {
+    testRoot = mkdtempSync(join(tmpdir(), "ct-rps-"));
+    process.env.CODE_TRIAGE_STATE_DIR = testRoot;
+    mkdirSync(getStateDir(), { recursive: true });
+    const t0 = 1_000_000_000_000;
+    const coldMs = 60 * 60_000;
+    recordPollOutcomes([{ repo: "idle", hadActivity: false }], t0);
+    expect(
+      selectReposToPoll(["idle"], t0 + coldMs + 1, {
+        staleAfterDays: 7,
+        coldIntervalMinutes: 60,
+        superColdMultiplier: 3,
+      }),
+    ).toEqual([]);
+    expect(
+      selectReposToPoll(["idle"], t0 + (coldMs * 3) + 1, {
+        staleAfterDays: 7,
+        coldIntervalMinutes: 60,
+        superColdMultiplier: 3,
+      }),
+    ).toEqual(["idle"]);
+  });
+
   it("cold repo is skipped until cold interval elapses after last poll", () => {
     testRoot = mkdtempSync(join(tmpdir(), "ct-rps-"));
     process.env.CODE_TRIAGE_STATE_DIR = testRoot;

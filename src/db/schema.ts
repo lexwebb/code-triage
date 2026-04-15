@@ -64,3 +64,18 @@ export const fixQueue = sqliteTable("fix_queue", {
   queuedAt: text("queued_at").notNull(),
   position: integer("position").notNull(),
 });
+
+export const attentionItems = sqliteTable("attention_items", {
+  id: text("id").primaryKey(),
+  type: text("type").notNull(),
+  entityKind: text("entity_kind").notNull(),
+  entityIdentifier: text("entity_identifier").notNull(),
+  priority: text("priority").notNull(),
+  title: text("title").notNull(),
+  stage: text("stage"),
+  stuckSince: text("stuck_since"),
+  firstSeenAt: text("first_seen_at").notNull(),
+  snoozedUntil: text("snoozed_until"),
+  dismissedAt: text("dismissed_at"),
+  pinned: integer("pinned").notNull().default(0),
+});

@@ -9,8 +9,8 @@ export function payloadToForm(c: AppConfigPayload): SettingsFormState {
     evalConcurrency: c.evalConcurrency,
     pollReviewRequested: c.pollReviewRequested,
     commentRetentionDays: c.commentRetentionDays,
-    repoPollStaleAfterDays: c.repoPollStaleAfterDays ?? 7,
-    repoPollColdIntervalMinutes: c.repoPollColdIntervalMinutes ?? 60,
+    repoPollStaleAfterDays: c.repoPollStaleAfterDays ?? 3,
+    repoPollColdIntervalMinutes: c.repoPollColdIntervalMinutes ?? 120,
     pollApiHeadroom: c.pollApiHeadroom ?? 0.35,
     pollRateLimitAware: c.pollRateLimitAware !== false,
     preferredEditor: c.preferredEditor ?? "vscode",
@@ -34,5 +34,9 @@ export function payloadToForm(c: AppConfigPayload): SettingsFormState {
     linearApiKey: "",
     hasLinearApiKey: Boolean(c.hasLinearApiKey),
     linearTeamKeys: (c.linearTeamKeys ?? []).join(", "),
+    coherenceBranchStalenessDays: c.coherence?.branchStalenessDays ?? 3,
+    coherenceApprovedUnmergedHours: c.coherence?.approvedUnmergedHours ?? 24,
+    coherenceReviewWaitHours: c.coherence?.reviewWaitHours ?? 24,
+    coherenceTicketInactivityDays: c.coherence?.ticketInactivityDays ?? 5,
   };
 }

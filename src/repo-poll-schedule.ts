@@ -5,6 +5,8 @@ export interface RepoPollScheduleOptions {
   staleAfterDays: number;
   /** Minimum spacing between polls for a cold repo (minutes). */
   coldIntervalMinutes: number;
+  /** Extra spacing multiplier when repo has never had recorded activity (`last_activity_ms = 0`). */
+  superColdMultiplier?: number;
 }
 
 /**
@@ -21,6 +23,7 @@ export function selectReposToPoll(repoPaths: string[], now: number, opts: RepoPo
   const sqlite = getRawSqlite();
   const staleMs = opts.staleAfterDays * 86_400_000;
   const coldMs = opts.coldIntervalMinutes * 60_000;
+  const superCold = Math.max(1, Math.floor(opts.superColdMultiplier ?? 1));
   const stmt = sqlite.prepare("SELECT last_activity_ms, last_poll_ms FROM repo_poll WHERE repo = ?");
   const out: string[] = [];
 
@@ -33,8 +36,11 @@ export function selectReposToPoll(repoPaths: string[], now: number, opts: RepoPo
     const hot = now - row.last_activity_ms < staleMs;
     if (hot) {
       out.push(repo);
-    } else if (now - row.last_poll_ms >= coldMs) {
-      out.push(repo);
+    } else {
+      const spacingMs = row.last_activity_ms <= 0 ? coldMs * superCold : coldMs;
+      if (now - row.last_poll_ms >= spacingMs) {
+        out.push(repo);
+      }
     }
   }
   return out;

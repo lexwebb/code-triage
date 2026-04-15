@@ -8,8 +8,12 @@ import { Route as codeReviewPRRoute } from "./routes/_sidebar/code-review-pr";
 import { Route as ticketsIndexRoute } from "./routes/_sidebar/tickets";
 import { Route as ticketsDetailRoute } from "./routes/_sidebar/tickets-detail";
 import { Route as settingsRoute } from "./routes/settings";
+import { Route as attentionRoute } from "./routes/attention";
+import { Route as statsRoute } from "./routes/stats";
 
 const routeTree = rootRoute.addChildren([
+  attentionRoute,
+  statsRoute,
   sidebarRoute.addChildren([
     indexRedirectRoute,
     reviewsIndexRoute,

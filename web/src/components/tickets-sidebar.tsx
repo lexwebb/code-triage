@@ -3,6 +3,8 @@ import { useNavigate } from "@tanstack/react-router";
 import { useAppStore } from "../store";
 import { cn } from "../lib/utils";
 import type { TicketIssue } from "../types";
+import { LifecycleBar, deriveTicketIssueLifecycleStage } from "./lifecycle-bar";
+import { Skeleton } from "./ui/skeleton";
 
 const PRIORITY_LABELS: Record<number, { label: string; color: string }> = {
   0: { label: "None", color: "text-zinc-500" },
@@ -43,6 +45,12 @@ function groupByStateType(issues: TicketIssue[]): Array<{ type: string; name: st
 
 function TicketCard({ issue, isSelected, onSelect }: { issue: TicketIssue; isSelected: boolean; onSelect: () => void }) {
   const priority = PRIORITY_LABELS[issue.priority] ?? PRIORITY_LABELS[0]!;
+  const prToTickets = useAppStore((s) => s.prToTickets);
+  const authored = useAppStore((s) => s.authored);
+  const reviewRequested = useAppStore((s) => s.reviewRequested);
+  const openPulls = useMemo(() => [...authored, ...reviewRequested], [authored, reviewRequested]);
+  const stage = deriveTicketIssueLifecycleStage(issue, prToTickets, openPulls);
+
   return (
     <button
       onClick={onSelect}
@@ -66,6 +74,7 @@ function TicketCard({ issue, isSelected, onSelect }: { issue: TicketIssue; isSel
       {issue.assignee && (
         <div className="text-xs text-zinc-500 mt-0.5">{issue.assignee.name}</div>
       )}
+      <LifecycleBar currentStage={stage} compact className="mt-1" />
     </button>
   );
 }
@@ -95,12 +104,17 @@ export function TicketsSidebar() {
   const myTickets = useAppStore((s) => s.myTickets);
   const repoLinkedTickets = useAppStore((s) => s.repoLinkedTickets);
   const selectedTicket = useAppStore((s) => s.selectedTicket);
-  const selectTicket = useAppStore((s) => s.selectTicket);
+  const setMobileDrawerOpen = useAppStore((s) => s.setMobileDrawerOpen);
   const ticketsLoading = useAppStore((s) => s.ticketsLoading);
   const ticketsError = useAppStore((s) => s.ticketsError);
   const hasLinearApiKey = useAppStore((s) => s.config?.hasLinearApiKey ?? false);
   const myGroups = useMemo(() => groupByStateType(myTickets), [myTickets]);
   const repoGroups = useMemo(() => groupByStateType(repoLinkedTickets), [repoLinkedTickets]);
+
+  function openTicket(id: string) {
+    void navigate({ to: "/tickets/$ticketId", params: { ticketId: id } });
+    setMobileDrawerOpen(false);
+  }
 
   if (!hasLinearApiKey) {
     return (
@@ -135,14 +149,23 @@ export function TicketsSidebar() {
 
   if (ticketsLoading && myTickets.length === 0) {
     return (
-      <div className="flex items-center justify-center h-32 text-zinc-500 text-sm">
-        Loading tickets…
+      <div className="w-full space-y-2 p-3">
+        <Skeleton className="h-4 w-28" />
+        <Skeleton className="h-14 w-full" />
+        <Skeleton className="h-14 w-full" />
+        <Skeleton className="h-14 w-full" />
+        <Skeleton className="h-14 w-full" />
       </div>
     );
   }
 
   return (
-    <div className="flex flex-col gap-1 overflow-y-auto">
+    <div className="flex w-full flex-col gap-1 overflow-y-auto">
+      {ticketsLoading && myTickets.length > 0 && (
+        <div className="shrink-0 border-b border-zinc-800 px-3 py-2">
+          <Skeleton className="h-2 w-full rounded-full" />
+        </div>
+      )}
       <div className="px-3 py-2 text-xs font-semibold text-zinc-400 uppercase tracking-wider">
         My Issues
         <span className="ml-1 text-zinc-500 normal-case font-normal">({myTickets.length})</span>
@@ -162,7 +185,7 @@ export function TicketsSidebar() {
                 key={issue.id}
                 issue={issue}
                 isSelected={selectedTicket === issue.id}
-                onSelect={() => selectTicket(issue.id)}
+                onSelect={() => openTicket(issue.id)}
               />
             ))}
           </CollapsibleSection>
@@ -187,7 +210,7 @@ export function TicketsSidebar() {
                   key={issue.id}
                   issue={issue}
                   isSelected={selectedTicket === issue.id}
-                  onSelect={() => selectTicket(issue.id)}
+                  onSelect={() => openTicket(issue.id)}
                 />
               ))}
             </CollapsibleSection>

@@ -1,6 +1,7 @@
 import { useNavigate } from "@tanstack/react-router";
 import { useAppStore } from "../store";
 import { Checkbox } from "./ui/checkbox";
+import { Skeleton } from "./ui/skeleton";
 
 export default function SettingsView({
   mode,
@@ -16,7 +17,29 @@ export default function SettingsView({
   const updateField = useAppStore((s) => s.updateSettingsField);
   const submit = useAppStore((s) => s.submitSettings);
 
-  if (form === null) return null;
+  if (form === null) {
+    return (
+      <div className="flex min-h-full w-full flex-col bg-gray-950">
+        <header className="flex shrink-0 items-center justify-between border-b border-gray-800 px-6 py-4">
+          <div className="flex items-center gap-3">
+            <Skeleton className="h-8 w-8 rounded-md" />
+            <Skeleton className="h-6 w-56" />
+          </div>
+          <Skeleton className="h-4 w-12" />
+        </header>
+        <div className="w-full flex-1 space-y-4 px-6 py-6">
+          <Skeleton className="h-4 w-full max-w-xl" />
+          <Skeleton className="h-10 w-full" />
+          <Skeleton className="h-10 w-full" />
+          <Skeleton className="h-24 w-full" />
+          <Skeleton className="h-24 w-full" />
+          <Skeleton className="h-24 w-full" />
+          <Skeleton className="h-32 w-full" />
+          <Skeleton className="h-10 w-40" />
+        </div>
+      </div>
+    );
+  }
 
   const title = mode === "setup" ? "Welcome — configure Code Triage" : "Settings";
 
@@ -412,6 +435,52 @@ export default function SettingsView({
               placeholder='["--model","opus"]'
             />
           </label>
+        </section>
+
+        <section className="space-y-3">
+          <h2 className="text-xs text-gray-500 uppercase tracking-wide">Coherence thresholds</h2>
+          <div className="grid grid-cols-2 gap-4">
+            <label className="block space-y-1">
+              <span className="text-sm text-gray-400">Branch staleness (days)</span>
+              <input
+                type="number"
+                min={1}
+                className="w-full rounded-md border border-gray-700 bg-gray-900 px-3 py-2 text-sm"
+                value={form.coherenceBranchStalenessDays}
+                onChange={(e) => updateField("coherenceBranchStalenessDays", parseInt(e.target.value, 10) || 3)}
+              />
+            </label>
+            <label className="block space-y-1">
+              <span className="text-sm text-gray-400">Approved but unmerged (hours)</span>
+              <input
+                type="number"
+                min={1}
+                className="w-full rounded-md border border-gray-700 bg-gray-900 px-3 py-2 text-sm"
+                value={form.coherenceApprovedUnmergedHours}
+                onChange={(e) => updateField("coherenceApprovedUnmergedHours", parseInt(e.target.value, 10) || 24)}
+              />
+            </label>
+            <label className="block space-y-1">
+              <span className="text-sm text-gray-400">Review wait bottleneck (hours)</span>
+              <input
+                type="number"
+                min={1}
+                className="w-full rounded-md border border-gray-700 bg-gray-900 px-3 py-2 text-sm"
+                value={form.coherenceReviewWaitHours}
+                onChange={(e) => updateField("coherenceReviewWaitHours", parseInt(e.target.value, 10) || 24)}
+              />
+            </label>
+            <label className="block space-y-1">
+              <span className="text-sm text-gray-400">Ticket inactivity (days)</span>
+              <input
+                type="number"
+                min={1}
+                className="w-full rounded-md border border-gray-700 bg-gray-900 px-3 py-2 text-sm"
+                value={form.coherenceTicketInactivityDays}
+                onChange={(e) => updateField("coherenceTicketInactivityDays", parseInt(e.target.value, 10) || 5)}
+              />
+            </label>
+          </div>
         </section>
 
         <div className="flex gap-3 pt-4 border-t border-gray-800">

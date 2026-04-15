@@ -3,6 +3,9 @@ import remarkGfm from "remark-gfm";
 import rehypeRaw from "rehype-raw";
 import { Checkbox } from "./ui/checkbox";
 import { useAppStore } from "../store";
+import { Skeleton } from "./ui/skeleton";
+import { LifecycleBar, deriveTicketIssueLifecycleStage } from "./lifecycle-bar";
+import { useMemo } from "react";
 
 function TicketMarkdown({ children }: { children: string }) {
   return (
@@ -59,6 +62,13 @@ export function TicketIssueDetail() {
   const ticketDetailLoading = useAppStore((s) => s.ticketDetailLoading);
   const selectedTicket = useAppStore((s) => s.selectedTicket);
   const navigateToLinkedPR = useAppStore((s) => s.navigateToLinkedPR);
+  const prToTickets = useAppStore((s) => s.prToTickets);
+  const authored = useAppStore((s) => s.authored);
+  const reviewRequested = useAppStore((s) => s.reviewRequested);
+  const lifecycleStage = useMemo(() => {
+    if (!ticketDetail) return undefined;
+    return deriveTicketIssueLifecycleStage(ticketDetail, prToTickets, [...authored, ...reviewRequested]);
+  }, [ticketDetail, prToTickets, authored, reviewRequested]);
 
   if (!selectedTicket) {
     return (
@@ -70,8 +80,13 @@ export function TicketIssueDetail() {
 
   if (ticketDetailLoading || !ticketDetail) {
     return (
-      <div className="flex items-center justify-center h-full text-zinc-500 text-sm">
-        Loading ticket…
+      <div className="flex h-full w-full flex-col gap-3 p-6">
+        <Skeleton className="h-5 w-72 max-w-full" />
+        <Skeleton className="h-8 w-[70%] max-w-full" />
+        <Skeleton className="h-24 w-full" />
+        <Skeleton className="h-20 w-full" />
+        <Skeleton className="h-20 w-full" />
+        <Skeleton className="h-32 w-full" />
       </div>
     );
   }
@@ -99,6 +114,9 @@ export function TicketIssueDetail() {
           </a>
         </div>
         <h1 className="text-lg font-semibold text-zinc-100 mt-1">{ticketDetail.title}</h1>
+        {lifecycleStage && (
+          <LifecycleBar currentStage={lifecycleStage} compact={false} className="mt-2" />
+        )}
         <div className="flex flex-wrap items-center gap-2 mt-2">
           {ticketDetail.assignee && (
             <span className="text-xs text-zinc-400">

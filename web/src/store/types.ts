@@ -13,6 +13,7 @@ import type {
   AppConfigPayload,
   ConfigGetResponse,
   PollStatus,
+  AttentionItem,
 } from "../api";
 
 // ── App Slice ──
@@ -41,8 +42,6 @@ export interface PullsSlice {
   pullsLoading: boolean;
   pullsRefreshing: boolean;
   githubUserUnavailable: boolean;
-  pullFetchGeneration: number;
-  _fetchInFlight: Promise<void> | null;
 
   fetchPulls: (isInitial?: boolean, resetRepoPollOnRefresh?: boolean) => Promise<void>;
   setRepoFilter: (filter: string) => void;
@@ -273,6 +272,10 @@ export interface SettingsFormState {
   linearApiKey: string;
   hasLinearApiKey: boolean;
   linearTeamKeys: string;
+  coherenceBranchStalenessDays: number;
+  coherenceApprovedUnmergedHours: number;
+  coherenceReviewWaitHours: number;
+  coherenceTicketInactivityDays: number;
 }
 
 // ── Tickets Slice ──
@@ -294,6 +297,19 @@ export interface TicketsSlice {
   navigateToLinkedTicket: (identifier: string) => void;
 }
 
+// ── Attention Slice ──
+
+export interface AttentionSlice {
+  attentionItems: AttentionItem[];
+  attentionLoading: boolean;
+  attentionError: string | null;
+
+  fetchAttention: () => Promise<void>;
+  snoozeAttention: (id: string, until: string) => Promise<void>;
+  dismissAttention: (id: string) => Promise<void>;
+  pinAttention: (id: string) => Promise<void>;
+}
+
 // ── Combined Store ──
 
 export type AppStore = AppSlice &
@@ -303,6 +319,7 @@ export type AppStore = AppSlice &
   FixJobsSlice &
   NotificationsSlice &
   UiSlice &
-  TicketsSlice;
+  TicketsSlice &
+  AttentionSlice;
 
 export type SliceCreator<T> = StateCreator<AppStore, [["zustand/subscribeWithSelector", never]], [], T>;

@@ -102,6 +102,25 @@ function ensureSchema(raw: Database.Database): void {
       queued_at          TEXT NOT NULL,
       position           INTEGER NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS attention_items (
+      id TEXT PRIMARY KEY,
+      type TEXT NOT NULL,
+      entity_kind TEXT NOT NULL,
+      entity_identifier TEXT NOT NULL,
+      priority TEXT NOT NULL,
+      title TEXT NOT NULL,
+      stage TEXT,
+      stuck_since TEXT,
+      first_seen_at TEXT NOT NULL,
+      snoozed_until TEXT,
+      dismissed_at TEXT,
+      pinned INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE TABLE IF NOT EXISTS repo_closed_authored_cache (
+      repo TEXT PRIMARY KEY,
+      data_json TEXT NOT NULL,
+      fetched_at_ms INTEGER NOT NULL
+    );
   `);
   raw.prepare("INSERT OR IGNORE INTO meta (id, last_poll) VALUES (1, NULL)").run();
   migrateCommentsColumns(raw);

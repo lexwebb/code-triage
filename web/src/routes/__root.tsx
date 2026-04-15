@@ -7,6 +7,8 @@ import FixJobsBanner from "../components/fix-jobs-banner";
 import KeyboardShortcutsModal from "../components/keyboard-shortcuts-modal";
 import SettingsView from "../components/settings-view";
 import { IconButton } from "../components/ui/icon-button";
+import { AppShellSkeleton } from "../components/app-shell-skeleton";
+import { useServerQuerySync } from "../components/server-query-sync";
 import { X, ArrowRight, RefreshCw, Bell, Settings, HelpCircle } from "lucide-react";
 
 export const Route = createRootRoute({
@@ -80,13 +82,11 @@ export const Route = createRootRoute({
       };
     }, [appGate]);
 
+    useServerQuerySync();
+
     // ── Gate: loading ──
     if (appGate === "loading") {
-      return (
-        <div className="h-screen flex items-center justify-center bg-gray-950 text-gray-400">
-          Starting…
-        </div>
-      );
+      return <AppShellSkeleton />;
     }
 
     // ── Gate: setup ──
@@ -96,11 +96,7 @@ export const Route = createRootRoute({
 
     // ── Gate: pulls loading ──
     if (pullsLoading) {
-      return (
-        <div className="h-screen flex items-center justify-center bg-gray-950 text-gray-400">
-          Loading pull requests...
-        </div>
-      );
+      return <AppShellSkeleton showReviewsSidebar />;
     }
 
     // ── Gate: error ──

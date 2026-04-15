@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   getRateLimitState,
   ghAsync,
+  ghAsyncSinglePage,
   hasEnvGitHubToken,
   resetRateLimitStateForTests,
   resolveGitHubTokenFromSources,
@@ -67,6 +68,25 @@ describe("ghAsync", () => {
     );
     const out = await ghAsync<Array<{ id: number }>>("/repos/o/r/issues");
     expect(out).toEqual([{ id: 1 }, { id: 2 }]);
+  });
+
+  it("ghAsyncSinglePage does not follow Link rel=next", async () => {
+    const nextUrl = "https://api.github.com/repos/o/r/issues?page=2";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify([{ id: 1 }]), {
+          status: 200,
+          headers: {
+            "Content-Type": "application/json",
+            Link: `<${nextUrl}>; rel="next"`,
+          },
+        }),
+      ),
+    );
+    const out = await ghAsyncSinglePage<Array<{ id: number }>>("/repos/o/r/issues");
+    expect(out).toEqual([{ id: 1 }]);
+    expect(vi.mocked(fetch)).toHaveBeenCalledTimes(1);
   });
 
   it("retries on 429 then succeeds", async () => {

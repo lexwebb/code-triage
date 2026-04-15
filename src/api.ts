@@ -1,4 +1,4 @@
-import { addRoute, json, getRepos, getBody, getPollState, getHealthPayload, setFixJobStatus, clearFixJobStatus, getActiveFixForBranch, subscribeSse, getListenPort, notifyConfigSaved, getFixJobStatus, getAllFixJobStatuses, getTicketState } from "./server.js";
+import { addRoute, json, getRepos, getBody, getPollState, getHealthPayload, setFixJobStatus, clearFixJobStatus, getActiveFixForBranch, subscribeSse, getListenPort, notifyConfigSaved, getFixJobStatus, getAllFixJobStatuses, getTicketState, triggerManualPoll } from "./server.js";
 import { enqueueFix, isInFixQueue, advanceQueue, getFixQueue, removeFromFixQueue } from "./fix-queue.js";
 import { getVapidKeys } from "./vapid.js";
 import { savePushSubscription, deletePushSubscription, mutePR as dbMutePR, unmutePR as dbUnmutePR, getMutedPRs as dbGetMutedPRs } from "./push-db.js";
@@ -8,45 +8,30 @@ import { loadConfig, saveConfig, configExists, type Config } from "./config.js";
 import { loadState, markComment, patchCommentTriage, saveState, addFixJob as addFixJobState, removeFixJob as removeFixJobState, getFixJobs, getPendingTriageCountsByPr, needsEvaluation, reconcileResolvedComments } from "./state.js";
 import { postReply, resolveThread, applyFixWithClaude, clampEvalConcurrency } from "./actioner.js";
 import { createWorktree, getWorktreePath, getDiffInWorktree, removeWorktree, commitAndPushWorktree } from "./worktree.js";
-import { ghAsync, ghPost } from "./exec.js";
-import { batchPullPollData, type PullPollData } from "./github-batching.js";
+import { ghAsync, ghAsyncSinglePage, ghPost, getGitHubViewerCached } from "./exec.js";
+import {
+  batchPullPollData,
+  batchPullPollDataForRepos,
+  fetchOpenPullRequestsForRepos,
+  type OpenPull,
+  type PullPollData,
+} from "./github-batching.js";
+import { reduceCiToTriState, type CiChecksSummary } from "./ci-state.js";
 import { clearRepoPollSchedule } from "./repo-poll-schedule.js";
 import { enqueueEvaluation, drainOnce } from "./eval-queue.js";
 import { buildIgnoredBotSet } from "./poller.js";
 import { getRawSqlite } from "./db/client.js";
-
-const GITHUB_USER_CACHE_MS = 60_000;
-let cachedGitHubUser: { at: number; user: { login: string; avatar_url: string; html_url: string } } | null = null;
-
-/**
- * Cached GET /user; on failure (rate limit, network) returns the last successful user (stale-while-error),
- * or `null` if we have never successfully fetched (avoids 500 on `/api/pulls-bundle` when GitHub throttles).
- */
-async function getCachedGitHubUser(): Promise<{ login: string; avatar_url: string; html_url: string } | null> {
-  const now = Date.now();
-  if (cachedGitHubUser && now - cachedGitHubUser.at < GITHUB_USER_CACHE_MS) {
-    return cachedGitHubUser.user;
-  }
-  try {
-    const user = await ghAsync<{ login: string; avatar_url: string; html_url: string }>("/user");
-    cachedGitHubUser = { at: now, user };
-    return user;
-  } catch {
-    if (cachedGitHubUser) {
-      return cachedGitHubUser.user;
-    }
-    return null;
-  }
-}
+import type { LinkablePR } from "./tickets/linker.js";
 
 async function getUsernameOrNull(): Promise<string | null> {
-  const u = await getCachedGitHubUser();
+  const u = await getGitHubViewerCached();
   return u?.login ?? null;
 }
 
 interface GhPull {
   number: number;
   title: string;
+  body?: string | null;
   user: { login: string; avatar_url: string };
   head: { ref: string; sha: string };
   base: { ref: string };
@@ -59,6 +44,8 @@ interface GhPull {
   changed_files: number;
   requested_reviewers: Array<{ login: string; avatar_url: string }>;
   mergeable_state: string;
+  merged_at?: string | null;
+  state?: string;
 }
 
 interface GhCommitStatus {
@@ -76,25 +63,35 @@ interface GhCombinedStatus {
   statuses: GhCommitStatus[];
 }
 
+/** Per `buildPullSidebarLists` invocation: dedupe concurrent status/check calls for the same commit. */
+let prStatusDedupe: Map<string, Promise<"success" | "failure" | "pending">> | null = null;
+
+function getPrStatusDeduped(repoPath: string, sha: string): Promise<"success" | "failure" | "pending"> {
+  const key = `${repoPath}\0${sha}`;
+  const map = prStatusDedupe;
+  if (!map) return getPrStatus(repoPath, sha);
+  const hit = map.get(key);
+  if (hit) return hit;
+  const p = getPrStatus(repoPath, sha);
+  map.set(key, p);
+  return p;
+}
+
 async function getPrStatus(repoPath: string, sha: string): Promise<"success" | "failure" | "pending"> {
   try {
     const [statusData, checksSummary] = await Promise.all([
       ghAsync<GhCombinedStatus>(`/repos/${repoPath}/commits/${sha}/status`).catch(() => null),
       getChecksSummaryFromRuns(repoPath, sha),
     ]);
-
-    // Combine both systems: any failure → failure, any pending → pending, else success
-    const statusState = statusData?.state ?? null;
-    const hasStatuses = (statusData?.statuses?.length ?? 0) > 0;
-
-    if (statusState === "failure" || statusState === "error") return "failure";
-    if (checksSummary && checksSummary.failure > 0) return "failure";
-
-    if (statusState === "pending" && hasStatuses) return "pending";
-    if (checksSummary && checksSummary.pending > 0) return "pending";
-
-    // If at least one system reports success, call it success
-    if (statusState === "success" || (checksSummary && checksSummary.success > 0)) return "success";
+    return reduceCiToTriState({
+      status: statusData
+        ? {
+            state: statusData.state,
+            hasStatuses: (statusData.statuses?.length ?? 0) > 0,
+          }
+        : null,
+      checks: checksSummary,
+    });
   } catch { /* ignore */ }
   return "pending";
 }
@@ -115,7 +112,7 @@ async function getChecksSummaryFromRuns(repoPath: string, sha: string): Promise<
       else if (r.conclusion === "success" || r.conclusion === "skipped" || r.conclusion === "neutral") success++;
       else failure++;
     }
-    return { success, failure, pending };
+    return { success, failure, pending } satisfies CiChecksSummary;
   } catch { return null; }
 }
 
@@ -139,10 +136,26 @@ export async function buildPullSidebarLists(targetRepos: RepoInfo[]): Promise<{
   }
   const authored: Array<Record<string, unknown>> = [];
   const reviewRequested: Array<Record<string, unknown>> = [];
-
-  for (const repoInfo of targetRepos) {
+  prStatusDedupe = new Map();
+  try {
+    const repoPaths = targetRepos.map((r) => r.repo);
+    let pullsByRepo = new Map<string, OpenPull[]>();
     try {
-      const pulls = await ghAsync<GhPull[]>(`/repos/${repoInfo.repo}/pulls?state=open`);
+      pullsByRepo = (await fetchOpenPullRequestsForRepos(repoPaths)).pullsByRepo;
+    } catch {
+      // Fallback: preserve behavior if batched GraphQL fails.
+      for (const repoInfo of targetRepos) {
+        try {
+          pullsByRepo.set(repoInfo.repo, await ghAsync<OpenPull[]>(`/repos/${repoInfo.repo}/pulls?state=open`));
+        } catch {
+          pullsByRepo.set(repoInfo.repo, []);
+        }
+      }
+    }
+
+    const selectedByRepo = new Map<string, { myPulls: OpenPull[]; needsReview: OpenPull[]; prNums: number[] }>();
+    for (const repoInfo of targetRepos) {
+      const pulls = pullsByRepo.get(repoInfo.repo) ?? [];
       const myPulls = pulls.filter((pr) => pr.user.login === username);
       const needsReview = pulls.filter(
         (pr) =>
@@ -150,56 +163,158 @@ export async function buildPullSidebarLists(targetRepos: RepoInfo[]): Promise<{
           pr.requested_reviewers.some((r) => r.login === username),
       );
       const prNums = [...new Set([...myPulls.map((p) => p.number), ...needsReview.map((p) => p.number)])];
-      const pollByPr = prNums.length === 0 ? new Map<number, PullPollData>() : await batchPullPollData(repoInfo.repo, prNums);
+      selectedByRepo.set(repoInfo.repo, { myPulls, needsReview, prNums });
+    }
 
-      // Reconcile: dismiss locally-pending comments whose GitHub threads are now resolved
-      for (const poll of pollByPr.values()) {
+    let pollDataByRepo = new Map<string, Map<number, PullPollData>>();
+    const pollEntries = Array.from(selectedByRepo.entries())
+      .filter(([, v]) => v.prNums.length > 0)
+      .map(([repoPath, v]) => ({ repoPath, prNumbers: v.prNums }));
+    if (pollEntries.length > 0) {
+      try {
+        pollDataByRepo = await batchPullPollDataForRepos(pollEntries);
+      } catch {
+        for (const pe of pollEntries) {
+          try {
+            pollDataByRepo.set(pe.repoPath, await batchPullPollData(pe.repoPath, pe.prNumbers));
+          } catch {
+            pollDataByRepo.set(pe.repoPath, new Map());
+          }
+        }
+      }
+    }
+
+    for (const repoMap of pollDataByRepo.values()) {
+      for (const poll of repoMap.values()) {
         reconcileResolvedComments(poll.resolvedIds);
       }
+    }
 
-      const triageCounts = getPendingTriageCountsByPr();
+    const triageCounts = getPendingTriageCountsByPr();
 
-      async function buildRow(
-        pr: GhPull,
-        poll: PullPollData | undefined,
-      ): Promise<Record<string, unknown>> {
-        const checksStatus = await getPrStatus(repoInfo.repo, pr.head.sha);
-        const openComments = poll
-          ? openTopLevelUnresolvedCount(poll.comments, poll.resolvedIds)
-          : 0;
-        return {
-          number: pr.number,
-          title: pr.title,
-          author: pr.user.login,
-          authorAvatar: pr.user.avatar_url,
-          branch: pr.head.ref,
-          baseBranch: pr.base.ref,
-          url: pr.html_url,
-          createdAt: pr.created_at,
-          updatedAt: pr.updated_at,
-          draft: pr.draft,
-          repo: repoInfo.repo,
-          checksStatus,
-          openComments,
-          pendingTriage: triageCounts.get(`${repoInfo.repo}:${pr.number}`) ?? 0,
-          hasHumanApproval: poll?.hasHumanApproval ?? false,
-        };
-      }
+    async function buildRow(
+      repoPath: string,
+      pr: OpenPull,
+      poll: PullPollData | undefined,
+    ): Promise<Record<string, unknown>> {
+      const checksStatus = poll?.checksStatus
+        ?? (pr.head.sha ? await getPrStatusDeduped(repoPath, pr.head.sha) : "pending");
+      const openComments = poll
+        ? openTopLevelUnresolvedCount(poll.comments, poll.resolvedIds)
+        : 0;
+      return {
+        number: pr.number,
+        title: pr.title,
+        author: pr.user.login,
+        authorAvatar: pr.user.avatar_url ?? "",
+        branch: pr.head.ref,
+        baseBranch: pr.base?.ref ?? "",
+        url: pr.html_url,
+        createdAt: pr.created_at ?? "",
+        updatedAt: pr.updated_at ?? "",
+        draft: pr.draft ?? false,
+        repo: repoPath,
+        checksStatus,
+        openComments,
+        pendingTriage: triageCounts.get(`${repoPath}:${pr.number}`) ?? 0,
+        hasHumanApproval: poll?.hasHumanApproval ?? false,
+      };
+    }
 
+    for (const repoInfo of targetRepos) {
+      const selected = selectedByRepo.get(repoInfo.repo);
+      if (!selected) continue;
+      const pollByPr = pollDataByRepo.get(repoInfo.repo) ?? new Map();
       const authoredRows = await Promise.all(
-        myPulls.map((pr) => buildRow(pr, pollByPr.get(pr.number))),
+        selected.myPulls.map((pr) => buildRow(repoInfo.repo, pr, pollByPr.get(pr.number))),
       );
       const reviewRows = await Promise.all(
-        needsReview.map((pr) => buildRow(pr, pollByPr.get(pr.number))),
+        selected.needsReview.map((pr) => buildRow(repoInfo.repo, pr, pollByPr.get(pr.number))),
       );
       authored.push(...authoredRows);
       reviewRequested.push(...reviewRows);
+    }
+
+    return { authored, reviewRequested };
+  } finally {
+    prStatusDedupe = null;
+  }
+}
+
+/** TTL for per-repo cached closed authored PRs (ticket linking); avoids N GitHub calls every poll. */
+const CLOSED_AUTHORED_CACHE_TTL_MS = 15 * 60 * 1000;
+
+function loadClosedAuthoredCache(repo: string): LinkablePR[] | null {
+  try {
+    const sqlite = getRawSqlite();
+    const row = sqlite
+      .prepare(
+        "SELECT data_json, fetched_at_ms FROM repo_closed_authored_cache WHERE repo = ?",
+      )
+      .get(repo) as { data_json: string; fetched_at_ms: number } | undefined;
+    if (!row || Date.now() - row.fetched_at_ms > CLOSED_AUTHORED_CACHE_TTL_MS) return null;
+    return JSON.parse(row.data_json) as LinkablePR[];
+  } catch {
+    return null;
+  }
+}
+
+function saveClosedAuthoredCache(repo: string, items: LinkablePR[]): void {
+  try {
+    getRawSqlite()
+      .prepare(
+        `INSERT INTO repo_closed_authored_cache (repo, data_json, fetched_at_ms)
+         VALUES (?, ?, ?)
+         ON CONFLICT(repo) DO UPDATE SET data_json = excluded.data_json, fetched_at_ms = excluded.fetched_at_ms`,
+      )
+      .run(repo, JSON.stringify(items), Date.now());
+  } catch {
+    /* non-fatal */
+  }
+}
+
+/**
+ * Recently merged PRs authored by the viewer, for ticket-to-PR linking after open PRs drop off the sidebar.
+ * One list request per repo (`state=closed`, newest first). Uses a single page only — does not walk every `Link: rel=next` page (that was burning quota on high-volume repos).
+ */
+export async function fetchMergedAuthoredLinkablePRs(
+  targetRepos: RepoInfo[],
+  perRepoLimit = 100,
+): Promise<LinkablePR[]> {
+  const username = await getUsernameOrNull();
+  if (username == null) return [];
+
+  const out: LinkablePR[] = [];
+  for (const repoInfo of targetRepos) {
+    try {
+      const cached = loadClosedAuthoredCache(repoInfo.repo);
+      if (cached) {
+        out.push(...cached);
+        continue;
+      }
+      const pulls = await ghAsyncSinglePage<GhPull[]>(
+        `/repos/${repoInfo.repo}/pulls?state=closed&sort=updated&direction=desc&per_page=${perRepoLimit}`,
+        repoInfo.repo,
+      );
+      const repoItems: LinkablePR[] = [];
+      for (const pr of pulls) {
+        if (pr.user.login !== username) continue;
+        if (!pr.merged_at) continue;
+        repoItems.push({
+          number: pr.number,
+          repo: repoInfo.repo,
+          branch: pr.head.ref,
+          title: pr.title,
+          body: pr.body ?? "",
+        });
+      }
+      saveClosedAuthoredCache(repoInfo.repo, repoItems);
+      out.push(...repoItems);
     } catch {
       /* skip repos that fail (e.g., no access) */
     }
   }
-
-  return { authored, reviewRequested };
+  return out;
 }
 
 export function toInt(v: unknown, fallback: number): number {
@@ -227,8 +342,9 @@ export function serializeConfigForClient(c: Config): Record<string, unknown> {
     evalPromptAppend: c.evalPromptAppend ?? "",
     evalPromptAppendByRepo: c.evalPromptAppendByRepo ?? {},
     evalClaudeExtraArgs: c.evalClaudeExtraArgs ?? [],
-    repoPollStaleAfterDays: c.repoPollStaleAfterDays ?? 7,
-    repoPollColdIntervalMinutes: c.repoPollColdIntervalMinutes ?? 60,
+    repoPollStaleAfterDays: c.repoPollStaleAfterDays ?? 3,
+    repoPollColdIntervalMinutes: c.repoPollColdIntervalMinutes ?? 120,
+    repoPollSuperColdMultiplier: c.repoPollSuperColdMultiplier ?? 3,
     pollApiHeadroom: c.pollApiHeadroom ?? 0.35,
     pollRateLimitAware: c.pollRateLimitAware !== false,
     preferredEditor: c.preferredEditor ?? "vscode",
@@ -236,6 +352,12 @@ export function serializeConfigForClient(c: Config): Record<string, unknown> {
     hasLinearApiKey: Boolean(c.linearApiKey?.length),
     linearTeamKeys: c.linearTeamKeys ?? [],
     ticketProvider: c.ticketProvider ?? (c.linearApiKey ? "linear" : undefined),
+    coherence: {
+      branchStalenessDays: c.coherence?.branchStalenessDays ?? 3,
+      approvedUnmergedHours: c.coherence?.approvedUnmergedHours ?? 24,
+      reviewWaitHours: c.coherence?.reviewWaitHours ?? 24,
+      ticketInactivityDays: c.coherence?.ticketInactivityDays ?? 5,
+    },
   };
 }
 
@@ -355,14 +477,21 @@ export function mergeConfigFromBody(body: Record<string, unknown>, previous: Con
   if (body.repoPollStaleAfterDays === undefined || body.repoPollStaleAfterDays === null || body.repoPollStaleAfterDays === "") {
     repoPollStaleAfterDays = previous.repoPollStaleAfterDays;
   } else {
-    repoPollStaleAfterDays = Math.max(0, toInt(body.repoPollStaleAfterDays, previous.repoPollStaleAfterDays ?? 7));
+    repoPollStaleAfterDays = Math.max(0, toInt(body.repoPollStaleAfterDays, previous.repoPollStaleAfterDays ?? 3));
   }
 
   let repoPollColdIntervalMinutes: number | undefined;
   if (body.repoPollColdIntervalMinutes === undefined || body.repoPollColdIntervalMinutes === null || body.repoPollColdIntervalMinutes === "") {
     repoPollColdIntervalMinutes = previous.repoPollColdIntervalMinutes;
   } else {
-    repoPollColdIntervalMinutes = Math.max(1, toInt(body.repoPollColdIntervalMinutes, previous.repoPollColdIntervalMinutes ?? 60));
+    repoPollColdIntervalMinutes = Math.max(1, toInt(body.repoPollColdIntervalMinutes, previous.repoPollColdIntervalMinutes ?? 120));
+  }
+
+  let repoPollSuperColdMultiplier: number | undefined;
+  if (body.repoPollSuperColdMultiplier === undefined || body.repoPollSuperColdMultiplier === null || body.repoPollSuperColdMultiplier === "") {
+    repoPollSuperColdMultiplier = previous.repoPollSuperColdMultiplier ?? 3;
+  } else {
+    repoPollSuperColdMultiplier = Math.max(1, toInt(body.repoPollSuperColdMultiplier, previous.repoPollSuperColdMultiplier ?? 3));
   }
 
   let pollApiHeadroom: number | undefined;
@@ -396,6 +525,29 @@ export function mergeConfigFromBody(body: Record<string, unknown>, previous: Con
     linearTeamKeys = body.linearTeamKeys.length > 0 ? body.linearTeamKeys : undefined;
   }
 
+  const coherenceBody = (typeof body.coherence === "object" && body.coherence !== null)
+    ? body.coherence as Record<string, unknown>
+    : undefined;
+  const previousCoherence = previous.coherence ?? {};
+  const coherence = {
+    branchStalenessDays: toInt(
+      coherenceBody?.branchStalenessDays,
+      previousCoherence.branchStalenessDays ?? 3,
+    ),
+    approvedUnmergedHours: toInt(
+      coherenceBody?.approvedUnmergedHours,
+      previousCoherence.approvedUnmergedHours ?? 24,
+    ),
+    reviewWaitHours: toInt(
+      coherenceBody?.reviewWaitHours,
+      previousCoherence.reviewWaitHours ?? 24,
+    ),
+    ticketInactivityDays: toInt(
+      coherenceBody?.ticketInactivityDays,
+      previousCoherence.ticketInactivityDays ?? 5,
+    ),
+  };
+
   return {
     root,
     port,
@@ -411,12 +563,14 @@ export function mergeConfigFromBody(body: Record<string, unknown>, previous: Con
     evalClaudeExtraArgs,
     repoPollStaleAfterDays,
     repoPollColdIntervalMinutes,
+    repoPollSuperColdMultiplier,
     pollApiHeadroom,
     pollRateLimitAware,
     preferredEditor,
     fixConversationMaxTurns,
     linearApiKey,
     linearTeamKeys,
+    coherence,
   };
 }
 
@@ -555,7 +709,7 @@ export function registerRoutes(): void {
 
   // GET /api/user
   addRoute("GET", "/api/user", async (_req, res) => {
-    const user = await getCachedGitHubUser();
+    const user = await getGitHubViewerCached();
     if (!user) {
       json(res, { login: "", avatarUrl: "", url: "", degraded: true });
       return;
@@ -980,6 +1134,15 @@ export function registerRoutes(): void {
   // POST /api/actions/clear-repo-poll-schedule — wipe `repo_poll` so the next CLI poll recomputes adaptive hot/cold
   addRoute("POST", "/api/actions/clear-repo-poll-schedule", async (_req, res) => {
     clearRepoPollSchedule();
+    json(res, { ok: true });
+  });
+
+  // POST /api/actions/poll-now — same as CLI hotkey [r] (GitHub + tickets + coherence); unavailable in demo mode
+  addRoute("POST", "/api/actions/poll-now", async (_req, res) => {
+    if (!triggerManualPoll()) {
+      json(res, { ok: false, error: "Poll control not available" }, 503);
+      return;
+    }
     json(res, { ok: true });
   });
 
@@ -1649,5 +1812,33 @@ export function registerRoutes(): void {
     } catch (err) {
       json(res, { error: (err as Error).message }, 500);
     }
+  });
+
+  // ── Attention feed ──
+
+  addRoute("GET", "/api/attention", async (_req, res, _params, query) => {
+    const { getAttentionItems } = await import("./attention.js");
+    const includeAll = query.get("all") === "true";
+    const items = getAttentionItems({ includeAll });
+    json(res, items);
+  });
+
+  addRoute("POST", "/api/attention/:id/snooze", async (req, res, params) => {
+    const { until } = getBody<{ until: string }>(req);
+    const { snoozeItem } = await import("./attention.js");
+    snoozeItem(decodeURIComponent(params.id), until);
+    json(res, { ok: true });
+  });
+
+  addRoute("POST", "/api/attention/:id/dismiss", async (_req, res, params) => {
+    const { dismissItem } = await import("./attention.js");
+    dismissItem(decodeURIComponent(params.id));
+    json(res, { ok: true });
+  });
+
+  addRoute("POST", "/api/attention/:id/pin", async (_req, res, params) => {
+    const { pinItem } = await import("./attention.js");
+    pinItem(decodeURIComponent(params.id));
+    json(res, { ok: true });
   });
 }

@@ -3,6 +3,10 @@ export interface TicketIssue {
   identifier: string;
   title: string;
   state: { name: string; color: string; type: string };
+  /** Provider-derived terminal marker (e.g. Linear completedAt/canceledAt). */
+  isDone?: boolean;
+  /** GitHub PRs linked in the ticket provider (e.g. Linear attachments). */
+  providerLinkedPulls?: Array<{ number: number; repo: string; title: string }>;
   priority: number;
   assignee?: { name: string; avatarUrl?: string };
   labels: Array<{ name: string; color: string }>;

@@ -90,6 +90,8 @@ export interface AppConfigPayload {
   repoPollStaleAfterDays: number;
   /** Minutes between polls for inactive repos. */
   repoPollColdIntervalMinutes: number;
+  /** Multiplier for very cold repos with no recorded activity. */
+  repoPollSuperColdMultiplier: number;
   /** Reserve this fraction of GitHub quota for UI (0–0.95). Default 0.35. */
   pollApiHeadroom: number;
   /** Stretch poll interval when quota is tight (default true). */
@@ -104,6 +106,27 @@ export interface AppConfigPayload {
   linearTeamKeys: string[];
   /** Active ticket provider, if configured. */
   ticketProvider?: "linear";
+  coherence: {
+    branchStalenessDays: number;
+    approvedUnmergedHours: number;
+    reviewWaitHours: number;
+    ticketInactivityDays: number;
+  };
+}
+
+export interface AttentionItem {
+  id: string;
+  type: string;
+  entityKind: "pr" | "ticket";
+  entityIdentifier: string;
+  priority: "high" | "medium" | "low";
+  title: string;
+  stage?: string;
+  stuckSince?: string;
+  firstSeenAt: string;
+  snoozedUntil?: string;
+  dismissedAt?: string;
+  pinned: boolean;
 }
 
 export interface ConfigGetResponse {
@@ -145,6 +168,15 @@ export interface PollStatus {
     totalEvalsThisSession: number;
     totalFixesThisSession: number;
   };
+  githubRequestStats?: {
+    total: number;
+    byMethod: Record<string, number>;
+    byFamily: Record<string, number>;
+  };
+  linearRequestStats?: {
+    total: number;
+    byOperation: Record<string, number>;
+  };
 }
 
 export interface PullsBundleResponse {
@@ -174,6 +206,8 @@ export const api = {
   getFileContent: (prNumber: number, path: string, repo: string) => fetchJSON<{ content: string; path: string }>(`/api/pulls/${prNumber}/files/${path}${repoQueryRequired(repo)}`),
   getState: () => fetchJSON<CrWatchState>("/api/state"),
   getPollStatus: () => fetchJSON<PollStatus>("/api/poll-status"),
+  /** Same as CLI [r] — full GitHub + tickets + coherence poll. */
+  requestPollNow: () => postJSON<{ ok: boolean }>("/api/actions/poll-now", {}),
   replyToComment: (repo: string, commentId: number, prNumber: number) =>
     postJSON<{ success: boolean }>("/api/actions/reply", { repo, commentId, prNumber }),
   resolveComment: (repo: string, commentId: number, prNumber: number) =>
@@ -228,4 +262,13 @@ export const api = {
   getTicketDetail: (id: string) => fetchJSON<TicketIssueDetail>(`/api/tickets/${encodeURIComponent(id)}`),
   getTicketTeams: () => fetchJSON<Array<{ id: string; key: string; name: string }>>("/api/tickets/teams"),
   getTicketLinkMap: () => fetchJSON<{ ticketToPRs: Record<string, Array<{ number: number; repo: string; title: string }>>; prToTickets: Record<string, string[]> }>("/api/tickets/link-map"),
+  // Attention
+  getAttentionItems: (all?: boolean) =>
+    fetchJSON<AttentionItem[]>(`/api/attention${all ? "?all=true" : ""}`),
+  snoozeAttentionItem: (id: string, until: string) =>
+    postJSON<{ ok: boolean }>(`/api/attention/${encodeURIComponent(id)}/snooze`, { until }),
+  dismissAttentionItem: (id: string) =>
+    postJSON<{ ok: boolean }>(`/api/attention/${encodeURIComponent(id)}/dismiss`, {}),
+  pinAttentionItem: (id: string) =>
+    postJSON<{ ok: boolean }>(`/api/attention/${encodeURIComponent(id)}/pin`, {}),
 };

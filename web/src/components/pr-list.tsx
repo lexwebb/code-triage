@@ -4,6 +4,7 @@ import { Check, X, Circle } from "lucide-react";
 import { StatusBadge } from "./ui/status-badge";
 import { useAppStore } from "../store";
 import { useNavigate } from "@tanstack/react-router";
+import { LifecycleBar, deriveLifecycleStage } from "./lifecycle-bar";
 
 interface PRListProps {
   pulls: PullRequest[];
@@ -40,6 +41,9 @@ function StatusIcon({ pr }: { pr: PullRequest }) {
 export default function PRList({ pulls, showRepo }: PRListProps) {
   const selectedPR = useAppStore((s) => s.selectedPR);
   const setMobileDrawerOpen = useAppStore((s) => s.setMobileDrawerOpen);
+  const prToTickets = useAppStore((s) => s.prToTickets);
+  const myTickets = useAppStore((s) => s.myTickets);
+  const repoLinkedTickets = useAppStore((s) => s.repoLinkedTickets);
   const navigate = useNavigate();
   if (pulls.length === 0) {
     return (
@@ -57,6 +61,23 @@ export default function PRList({ pulls, showRepo }: PRListProps) {
         const mergeReady = pr.checksStatus === "success" && pr.openComments === 0 && pr.hasHumanApproval;
         const failed = pr.checksStatus === "failure";
         const pendingTriage = pr.pendingTriage ?? 0;
+        const prKeyRef = `${pr.repo}#${pr.number}`;
+        const ticketIds = prToTickets[prKeyRef] ?? [];
+        const linkedTicket = [...myTickets, ...repoLinkedTickets].find((t) =>
+          ticketIds.includes(t.identifier),
+        );
+        const stage = linkedTicket
+          ? deriveLifecycleStage({
+            ticketState: linkedTicket.state.type,
+            ticketStateName: linkedTicket.state.name,
+            isDone: linkedTicket.isDone,
+            hasBranch: true,
+            prOpen: true,
+            approved: pr.hasHumanApproval,
+            merged: false,
+            ticketClosed: linkedTicket.state.type === "completed" || linkedTicket.state.type === "canceled",
+          })
+          : undefined;
 
         let bgClass = "";
         if (isSelected) {
@@ -107,6 +128,7 @@ export default function PRList({ pulls, showRepo }: PRListProps) {
               {showRepo && <span className="text-gray-600 mr-1">{pr.repo.split("/")[1]}</span>}
               {pr.branch}
             </div>
+            {stage && <LifecycleBar currentStage={stage} compact className="mt-1" />}
           </button>
         );
       })}

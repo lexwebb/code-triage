@@ -7,7 +7,13 @@ import { clampEvalConcurrency, killAllChildren } from "./actioner.js";
 import { enqueueMany, recoverQueue, startWorker, stopWorker } from "./eval-queue.js";
 import { loadFixQueue, advanceQueue as advanceFixQueue } from "./fix-queue.js";
 import { cleanupAllWorktrees, pruneOrphanedWorktrees } from "./worktree.js";
-import { setTokenResolver, resolveGitHubTokenFromSources, hasEnvGitHubToken, getRateLimitState } from "./exec.js";
+import {
+  setTokenResolver,
+  resolveGitHubTokenFromSources,
+  hasEnvGitHubToken,
+  getRateLimitState,
+  getGitHubRequestStatsSnapshot,
+} from "./exec.js";
 import {
   enableRawMode,
   registerHotkeys,
@@ -17,16 +23,45 @@ import {
   setProcessing,
   cleanup as cleanupTerminal,
 } from "./terminal.js";
-import { startServer, updateRepos, updatePollState, sseBroadcast, setConfigSavedHandler, loadPersistedFixJobResults, updateTicketState } from "./server.js";
+import {
+  startServer,
+  updateRepos,
+  updatePollState,
+  sseBroadcast,
+  setConfigSavedHandler,
+  setManualPollHandler,
+  loadPersistedFixJobResults,
+  updateTicketState,
+  getTicketState,
+} from "./server.js";
 import { getTicketProvider, clearTicketProviderCache } from "./tickets/index.js";
-import { extractTicketIdentifiers, buildLinkMap, type LinkablePR } from "./tickets/linker.js";
+import {
+  extractTicketIdentifiers,
+  buildLinkMap,
+  mergeProviderPullLinksIntoLinkMap,
+  type LinkablePR,
+} from "./tickets/linker.js";
 import { initPush, processPolledData, startReviewReminder, sendTestPush } from "./push.js";
-import { buildPullSidebarLists } from "./api.js";
+import { buildPullSidebarLists, fetchMergedAuthoredLinkablePRs } from "./api.js";
+import { evaluateCoherence, type CoherenceInput, type CoherencePR } from "./coherence.js";
+import { refreshAttentionFeed, shouldLogAttentionPipeline } from "./attention.js";
 import { discoverRepos, type RepoInfo } from "./discovery.js";
 import { filterRepoPathsWithPushAccess, loadCachedPushAccess } from "./github-batching.js";
 import { loadConfig, saveConfig, configExists, type Config } from "./config.js";
 import { computeEffectivePollIntervalMs, estimatePollRequestCount } from "./poll-rate-budget.js";
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 import { recordPollOutcomes, selectReposToPoll } from "./repo-poll-schedule.js";
+
+const LINEAR_RATE_LIMIT_BACKOFF_MS = 10 * 60_000;
+let linearRateLimitBackoffUntilMs = 0;
+
+function isLinearRateLimitError(err: unknown): boolean {
+  const msg = (err as Error | undefined)?.message?.toLowerCase() ?? "";
+  return msg.includes("rate limit exceeded") && msg.includes("linear");
+}
 
 const { values: flags } = parseArgs({
   options: {
@@ -236,7 +271,8 @@ if (flags.repo) {
   }
 }
 
-// In dev mode, use cached push-access results to avoid GitHub API calls on every hot reload
+// In dev mode, prefer cached push-access to avoid refetching on every hot reload; without cache, resolve once
+// (same as production) so we do not poll read-only / inaccessible clones. Opt out: CODE_TRIAGE_DEV_POLL_ALL_REPOS=1.
 const devStartup = process.env.NODE_ENV === "development" || process.env.npm_lifecycle_event === "dev";
 if (!devStartup) {
   repos = await filterReposToPushAccess(repos);
@@ -249,8 +285,13 @@ if (!devStartup) {
     if (skipped > 0) {
       console.log(`  Dev mode: filtered ${skipped} repo(s) without push access (cached).`);
     }
+  } else if (process.env.CODE_TRIAGE_DEV_POLL_ALL_REPOS === "1") {
+    console.log(
+      `  Dev mode: CODE_TRIAGE_DEV_POLL_ALL_REPOS=1 — not filtering by push access (${repos.length} repo(s)).`,
+    );
   } else {
-    console.log(`  Dev mode: no push-access cache — polling all ${repos.length} repos. Press 'd' to discover and cache.`);
+    console.log(`  Dev mode: no push-access cache — resolving push access once (then cached).`);
+    repos = await filterReposToPushAccess(repos);
   }
 }
 if (repos.length === 0 && (flags.repo || configExists())) {
@@ -406,6 +447,7 @@ async function poll(): Promise<void> {
   clearCountdown();
 
   let reposPolledCount = 0;
+  const ghStatsStart = getGitHubRequestStatsSnapshot();
   try {
     const state = loadState();
     const allRepoPaths = repos.map((r) => r.repo);
@@ -415,6 +457,7 @@ async function poll(): Promise<void> {
       ? selectReposToPoll(allRepoPaths, Date.now(), {
           staleAfterDays: staleDays,
           coldIntervalMinutes: config.repoPollColdIntervalMinutes ?? 60,
+          superColdMultiplier: config.repoPollSuperColdMultiplier ?? 3,
         })
       : allRepoPaths;
     reposPolledCount = reposToPoll.length;
@@ -482,22 +525,51 @@ async function poll(): Promise<void> {
     const now = new Date().toLocaleTimeString();
     setStatus(`[${now}] Analyzed ${reposToPoll.length} of ${allRepoPaths.length} repo(s).`);
     updatePollState({ lastPoll: Date.now(), polling: false, lastPollError: null });
-    sseBroadcast("poll", { ok: true, at: Date.now() });
+
+    /** One `buildPullSidebarLists` per poll (tickets, coherence, push) — avoids 3× GitHub fan-out. */
+    let sidebarListsMemo: Awaited<ReturnType<typeof buildPullSidebarLists>> | null = null;
+    async function getSidebarListsOnce() {
+      if (!sidebarListsMemo) sidebarListsMemo = await buildPullSidebarLists(repos);
+      return sidebarListsMemo;
+    }
+
     // ── Ticket polling ──
     try {
       const provider = await getTicketProvider(config);
       if (provider) {
-        const myIssues = await provider.fetchMyIssues();
+        if (Date.now() < linearRateLimitBackoffUntilMs) {
+          const mins = Math.ceil((linearRateLimitBackoffUntilMs - Date.now()) / 60_000);
+          if (shouldLogAttentionPipeline()) {
+            console.error(`[tickets] Linear rate-limit backoff active (${mins}m remaining)`);
+          }
+        } else {
+        let myIssues = await provider.fetchMyIssues();
+        const prevMine = getTicketState().myIssues;
+        // Linear occasionally returns an empty page; re-fetch before replacing a non-empty snapshot.
+        if (myIssues.length === 0 && prevMine.length > 0) {
+          await delay(400);
+          myIssues = await provider.fetchMyIssues();
+        }
+        if (myIssues.length === 0 && prevMine.length > 0) {
+          await delay(900);
+          myIssues = await provider.fetchMyIssues();
+        }
 
-        // Build linkable PRs from the current PR data
-        const lists = await buildPullSidebarLists(repos);
-        const linkablePRs: LinkablePR[] = [...lists.authored, ...lists.reviewRequested].map((p) => ({
+        // Open PRs plus recently merged (authored) so ticket links survive after merge
+        const lists = await getSidebarListsOnce();
+        const mergedForLinks = await fetchMergedAuthoredLinkablePRs(repos);
+        const openLinkable: LinkablePR[] = [...lists.authored, ...lists.reviewRequested].map((p) => ({
           number: p.number as number,
           repo: p.repo as string,
           branch: p.branch as string,
           title: p.title as string,
           body: "",
         }));
+        const openKeys = new Set(openLinkable.map((p) => `${p.repo}#${p.number}`));
+        const linkablePRs: LinkablePR[] = [
+          ...openLinkable,
+          ...mergedForLinks.filter((p) => !openKeys.has(`${p.repo}#${p.number}`)),
+        ];
 
         // Extract all candidate identifiers from PRs
         const allIdentifiers = new Set(linkablePRs.flatMap(extractTicketIdentifiers));
@@ -513,15 +585,121 @@ async function poll(): Promise<void> {
           ...repoLinkedIssues.map((i) => i.identifier),
         ]);
         const linkMap = buildLinkMap(linkablePRs, validIds);
+        for (const issue of [...myIssues, ...repoLinkedIssues]) {
+          const extra = issue.providerLinkedPulls;
+          if (extra?.length) {
+            mergeProviderPullLinksIntoLinkMap(linkMap, issue.identifier, extra);
+          }
+        }
 
         updateTicketState({ myIssues, repoLinkedIssues, linkMap });
+        }
+      } else if (shouldLogAttentionPipeline()) {
+        console.error("[tickets] no ticket provider configured — skipping Linear poll; ticket/link map left as-is");
       }
     } catch (err) {
+      if (isLinearRateLimitError(err)) {
+        linearRateLimitBackoffUntilMs = Date.now() + LINEAR_RATE_LIMIT_BACKOFF_MS;
+      }
       console.error(`\n  Ticket poll error: ${(err as Error).message}`);
     }
+    // ── Coherence evaluation ──
+    try {
+      const lists = await getSidebarListsOnce();
+      const tState = getTicketState();
+
+      const toPRsRecord: Record<string, Array<{ number: number; repo: string; title: string }>> = {};
+      for (const [k, v] of tState.linkMap.ticketToPRs) {
+        toPRsRecord[k] = v;
+      }
+      const toTicketsRecord: Record<string, string[]> = {};
+      for (const [k, v] of tState.linkMap.prToTickets) {
+        toTicketsRecord[k] = v;
+      }
+
+      const mapPR = (p: Record<string, unknown>): CoherencePR => ({
+        number: p.number as number,
+        repo: p.repo as string,
+        title: p.title as string,
+        branch: p.branch as string,
+        updatedAt: p.updatedAt as string,
+        checksStatus: p.checksStatus as string,
+        hasHumanApproval: p.hasHumanApproval as boolean,
+        merged: false,
+        reviewers: [],
+        pendingTriage: p.pendingTriage as number | undefined,
+      });
+
+      const coherenceInput: CoherenceInput = {
+        myTickets: tState.myIssues,
+        repoLinkedTickets: tState.repoLinkedIssues,
+        authoredPRs: lists.authored.map(mapPR),
+        reviewRequestedPRs: lists.reviewRequested.map(mapPR),
+        ticketToPRs: toPRsRecord,
+        prToTickets: toTicketsRecord,
+        thresholds: {
+          branchStalenessDays: config.coherence?.branchStalenessDays ?? 3,
+          approvedUnmergedHours: config.coherence?.approvedUnmergedHours ?? 24,
+          reviewWaitHours: config.coherence?.reviewWaitHours ?? 24,
+          ticketInactivityDays: config.coherence?.ticketInactivityDays ?? 5,
+        },
+        now: Date.now(),
+      };
+
+      if (shouldLogAttentionPipeline()) {
+        const ticketKeys = Object.keys(toPRsRecord).length;
+        const prKeys = Object.keys(toTicketsRecord).length;
+        const withProviderPrs = tState.myIssues.filter((i) => (i.providerLinkedPulls?.length ?? 0) > 0).length;
+        console.error(
+          `[coherence] link map: myIssues=${tState.myIssues.length} repoLinked=${tState.repoLinkedIssues.length} ` +
+            `ticket→PR=${ticketKeys} pr→ticket=${prKeys} myIssuesWithProviderLinkedPRs=${withProviderPrs}`,
+        );
+        const startedNoSignal = tState.myIssues.filter(
+          (i) =>
+            i.state.type === "started"
+            && !(toPRsRecord[i.identifier]?.length)
+            && !(i.providerLinkedPulls?.length),
+        );
+        if (startedNoSignal.length > 0) {
+          const show = startedNoSignal.slice(0, 20).map((i) => i.identifier);
+          const tail = startedNoSignal.length > 20 ? ` …(+${startedNoSignal.length - 20} more)` : "";
+          console.error(
+            `[coherence] WARNING ${startedNoSignal.length} started "mine" ticket(s) have neither ticketToPRs nor providerLinkedPulls — ticket-no-pr likely: ${show.join(", ")}${tail}`,
+          );
+        }
+      }
+
+      const alerts = evaluateCoherence(coherenceInput);
+      const { added, removed } = refreshAttentionFeed(alerts);
+      if (added > 0 || removed > 0) {
+        sseBroadcast("attention", { updated: true, added, removed });
+      }
+      if (added > 0) {
+        try {
+          const { getAttentionItems } = await import("./attention.js");
+          const items = getAttentionItems();
+          const highPriority = items.filter((i) => i.priority === "high");
+          if (highPriority.length > 0) {
+            const notifier = await import("node-notifier");
+            notifier.default.notify({
+              title: "Code Triage - Needs Attention",
+              message: highPriority.length === 1
+                ? highPriority[0]!.title
+                : `${highPriority.length} high-priority items need your attention`,
+            });
+          }
+        } catch {
+          // Notification failures are non-fatal.
+        }
+      }
+    } catch (err) {
+      console.error(`\n  Coherence evaluation error: ${(err as Error).message}`);
+    }
+    // After tickets + coherence so /api/attention and link maps match this poll cycle
+    sseBroadcast("poll", { ok: true, at: Date.now() });
     // Feed poll data to push notification module
     try {
-      const lists = await buildPullSidebarLists(repos);
+      const lists = await getSidebarListsOnce();
       processPolledData({
         authored: lists.authored.map((p) => ({
           repo: p.repo as string,
@@ -552,8 +730,21 @@ async function poll(): Promise<void> {
 
   running = false;
   setProcessing(false);
+  const ghStatsEnd = getGitHubRequestStatsSnapshot();
+  const totalDelta = ghStatsEnd.total - ghStatsStart.total;
+  if (totalDelta > 0) {
+    const families = Object.entries(ghStatsEnd.byFamily)
+      .map(([k, v]) => [k, v - (ghStatsStart.byFamily[k] ?? 0)] as const)
+      .filter(([, v]) => v > 0)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 6);
+    const familyText = families.map(([k, v]) => `${k}:${v}`).join(", ");
+    console.log(`  GitHub usage this poll: ${totalDelta} request(s)${familyText ? ` [${familyText}]` : ""}`);
+  }
   schedulePoll(reposPolledCount);
 }
+
+setManualPollHandler(() => poll());
 
 async function listPRs(): Promise<void> {
   if (running) return;
@@ -660,10 +851,27 @@ registerHotkeys([
 ]);
 
 // Initial poll, then enter interactive mode
-// In dev mode, skip the initial poll to avoid burning GitHub API quota on every hot reload
+// In dev mode, skip the blocking initial poll by default (saves quota on nodemon reload).
+// A short delayed warmup still runs so ticket/coherence/attention logs and API state update without pressing [r].
+if (shouldLogAttentionPipeline()) {
+  const skipWarmup = isDev && process.env.CODE_TRIAGE_SKIP_DEV_WARMUP === "1";
+  console.error(
+    `[code-triage] attention/coherence logs go to stderr. ` +
+      (isDev
+        ? skipWarmup
+          ? "Dev: warmup poll off (CODE_TRIAGE_SKIP_DEV_WARMUP=1) — use the web sidebar “poll now” button, or wait for the interval ([r] needs a TTY)."
+          : "Dev: first poll in ~4s (set CODE_TRIAGE_SKIP_DEV_WARMUP=1 to skip). Under concurrently, use the web “poll now” control if [r] does not work."
+        : "Each poll cycle ends with [coherence] / [attention] lines."),
+  );
+}
 if (isDev) {
-  console.log("  Dev mode: skipping initial poll (press 'r' to poll manually)");
+  console.log("  Dev mode: skipping immediate poll (warmup or [r] / interval)");
   schedulePoll(repos.length);
+  if (process.env.CODE_TRIAGE_SKIP_DEV_WARMUP !== "1") {
+    setTimeout(() => {
+      void poll();
+    }, 4000);
+  }
 } else {
   await poll();
 }

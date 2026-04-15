@@ -33,8 +33,14 @@ export interface Config {
    * `repoPollColdIntervalMinutes` instead of every `interval`. Set to `0` to disable (always poll all repos each cycle).
    */
   repoPollStaleAfterDays?: number;
-  /** Minimum minutes between polls for a “cold” repo. Default 60. */
+  /** Minimum minutes between polls for a “cold” repo. Default 120. */
   repoPollColdIntervalMinutes?: number;
+  /**
+   * Additional multiplier for repos with no recorded activity yet (`last_activity_ms = 0`).
+   * Effective cold spacing = `repoPollColdIntervalMinutes * repoPollSuperColdMultiplier`.
+   * Default 3.
+   */
+  repoPollSuperColdMultiplier?: number;
   /**
    * Fraction of GitHub’s remaining hourly quota to reserve for UI/API use (reviewing PRs, loading files, fixes).
    * Used when stretching the poll interval; default 0.35 (~35%).
@@ -52,6 +58,13 @@ export interface Config {
   linearTeamKeys?: string[];
   /** Active ticket provider. Defaults to "linear" when linearApiKey is present. */
   ticketProvider?: "linear";
+  /** Coherence engine thresholds for the attention feed. */
+  coherence?: {
+    branchStalenessDays?: number;
+    approvedUnmergedHours?: number;
+    reviewWaitHours?: number;
+    ticketInactivityDays?: number;
+  };
 }
 
 const DEFAULTS: Config = {
@@ -60,11 +73,18 @@ const DEFAULTS: Config = {
   interval: 1,
   evalConcurrency: 2,
   pollReviewRequested: false,
-  repoPollStaleAfterDays: 7,
-  repoPollColdIntervalMinutes: 60,
+  repoPollStaleAfterDays: 3,
+  repoPollColdIntervalMinutes: 120,
+  repoPollSuperColdMultiplier: 3,
   pollApiHeadroom: 0.35,
   pollRateLimitAware: true,
   fixConversationMaxTurns: 5,
+  coherence: {
+    branchStalenessDays: 3,
+    approvedUnmergedHours: 24,
+    reviewWaitHours: 24,
+    ticketInactivityDays: 5,
+  },
 };
 
 export function loadConfig(): Config {

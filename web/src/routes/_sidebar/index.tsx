@@ -5,6 +5,6 @@ export const Route = createRoute({
   getParentRoute: () => sidebarRoute,
   path: "/",
   beforeLoad: () => {
-    throw redirect({ to: "/reviews" });
+    throw redirect({ to: "/attention" });
   },
 });

@@ -1,5 +1,6 @@
 import { ghGraphQL, partitionEntriesByToken, partitionRepoPathsByToken } from "./exec.js";
 import { getRawSqlite, openStateDatabase } from "./db/client.js";
+import { reduceCiToTriState, type CiChecksSummary, type CiLegacyStatus, type CiTriState } from "./ci-state.js";
 
 /** Open PRs per repo in one GraphQL round-trip chunk. */
 const REPO_LIST_CHUNK = 8;
@@ -34,9 +35,13 @@ export function isRepositoryWritePermission(permission: string | null | undefine
 export interface OpenPull {
   number: number;
   title: string;
-  user: { login: string };
-  head: { ref: string };
+  user: { login: string; avatar_url?: string };
+  head: { ref: string; sha?: string };
+  base?: { ref: string };
   html_url: string;
+  created_at?: string;
+  updated_at?: string;
+  draft?: boolean;
   requested_reviewers: Array<{ login: string }>;
 }
 
@@ -127,8 +132,13 @@ type GqlOpenPullNode = {
   number: number;
   title: string;
   url: string;
-  author: { login: string } | null;
+  author: { login: string; avatarUrl?: string } | null;
   headRefName: string;
+  headRefOid?: string;
+  baseRefName?: string;
+  createdAt?: string;
+  updatedAt?: string;
+  isDraft?: boolean;
   reviewRequests: {
     nodes: Array<{ requestedReviewer: { login?: string } | null }>;
   } | null;
@@ -143,9 +153,16 @@ function gqlOpenPullToOpenPull(node: GqlOpenPullNode): OpenPull {
   return {
     number: node.number,
     title: node.title,
-    user: { login: node.author?.login ?? "ghost" },
-    head: { ref: node.headRefName },
+    user: {
+      login: node.author?.login ?? "ghost",
+      avatar_url: node.author?.avatarUrl,
+    },
+    head: { ref: node.headRefName, sha: node.headRefOid },
+    base: node.baseRefName ? { ref: node.baseRefName } : undefined,
     html_url: node.url,
+    created_at: node.createdAt,
+    updated_at: node.updatedAt,
+    draft: node.isDraft ?? false,
     requested_reviewers: reviewers,
   };
 }
@@ -173,8 +190,16 @@ async function fetchOpenPullRequestsForReposUncached(repoPaths: string[]): Promi
               number
               title
               url
-              author { login }
+              author {
+                login
+                ... on User { avatarUrl }
+              }
               headRefName
+              headRefOid
+              baseRefName
+              createdAt
+              updatedAt
+              isDraft
               reviewRequests(first: 40) {
                 nodes {
                   requestedReviewer {
@@ -307,7 +332,19 @@ export type PullPollData = {
   resolvedIds: Set<number>;
   comments: PullReviewCommentRow[];
   hasHumanApproval: boolean;
+  checksStatus?: CiTriState;
 };
+
+type GqlCheckRunNode = { status: string; conclusion: string | null } | null;
+type GqlCheckSuiteNode = {
+  status: string;
+  conclusion: string | null;
+  checkRuns: { nodes: GqlCheckRunNode[] } | null;
+} | null;
+type GqlCommitNode = {
+  status: { state: "success" | "failure" | "pending" | "error"; contexts: Array<{ id: string }> } | null;
+  checkSuites: { nodes: GqlCheckSuiteNode[] } | null;
+} | null;
 
 type PrPollNode = {
   reviewThreads: {
@@ -317,6 +354,7 @@ type PrPollNode = {
     }>;
   } | null;
   reviews: { nodes: Array<{ state: string; author: { login: string } | null }> } | null;
+  commits: { nodes: Array<{ commit: GqlCommitNode }> } | null;
 };
 
 const PULL_POLL_FIELDS = `
@@ -345,7 +383,85 @@ const PULL_POLL_FIELDS = `
   reviews(first: 100) {
     nodes { state author { login } }
   }
+  commits(last: 1) {
+    nodes {
+      commit {
+        ... on Commit {
+          status {
+            state
+            contexts { id }
+          }
+          checkSuites(first: 50) {
+            nodes {
+              status
+              conclusion
+              checkRuns(first: 100) {
+                nodes {
+                  status
+                  conclusion
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
 `;
+
+function summarizeChecksFromSuites(suites: GqlCheckSuiteNode[]): CiChecksSummary | null {
+  let success = 0;
+  let failure = 0;
+  let pending = 0;
+  let foundAny = false;
+
+  for (const suite of suites) {
+    if (!suite) continue;
+    const runs = suite.checkRuns?.nodes ?? [];
+    if (runs.length > 0) {
+      foundAny = true;
+      for (const run of runs) {
+        if (!run) continue;
+        if (run.status !== "completed") pending++;
+        else if (run.conclusion === "success" || run.conclusion === "skipped" || run.conclusion === "neutral") {
+          success++;
+        } else {
+          failure++;
+        }
+      }
+      continue;
+    }
+
+    // Fallback: no runs exposed, but suite itself carries a terminal state.
+    if (suite.status !== "completed") {
+      foundAny = true;
+      pending++;
+    } else if (suite.conclusion) {
+      foundAny = true;
+      if (suite.conclusion === "success" || suite.conclusion === "skipped" || suite.conclusion === "neutral") {
+        success++;
+      } else {
+        failure++;
+      }
+    }
+  }
+
+  if (!foundAny) return null;
+  return { success, failure, pending };
+}
+
+function deriveChecksStatusFromGraphQL(pr: PrPollNode): CiTriState | null {
+  const commit = pr.commits?.nodes?.[0]?.commit ?? null;
+  if (!commit) return null;
+  const status: CiLegacyStatus | null = commit.status
+    ? {
+        state: commit.status.state,
+        hasStatuses: (commit.status.contexts?.length ?? 0) > 0,
+      }
+    : null;
+  const checks = summarizeChecksFromSuites(commit.checkSuites?.nodes ?? []);
+  return reduceCiToTriState({ status, checks });
+}
 
 function mergePrPollIntoMap(
   entry: PullPollData,
@@ -366,6 +482,7 @@ function mergePrPollIntoMap(
   entry.hasHumanApproval = reviewNodes.some(
     (r) => r.state === "APPROVED" && r.author && !r.author.login.includes("[bot]"),
   );
+  entry.checksStatus = deriveChecksStatusFromGraphQL(pr) ?? undefined;
 }
 
 /**

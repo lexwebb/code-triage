@@ -86,3 +86,15 @@ describe("saveConfig", () => {
     expect(JSON.parse(json as string)).toMatchObject({ root: "/x", port: 3200 });
   });
 });
+
+describe("coherence config", () => {
+  it("provides default coherence thresholds", () => {
+    const config = loadConfig();
+    expect(config.coherence).toEqual({
+      branchStalenessDays: 3,
+      approvedUnmergedHours: 24,
+      reviewWaitHours: 24,
+      ticketInactivityDays: 5,
+    });
+  });
+});

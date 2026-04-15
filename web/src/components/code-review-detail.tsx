@@ -8,6 +8,8 @@ import PROverview from "./pr-overview";
 import ChecksPanel from "./checks-panel";
 import { cn } from "../lib/utils";
 import { useAppStore } from "../store";
+import { Skeleton } from "./ui/skeleton";
+import { LoadingBoundary, usePrDetailLoading } from "./loading-boundary";
 
 interface Props {
   owner?: string;
@@ -17,13 +19,23 @@ interface Props {
   file?: string;
 }
 
+function PrReviewDetailSkeleton() {
+  return (
+    <div className="flex-1 space-y-3 p-4">
+      <Skeleton className="h-20 w-full" />
+      <Skeleton className="h-10 w-full" />
+      <Skeleton className="h-64 w-full" />
+    </div>
+  );
+}
+
 export function CodeReviewDetail({ owner, repo, number, tab, file }: Props) {
   const navigate = useNavigate();
 
   const detail = useAppStore((s) => s.detail);
   const files = useAppStore((s) => s.files);
   const comments = useAppStore((s) => s.comments);
-  const prDetailLoading = useAppStore((s) => s.prDetailLoading);
+  const prDetailLoading = usePrDetailLoading();
   const prToTickets = useAppStore((s) => s.prToTickets);
   const navigateToLinkedTicket = useAppStore((s) => s.navigateToLinkedTicket);
 
@@ -82,23 +94,24 @@ export function CodeReviewDetail({ owner, repo, number, tab, file }: Props) {
     }
   }
 
-  if (prDetailLoading) {
-    return (
-      <div className="flex-1 flex items-center justify-center text-gray-500">
-        Loading...
-      </div>
-    );
-  }
-
   if (!detail) {
     return (
-      <div className="flex-1 flex items-center justify-center text-gray-500">
-        Select a pull request
-      </div>
+      <LoadingBoundary
+        when={prDetailLoading}
+        fallback={<PrReviewDetailSkeleton />}
+      >
+        <div className="flex-1 flex items-center justify-center text-gray-500">
+          Select a pull request
+        </div>
+      </LoadingBoundary>
     );
   }
 
   return (
+    <LoadingBoundary
+      when={prDetailLoading}
+      fallback={<PrReviewDetailSkeleton />}
+    >
     <>
       <PRDetail />
       {/* Tab bar */}
@@ -176,5 +189,6 @@ export function CodeReviewDetail({ owner, repo, number, tab, file }: Props) {
       )}
       {activeTab === "checks" && <ChecksPanel />}
     </>
+    </LoadingBoundary>
   );
 }

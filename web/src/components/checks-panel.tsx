@@ -17,6 +17,7 @@ import {
   ChevronDown,
   ChevronRight,
 } from "lucide-react";
+import { Skeleton } from "./ui/skeleton";
 
 function formatDuration(ms: number): string {
   const totalSec = Math.floor(ms / 1000);
@@ -173,9 +174,10 @@ export default function ChecksPanel() {
 
   if (suites === null) {
     return (
-      <div className="flex items-center justify-center p-8 text-gray-500">
-        <Loader2 size={20} className="animate-spin mr-2" />
-        Loading checks...
+      <div className="space-y-2 p-4">
+        <Skeleton className="h-10 w-full" />
+        <Skeleton className="h-10 w-full" />
+        <Skeleton className="h-10 w-full" />
       </div>
     );
   }

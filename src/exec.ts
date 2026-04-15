@@ -51,6 +51,12 @@ export interface GitHubRateLimitSnapshot {
   updatedAt: number;
 }
 
+export interface GitHubRequestStatsSnapshot {
+  total: number;
+  byMethod: Record<string, number>;
+  byFamily: Record<string, number>;
+}
+
 const emptyRateLimitSnapshot = (): GitHubRateLimitSnapshot => ({
   limited: false,
   resetAt: null,
@@ -61,6 +67,11 @@ const emptyRateLimitSnapshot = (): GitHubRateLimitSnapshot => ({
 });
 
 let rateLimitSnapshot: GitHubRateLimitSnapshot = emptyRateLimitSnapshot();
+let githubRequestStats: GitHubRequestStatsSnapshot = {
+  total: 0,
+  byMethod: {},
+  byFamily: {},
+};
 
 export function getRateLimitState(): GitHubRateLimitSnapshot {
   return { ...rateLimitSnapshot };
@@ -69,6 +80,47 @@ export function getRateLimitState(): GitHubRateLimitSnapshot {
 /** Vitest: reset between tests so snapshots do not leak. */
 export function resetRateLimitStateForTests(): void {
   rateLimitSnapshot = emptyRateLimitSnapshot();
+  githubRequestStats = { total: 0, byMethod: {}, byFamily: {} };
+  cachedGitHubViewer = null;
+  gitHubViewerInflight = null;
+}
+
+export function getGitHubRequestStatsSnapshot(): GitHubRequestStatsSnapshot {
+  return {
+    total: githubRequestStats.total,
+    byMethod: { ...githubRequestStats.byMethod },
+    byFamily: { ...githubRequestStats.byFamily },
+  };
+}
+
+function classifyGitHubRequestFamily(urlStr: string): string {
+  try {
+    const u = new URL(urlStr);
+    const p = u.pathname;
+    if (p === "/graphql") return "graphql";
+    if (p === "/user") return "user";
+    if (/\/pulls$/.test(p) && u.searchParams.get("state") === "open") return "pulls-open";
+    if (/\/pulls$/.test(p) && u.searchParams.get("state") === "closed") return "pulls-closed";
+    if (/\/pulls\/\d+\/files$/.test(p)) return "pull-files";
+    if (/\/pulls\/\d+\/reviews$/.test(p)) return "pull-reviews";
+    if (/\/pulls\/\d+\/comments$/.test(p) || /\/pulls\/comments\/\d+$/.test(p)) return "pull-comments";
+    if (/\/pulls\/\d+$/.test(p)) return "pull-detail";
+    if (/\/commits\/[^/]+\/status$/.test(p)) return "commit-status";
+    if (/\/commits\/[^/]+\/check-runs$/.test(p)) return "check-runs";
+    if (/\/commits\/[^/]+\/check-suites$/.test(p)) return "check-suites";
+    if (/\/check-runs\/\d+\/annotations$/.test(p)) return "check-annotations";
+    if (/\/contents\//.test(p)) return "contents";
+    return "rest-other";
+  } catch {
+    return "unknown";
+  }
+}
+
+function incrementGitHubRequestStats(method: string, urlStr: string): void {
+  const family = classifyGitHubRequestFamily(urlStr);
+  githubRequestStats.total += 1;
+  githubRequestStats.byMethod[method] = (githubRequestStats.byMethod[method] ?? 0) + 1;
+  githubRequestStats.byFamily[family] = (githubRequestStats.byFamily[family] ?? 0) + 1;
 }
 
 function applyRateLimitFromResponse(response: Response): void {
@@ -219,6 +271,7 @@ async function githubFetch(input: RequestInfo | URL, init?: RequestInit): Promis
   for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
     attempts = attempt + 1;
     response = await globalThis.fetch(input, init);
+    incrementGitHubRequestStats(method, urlStr);
     applyRateLimitFromResponse(response);
     if (response.status === 429 && attempt < MAX_RETRIES - 1) {
       await sleepUntilRateLimitReset(response);
@@ -277,6 +330,53 @@ export async function ghAsync<T>(endpoint: string, repo?: string): Promise<T> {
   }
 
   return (allResults ?? []) as T;
+}
+
+const GITHUB_VIEWER_CACHE_MS = 60_000;
+export type GitHubViewer = { login: string; avatar_url: string; html_url: string };
+let cachedGitHubViewer: { at: number; user: GitHubViewer } | null = null;
+let gitHubViewerInflight: Promise<GitHubViewer | null> | null = null;
+
+/**
+ * Cached GET /user for the default token — shared by CLI poll (`getGitHubLogin`) and HTTP API (sidebar, `/api/user`).
+ * Avoids duplicate `/user` when one poll calls both code paths.
+ *
+ * TTL 60s. On failure: returns last successful viewer if any (stale-while-error), else `null`.
+ */
+export async function getGitHubViewerCached(): Promise<GitHubViewer | null> {
+  const now = Date.now();
+  if (cachedGitHubViewer && now - cachedGitHubViewer.at < GITHUB_VIEWER_CACHE_MS) {
+    return cachedGitHubViewer.user;
+  }
+  if (!gitHubViewerInflight) {
+    gitHubViewerInflight = (async (): Promise<GitHubViewer | null> => {
+      try {
+        const user = await ghAsync<GitHubViewer>("/user");
+        cachedGitHubViewer = { at: Date.now(), user };
+        return user;
+      } catch {
+        if (cachedGitHubViewer) return cachedGitHubViewer.user;
+        return null;
+      } finally {
+        gitHubViewerInflight = null;
+      }
+    })();
+  }
+  return gitHubViewerInflight;
+}
+
+/**
+ * One GET only — does not follow `Link: rel="next"`. Use for list endpoints where the first page is enough
+ * (e.g. recent closed PRs); `ghAsync` would concatenate every page and can burn quota on busy repos.
+ */
+export async function ghAsyncSinglePage<T>(endpoint: string, repo?: string): Promise<T> {
+  const octokit = createOctokit(repo);
+  const url = endpoint.startsWith("http") ? endpoint : `${GH_API_BASE}${endpoint.startsWith("/") ? "" : "/"}${endpoint}`;
+  const octoResponse = (await octokit.request({
+    method: "GET",
+    url,
+  })) as { data: unknown };
+  return octoResponse.data as T;
 }
 
 export async function ghGraphQL<T>(query: string, variables: Record<string, unknown>, repo?: string): Promise<T> {

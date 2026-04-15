@@ -26,11 +26,10 @@ export const createAppSlice: SliceCreator<AppSlice> = (set, get) => ({
 
       if (r.needsSetup) return;
 
-      // Parallel init fetches
-      const [, , ,] = await Promise.allSettled([
+      // Pulls load via ServerQuerySync (TanStack Query) once appGate is ready
+      const [, ,] = await Promise.allSettled([
         api.getUser().then((u) => set({ currentUser: u.login || null })),
         api.getRepos().then((repos) => set({ repos })),
-        get().fetchPulls(true),
         api.getVersion().then((v) => {
           if (v.behind > 0) set({ updateAvailable: v });
         }),

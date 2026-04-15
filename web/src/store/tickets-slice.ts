@@ -1,4 +1,6 @@
 import { api } from "../api";
+import { getQueryClient } from "../lib/query-client";
+import { qk } from "../lib/query-keys";
 import type { SliceCreator, TicketsSlice } from "./types";
 import { router } from "../tanstack-router";
 
@@ -15,32 +17,63 @@ export const createTicketsSlice: SliceCreator<TicketsSlice> = (set, get) => ({
   fetchTickets: async () => {
     set({ ticketsLoading: true, ticketsError: null });
     try {
-      const [mine, repoLinked, linkMap] = await Promise.all([
-        api.getMyTickets(),
-        api.getRepoLinkedTickets(),
-        api.getTicketLinkMap(),
-      ]);
-      set({
-        myTickets: mine,
-        repoLinkedTickets: repoLinked,
-        prToTickets: linkMap.prToTickets,
-        ticketsLoading: false,
+      const result = await getQueryClient().fetchQuery({
+        queryKey: qk.tickets.bundle,
+        queryFn: async () => {
+          const [mineR, repoR, mapR] = await Promise.allSettled([
+            api.getMyTickets(),
+            api.getRepoLinkedTickets(),
+            api.getTicketLinkMap(),
+          ]);
+          if (mineR.status === "rejected") throw mineR.reason;
+          const mine = mineR.value;
+          const partialErr =
+            repoR.status === "rejected"
+              ? repoR.reason
+              : mapR.status === "rejected"
+                ? mapR.reason
+                : undefined;
+          if (partialErr) console.warn("Ticket sidebar partial load:", partialErr);
+          const repoLinked = repoR.status === "fulfilled" ? repoR.value : [];
+          const prToTickets = mapR.status === "fulfilled" ? mapR.value.prToTickets : {};
+          return { mine, repoLinked, prToTickets };
+        },
+        staleTime: 15_000,
       });
 
-      // Auto-select first ticket if none selected
-      if (!get().selectedTicket && mine.length > 0) {
-        void get().selectTicket(mine[0]!.id);
+      set({
+        myTickets: result.mine,
+        repoLinkedTickets: result.repoLinked,
+        prToTickets: result.prToTickets,
+        ticketsLoading: false,
+        ticketsError: null,
+      });
+
+      if (!get().selectedTicket && result.mine.length > 0) {
+        if (router.state.location.pathname === "/tickets") {
+          void router.navigate({
+            to: "/tickets/$ticketId",
+            params: { ticketId: result.mine[0]!.id },
+          });
+        } else {
+          void get().selectTicket(result.mine[0]!.id);
+        }
       }
     } catch (err) {
-      set({ ticketsError: (err as Error).message, ticketsLoading: false });
+      set({
+        ticketsError: (err as Error)?.message ?? "Failed to load tickets",
+        ticketsLoading: false,
+      });
     }
   },
 
   selectTicket: async (id) => {
     set({ selectedTicket: id, ticketDetail: null, ticketDetailLoading: true });
     try {
-      const detail = await api.getTicketDetail(id);
-      // Bail if user navigated away
+      const detail = await getQueryClient().fetchQuery({
+        queryKey: qk.tickets.detail(id),
+        queryFn: () => api.getTicketDetail(id),
+      });
       if (get().selectedTicket !== id) return;
       set({ ticketDetail: detail, ticketDetailLoading: false });
     } catch (err) {

@@ -5,11 +5,12 @@ import { readFileSync, existsSync } from "fs";
 import { join, extname } from "path";
 import { fileURLToPath } from "url";
 import type { RepoInfo } from "./discovery.js";
-import { getRateLimitState } from "./exec.js";
+import { getRateLimitState, getGitHubRequestStatsSnapshot } from "./exec.js";
 import { getRawSqlite, openStateDatabase } from "./db/client.js";
 import { getFixQueue } from "./fix-queue.js";
 import type { TicketIssue } from "./tickets/types.js";
 import type { LinkMap } from "./tickets/linker.js";
+import { getLinearRequestStatsSnapshot } from "./tickets/stats.js";
 
 declare module "http" {
   interface IncomingMessage {
@@ -92,6 +93,22 @@ export function notifyConfigSaved(): void {
   void Promise.resolve(onConfigSaved?.()).catch((e) => {
     console.error("Config reload failed:", (e as Error).message);
   });
+}
+
+let onManualPoll: (() => void | Promise<void>) | null = null;
+
+/** CLI registers this so the web UI / curl can run the same poll as hotkey [r]. */
+export function setManualPollHandler(handler: (() => void | Promise<void>) | null): void {
+  onManualPoll = handler;
+}
+
+/** Fire one full poll (GitHub + tickets + coherence). @returns false if no handler (e.g. demo server). */
+export function triggerManualPoll(): boolean {
+  if (!onManualPoll) return false;
+  void Promise.resolve(onManualPoll()).catch((e) => {
+    console.error("Manual poll failed:", (e as Error).message);
+  });
+  return true;
 }
 
 export function updateRepos(repos: RepoInfo[]): void {
@@ -242,6 +259,13 @@ export function subscribeSse(req: IncomingMessage, res: ServerResponse): void {
     }, 25_000),
   };
   sseClients.add(client);
+  // New clients miss prior `ticket-status` broadcasts; nudge them to load ticket sidebar state.
+  try {
+    res.write(`event: ticket-status\ndata: ${JSON.stringify({ updated: true })}\n\n`);
+  } catch {
+    clearInterval(client.keepAlive);
+    sseClients.delete(client);
+  }
 
   req.on("close", () => {
     clearInterval(client.keepAlive);
@@ -406,6 +430,8 @@ export function getPollState() {
     rateLimitResource: rl.resource,
     rateLimitUpdatedAt: rl.updatedAt,
     claude: getClaudeStats(),
+    githubRequestStats: getGitHubRequestStatsSnapshot(),
+    linearRequestStats: getLinearRequestStatsSnapshot(),
   };
 }
 

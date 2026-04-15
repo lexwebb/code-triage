@@ -1,6 +1,6 @@
 import { createRoute, Outlet, useMatchRoute } from "@tanstack/react-router";
 import { useShallow } from "zustand/react/shallow";
-import { Menu, Pause, Minus, PanelLeftClose, PanelLeftOpen } from "lucide-react";
+import { Menu, PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import { Route as rootRoute } from "./__root";
 import {
   useAppStore,
@@ -8,13 +8,16 @@ import {
   selectFilteredReviewRequested,
   selectMutedReviewPulls,
   selectTimerText,
-  formatDurationUntil,
 } from "../store";
 import RepoFilter from "../components/repo-selector";
 import PRList from "../components/pr-list";
+import {
+  PrDetailLoadingProvider,
+} from "../components/loading-boundary";
 import { TicketsSidebar } from "../components/tickets-sidebar";
 import { CollapsibleSection } from "../components/ui/collapsible-section";
 import { IconButton } from "../components/ui/icon-button";
+
 // eslint-disable-next-line react-refresh/only-export-components
 function MutedReviewSection() {
   const pulls = useAppStore(useShallow(selectMutedReviewPulls));
@@ -39,23 +42,12 @@ export const Route = createRoute({
   component: function SidebarLayout() {
     const matchRoute = useMatchRoute();
     const isTicketsRoute = !!matchRoute({ to: "/tickets", fuzzy: true });
+    const prDetailLoading = useAppStore((s) => s.prDetailLoading);
 
     // ── Store selectors ──
     const sidebarCollapsed = useAppStore((s) => s.sidebarCollapsed);
     const mobileDrawerOpen = useAppStore((s) => s.mobileDrawerOpen);
     const isWide = useAppStore((s) => s.isWide);
-    const githubUserUnavailable = useAppStore((s) => s.githubUserUnavailable);
-    const polling = useAppStore((s) => s.polling);
-    const pollPaused = useAppStore((s) => s.pollPaused);
-    const pollPausedReason = useAppStore((s) => s.pollPausedReason);
-    const rateLimited = useAppStore((s) => s.rateLimited);
-    const rateLimitResetAt = useAppStore((s) => s.rateLimitResetAt);
-    const rateLimitRemaining = useAppStore((s) => s.rateLimitRemaining);
-    const rateLimitLimit = useAppStore((s) => s.rateLimitLimit);
-    const lastPollError = useAppStore((s) => s.lastPollError);
-    const rateLimitNow = useAppStore((s) => s.rateLimitNow);
-    const claude = useAppStore((s) => s.claude);
-
     const filteredPulls = useAppStore(useShallow(selectFilteredAuthored));
     const filteredReviewPulls = useAppStore(useShallow(selectFilteredReviewRequested));
     const timerText = useAppStore(selectTimerText);
@@ -113,72 +105,6 @@ export const Route = createRoute({
                     />
                   </div>
                 )}
-                <div className="px-3 py-2 border-b border-gray-800 grid grid-cols-2 gap-x-4 text-[10px] text-gray-500">
-                  {/* GitHub column */}
-                  <div className="flex flex-col gap-1">
-                    <span className="text-gray-600 font-medium uppercase tracking-wide">GitHub</span>
-                    <div className="flex items-center gap-1.5">
-                      {polling && <span className="text-cyan-400/90">Polling…</span>}
-                      {pollPaused && (
-                        <span className="text-orange-400/90 flex items-center gap-1" title={pollPausedReason ?? "Polling paused"}><Pause size={12} /> Paused</span>
-                      )}
-                      {!polling && !pollPaused && !rateLimited && !lastPollError && (
-                        <span className="text-gray-600">Idle</span>
-                      )}
-                      {rateLimited && <span className="text-amber-400/90">Rate limited</span>}
-                      {lastPollError && (
-                        <span className="text-red-400/90 truncate" title={lastPollError}>Error</span>
-                      )}
-                      {githubUserUnavailable && <span className="text-amber-400/90">User unavailable</span>}
-                    </div>
-                    {rateLimitRemaining != null && rateLimitLimit != null && rateLimitLimit > 0 && (() => {
-                      const used = rateLimitLimit - rateLimitRemaining;
-                      const pct = used / rateLimitLimit;
-                      return (
-                        <div className="flex flex-col gap-0.5">
-                          <div className="flex items-center gap-1.5 text-gray-600">
-                            <span>{rateLimitRemaining}/{rateLimitLimit}</span>
-                            {rateLimitResetAt && pct >= 0.5 && (
-                              <span className="text-gray-600/60">·</span>
-                            )}
-                            {rateLimitResetAt && pct >= 0.5 && (
-                              <span>resets {formatDurationUntil(rateLimitResetAt, rateLimitNow)}</span>
-                            )}
-                          </div>
-                          <span className="w-full h-1.5 bg-gray-800 rounded-full overflow-hidden">
-                            <span
-                              className={cn("h-full block rounded-full transition-all", pct >= 0.8 ? "bg-red-500" : pct >= 0.6 ? "bg-orange-500" : "bg-green-500")}
-                              style={{ width: `${Math.round(pct * 100)}%` }}
-                            />
-                          </span>
-                        </div>
-                      );
-                    })()}
-                  </div>
-
-                  {/* Claude/AI column */}
-                  <div className="flex flex-col gap-1">
-                    <span className="text-gray-600 font-medium uppercase tracking-wide">Claude</span>
-                    {claude ? (
-                      <>
-                        <div className="flex items-center gap-1.5">
-                          {claude.activeEvals > 0 ? (
-                            <span className="text-cyan-400/90">{claude.activeEvals}/{claude.evalConcurrencyCap} evals running</span>
-                          ) : claude.activeFixJobs > 0 ? (
-                            <span className="text-orange-400/90">{claude.activeFixJobs} fix{claude.activeFixJobs > 1 ? "es" : ""} running</span>
-                          ) : (
-                            <span className="text-gray-600">Idle</span>
-                          )}
-                        </div>
-                        <span className="text-gray-700">
-                          {claude.totalEvalsThisSession} evals · {claude.totalFixesThisSession} fixes this session
-                        </span>
-                      </>
-                    ) : (
-                      <span className="text-gray-700"><Minus size={12} /></span>
-                    )}
-                  </div>
-                </div>
                 <RepoFilter />
                 <div className="overflow-y-auto flex-1">
                   <div className="px-4 py-1.5 text-xs text-gray-500 uppercase tracking-wide border-b border-gray-800">
@@ -212,7 +138,9 @@ export const Route = createRoute({
                 onClick={() => useAppStore.getState().toggleSidebar()}
               />
             )}
-            <Outlet />
+            <PrDetailLoadingProvider value={prDetailLoading}>
+              <Outlet />
+            </PrDetailLoadingProvider>
           </div>
         </div>
       </>

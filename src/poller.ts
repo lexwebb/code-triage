@@ -1,6 +1,6 @@
 import { execFileSync } from "child_process";
 import type { CrComment, PrInfo, PollResult } from "./types.js";
-import { ghAsync } from "./exec.js";
+import { ghAsync, getGitHubViewerCached } from "./exec.js";
 import { loadConfig } from "./config.js";
 import {
   batchPullPollData,
@@ -40,9 +40,10 @@ export function getRepoFromGit(): string {
   return match[1];
 }
 
-/** One GET /user — call once per poll cycle and pass into `fetchNewComments` / batch flows. */
+/** One GET /user per cache window — shared with `api` (`buildPullSidebarLists`, `/api/user`). */
 export async function getGitHubLogin(): Promise<string> {
-  const user = await ghAsync<{ login: string }>("/user");
+  const user = await getGitHubViewerCached();
+  if (!user) throw new Error("GitHub authentication failed (no user); check token / gh auth login");
   return user.login;
 }
 

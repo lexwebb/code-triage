@@ -1,4 +1,5 @@
 import { Link, useMatchRoute } from "@tanstack/react-router";
+import { BarChart3, Inbox } from "lucide-react";
 import { useAppStore } from "../store";
 import { cn } from "../lib/utils";
 
@@ -29,14 +30,33 @@ function GearIcon({ className }: { className?: string }) {
 
 export function IconRail() {
   const hasLinearApiKey = useAppStore((s) => s.config?.hasLinearApiKey ?? false);
+  const attentionCount = useAppStore((s) => s.attentionItems.length);
   const matchRoute = useMatchRoute();
 
+  const isAttention = !!matchRoute({ to: "/attention" });
   const isCodeReview = !!matchRoute({ to: "/reviews", fuzzy: true });
   const isTickets = !!matchRoute({ to: "/tickets", fuzzy: true });
+  const isStats = !!matchRoute({ to: "/stats" });
   const isSettings = !!matchRoute({ to: "/settings" });
 
   return (
     <div className="flex flex-col items-center w-12 shrink-0 bg-zinc-900 border-r border-zinc-800 py-3 gap-2">
+      <Link
+        to="/attention"
+        className={cn("relative flex items-center justify-center w-9 h-9 rounded-lg transition-colors",
+          isAttention
+            ? "bg-zinc-700 text-white"
+            : "text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800"
+        )}
+        title="Attention"
+      >
+        <Inbox size={20} />
+        {attentionCount > 0 && (
+          <span className="absolute -top-1 -right-1 min-w-[16px] h-4 flex items-center justify-center rounded-full bg-red-500 text-[10px] font-medium text-white px-1">
+            {attentionCount > 99 ? "99+" : attentionCount}
+          </span>
+        )}
+      </Link>
       <Link
         to="/reviews"
         className={cn("flex items-center justify-center w-9 h-9 rounded-lg transition-colors",
@@ -62,6 +82,17 @@ export function IconRail() {
         </Link>
       )}
       <div className="flex-1" />
+      <Link
+        to="/stats"
+        className={cn("flex items-center justify-center w-9 h-9 rounded-lg transition-colors",
+          isStats
+            ? "bg-zinc-700 text-white"
+            : "text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800"
+        )}
+        title="Stats"
+      >
+        <BarChart3 size={18} />
+      </Link>
       <Link
         to="/settings"
         className={cn("flex items-center justify-center w-9 h-9 rounded-lg transition-colors",
