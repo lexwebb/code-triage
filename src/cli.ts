@@ -57,6 +57,7 @@ import { recordPollOutcomes, selectReposToPoll } from "./repo-poll-schedule.js";
 
 const LINEAR_RATE_LIMIT_BACKOFF_MS = 10 * 60_000;
 let linearRateLimitBackoffUntilMs = 0;
+let lastTeamOverviewRefreshMs = 0;
 
 function isLinearRateLimitError(err: unknown): boolean {
   const msg = (err as Error | undefined)?.message?.toLowerCase() ?? "";
@@ -694,6 +695,45 @@ async function poll(): Promise<void> {
       }
     } catch (err) {
       console.error(`\n  Coherence evaluation error: ${(err as Error).message}`);
+    }
+    if (config.team?.enabled === true) {
+      const intervalMs = (config.team.pollIntervalMinutes ?? 5) * 60_000;
+      if (Date.now() - lastTeamOverviewRefreshMs >= intervalMs) {
+        lastTeamOverviewRefreshMs = Date.now();
+        try {
+          const { rebuildTeamOverviewSnapshot, writeTeamOverviewCache } = await import("./team/overview.js");
+          const { snapshot, error } = await rebuildTeamOverviewSnapshot();
+          writeTeamOverviewCache(snapshot, error);
+          sseBroadcast("team-overview", { updated: true });
+        } catch (e) {
+          const msg = (e as Error).message;
+          console.error(`\n  Team overview refresh error: ${msg}`);
+          try {
+            const { writeTeamOverviewCache } = await import("./team/overview.js");
+            writeTeamOverviewCache(
+              {
+                generatedAt: new Date().toISOString(),
+                summaryCounts: {
+                  stuck: 0,
+                  awaitingReview: 0,
+                  recentlyMerged: 0,
+                  unlinkedPrs: 0,
+                  unlinkedTickets: 0,
+                },
+                stuck: [],
+                awaitingReview: [],
+                recentlyMerged: [],
+                unlinkedPrs: [],
+                unlinkedTickets: [],
+              },
+              msg,
+            );
+            sseBroadcast("team-overview", { updated: true });
+          } catch {
+            // DB or cache write failure — already logged above
+          }
+        }
+      }
     }
     // After tickets + coherence so /api/attention and link maps match this poll cycle
     sseBroadcast("poll", { ok: true, at: Date.now() });
