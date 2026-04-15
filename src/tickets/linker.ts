@@ -6,6 +6,8 @@ export interface LinkablePR {
   branch: string;
   title: string;
   body: string;
+  /** ISO timestamp when merged (closed authored fetches only). */
+  mergedAt?: string;
 }
 
 export interface LinkedPRRef {

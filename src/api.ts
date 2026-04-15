@@ -306,6 +306,7 @@ export async function fetchMergedAuthoredLinkablePRs(
           branch: pr.head.ref,
           title: pr.title,
           body: pr.body ?? "",
+          mergedAt: pr.merged_at ?? undefined,
         });
       }
       saveClosedAuthoredCache(repoInfo.repo, repoItems);
