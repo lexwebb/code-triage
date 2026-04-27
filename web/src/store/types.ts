@@ -6,6 +6,8 @@ import type {
   PullFile,
   ReviewComment,
   CheckSuite,
+  PullCiResult,
+  CiRun,
 } from "../types";
 import type {
   FixJobStatus,
@@ -55,7 +57,7 @@ export interface PrDetailSlice {
   files: PullFile[];
   comments: ReviewComment[];
   selectedFile: string | null;
-  activeTab: "overview" | "threads" | "files" | "checks";
+  activeTab: "overview" | "threads" | "files" | "checks" | "ci";
   prDetailLoading: boolean;
 
   // Review form
@@ -94,6 +96,15 @@ export interface PrDetailSlice {
   checkSuites: CheckSuite[] | null;
   checksError: string | null;
   checksKey: string;
+  ciData: PullCiResult | null;
+  ciError: string | null;
+  ciKey: string;
+  ciLogRun: CiRun | null;
+  ciLogOpen: boolean;
+  ciLogText: string;
+  ciLogLoading: boolean;
+  ciLogError: string | null;
+  ciLogNextCursor: string | null;
 
   selectPR: (number: number, repo: string) => Promise<void>;
   selectFile: (filename: string | null) => void;
@@ -141,6 +152,10 @@ export interface PrDetailSlice {
 
   // Checks actions
   fetchChecks: (headSha?: string) => Promise<void>;
+  fetchCi: (headSha?: string) => Promise<void>;
+  openCiLog: (run: CiRun) => Promise<void>;
+  loadMoreCiLog: () => Promise<void>;
+  closeCiLog: () => void;
 }
 
 // ── Poll Status Slice ──

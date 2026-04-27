@@ -7,6 +7,7 @@ import CommentThreads from "./comment-threads";
 import { PrCompanionPanel } from "./pr-companion-panel";
 import PROverview from "./pr-overview";
 import ChecksPanel from "./checks-panel";
+import CiPanel from "./ci-panel";
 import { cn } from "../lib/utils";
 import { useAppStore } from "../store";
 import { Skeleton } from "./ui/skeleton";
@@ -16,7 +17,7 @@ interface Props {
   owner?: string;
   repo?: string;
   number?: number;
-  tab?: "overview" | "threads" | "files" | "checks";
+  tab?: "overview" | "threads" | "files" | "checks" | "ci";
   file?: string;
 }
 
@@ -75,7 +76,7 @@ export function CodeReviewDetail({ owner, repo, number, tab, file }: Props) {
     useAppStore.getState().selectFile(file ?? null);
   }, [file]);
 
-  function setTab(newTab: "overview" | "threads" | "files" | "checks") {
+  function setTab(newTab: "overview" | "threads" | "files" | "checks" | "ci") {
     if (owner && repo && number) {
       void navigate({
         to: "/reviews/$owner/$repo/pull/$number",
@@ -126,6 +127,7 @@ export function CodeReviewDetail({ owner, repo, number, tab, file }: Props) {
               ? `Checks (${detail.checksSummary.failure}/${detail.checksSummary.total})`
               : `Checks (${detail.checksSummary.total})`
             : "Checks" },
+          { id: "ci" as const, label: "CI" },
         ]).map((t) => (
           <button
             key={t.id}
@@ -196,6 +198,7 @@ export function CodeReviewDetail({ owner, repo, number, tab, file }: Props) {
         </>
       )}
       {activeTab === "checks" && <ChecksPanel />}
+      {activeTab === "ci" && <CiPanel />}
     </div>
     </LoadingBoundary>
   );

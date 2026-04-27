@@ -6,8 +6,8 @@ export const Route = createRoute({
   getParentRoute: () => sidebarRoute,
   path: "reviews/$owner/$repo/pull/$number",
   validateSearch: (search: Record<string, unknown>) => ({
-    tab: (["overview", "threads", "files", "checks"].includes(search.tab as string)
-      ? search.tab as "overview" | "threads" | "files" | "checks"
+    tab: (["overview", "threads", "files", "checks", "ci"].includes(search.tab as string)
+      ? search.tab as "overview" | "threads" | "files" | "checks" | "ci"
       : "threads"),
     file: typeof search.file === "string" ? search.file : undefined,
   }),

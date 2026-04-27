@@ -1,4 +1,4 @@
-import * as webpush from "web-push";
+import webpush from "web-push";
 import { sendNotification } from "./notifier.js";
 import { getVapidKeys } from "./vapid.js";
 import { getAllPushSubscriptions, deletePushSubscription, getMutedPRs } from "./push-db.js";

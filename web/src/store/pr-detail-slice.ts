@@ -56,6 +56,15 @@ export const createPrDetailSlice: SliceCreator<PrDetailSlice> = (set, get) => ({
   checkSuites: null,
   checksError: null,
   checksKey: "",
+  ciData: null,
+  ciError: null,
+  ciKey: "",
+  ciLogRun: null,
+  ciLogOpen: false,
+  ciLogText: "",
+  ciLogLoading: false,
+  ciLogError: null,
+  ciLogNextCursor: null,
 
   selectPR: async (number, repo) => {
     set({
@@ -97,6 +106,15 @@ export const createPrDetailSlice: SliceCreator<PrDetailSlice> = (set, get) => ({
       checkSuites: null,
       checksError: null,
       checksKey: "",
+      ciData: null,
+      ciError: null,
+      ciKey: "",
+      ciLogRun: null,
+      ciLogOpen: false,
+      ciLogText: "",
+      ciLogLoading: false,
+      ciLogError: null,
+      ciLogNextCursor: null,
     });
 
     try {
@@ -559,5 +577,86 @@ export const createPrDetailSlice: SliceCreator<PrDetailSlice> = (set, get) => ({
       if (get().checksKey !== key) return;
       set({ checksError: (err as Error).message });
     }
+  },
+  fetchCi: async (headSha) => {
+    const pr = get().selectedPR;
+    if (!pr) return;
+    const key = `${pr.repo}:${pr.number}:${headSha ?? ""}`;
+    if (key === get().ciKey && get().ciData !== null) return;
+    set({ ciKey: key, ciData: null, ciError: null });
+    try {
+      const qc = getQueryClient();
+      const data = await qc.fetchQuery({
+        queryKey: ["pull-ci", pr.repo, pr.number, headSha ?? ""],
+        queryFn: () => trpcClient.pullCi.query({ number: pr.number, repo: pr.repo, ...(headSha ? { sha: headSha } : {}) }),
+      });
+      if (get().ciKey !== key) return;
+      set({ ciData: data });
+    } catch (err) {
+      if (get().ciKey !== key) return;
+      set({ ciError: (err as Error).message });
+    }
+  },
+  openCiLog: async (run) => {
+    const pr = get().selectedPR;
+    if (!pr) return;
+    set({
+      ciLogRun: run,
+      ciLogOpen: true,
+      ciLogText: "",
+      ciLogLoading: true,
+      ciLogError: null,
+      ciLogNextCursor: null,
+    });
+    try {
+      const chunk = await trpcClient.pullCiLogs.query({
+        repo: pr.repo,
+        provider: run.provider,
+        runId: run.id,
+      });
+      if (get().ciLogRun?.id !== run.id) return;
+      set({
+        ciLogText: chunk.text,
+        ciLogNextCursor: chunk.nextCursor,
+        ciLogLoading: false,
+      });
+    } catch (err) {
+      if (get().ciLogRun?.id !== run.id) return;
+      set({ ciLogError: (err as Error).message, ciLogLoading: false });
+    }
+  },
+  loadMoreCiLog: async () => {
+    const pr = get().selectedPR;
+    const run = get().ciLogRun;
+    const cursor = get().ciLogNextCursor;
+    if (!pr || !run || !cursor) return;
+    set({ ciLogLoading: true, ciLogError: null });
+    try {
+      const chunk = await trpcClient.pullCiLogs.query({
+        repo: pr.repo,
+        provider: run.provider,
+        runId: run.id,
+        cursor,
+      });
+      if (get().ciLogRun?.id !== run.id) return;
+      set((s) => ({
+        ciLogText: s.ciLogText + chunk.text,
+        ciLogNextCursor: chunk.nextCursor,
+        ciLogLoading: false,
+      }));
+    } catch (err) {
+      if (get().ciLogRun?.id !== run.id) return;
+      set({ ciLogError: (err as Error).message, ciLogLoading: false });
+    }
+  },
+  closeCiLog: () => {
+    set({
+      ciLogOpen: false,
+      ciLogRun: null,
+      ciLogText: "",
+      ciLogLoading: false,
+      ciLogError: null,
+      ciLogNextCursor: null,
+    });
   },
 });

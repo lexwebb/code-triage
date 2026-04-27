@@ -116,6 +116,32 @@ export interface CheckSuite {
   runs: CheckRun[];
 }
 
+export type CiProvider = "github-actions" | "circleci";
+export type CiRunStatus = "success" | "failure" | "pending";
+
+export interface CiRun {
+  id: string;
+  provider: CiProvider;
+  name: string;
+  status: CiRunStatus;
+  startedAt: string | null;
+  completedAt: string | null;
+  durationMs: number | null;
+  htmlUrl: string | null;
+  logsAvailable: boolean;
+}
+
+export interface CiProviderSection {
+  provider: CiProvider;
+  runs: CiRun[];
+  status: CiRunStatus;
+}
+
+export interface PullCiResult {
+  overallStatus: CiRunStatus;
+  providers: CiProviderSection[];
+}
+
 export interface CrWatchState {
   lastPoll: string | null;
   comments: Record<string, {

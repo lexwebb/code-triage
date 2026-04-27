@@ -8,6 +8,7 @@ import { loadConfig } from "../../config.js";
 import { loadState, needsEvaluation, saveState } from "../../state.js";
 import { enqueueEvaluation, drainOnce } from "../../eval-queue.js";
 import { trpc } from "../trpc.js";
+import { getPullCi, getPullCiLogs } from "../../ci.js";
 
 const repoFilterSchema = z.object({
   repo: z.string().optional(),
@@ -21,6 +22,12 @@ const pullCommentsInputSchema = pullRepoInputSchema.extend({
 });
 const pullChecksInputSchema = pullRepoInputSchema.extend({
   sha: z.string().optional(),
+});
+const pullCiLogsInputSchema = z.object({
+  repo: z.string(),
+  provider: z.enum(["github-actions", "circleci"]),
+  runId: z.string(),
+  cursor: z.string().optional(),
 });
 
 export const pullProcedures = {
@@ -197,5 +204,19 @@ export const pullProcedures = {
       return order(a.conclusion) - order(b.conclusion);
     });
     return suites;
+  }),
+  pullCi: trpc.procedure.input(pullChecksInputSchema).query(async (opts) => {
+    const { repo, number: prNumber } = opts.input;
+    let sha = opts.input.sha ?? "";
+    let branch = "";
+    if (!sha || !branch) {
+      const pr = await ghAsync<{ head: { sha: string; ref: string } }>(`/repos/${repo}/pulls/${prNumber}`);
+      if (!sha) sha = pr.head.sha;
+      branch = pr.head.ref;
+    }
+    return getPullCi(repo, branch, sha);
+  }),
+  pullCiLogs: trpc.procedure.input(pullCiLogsInputSchema).query(async (opts) => {
+    return getPullCiLogs(opts.input);
   }),
 };

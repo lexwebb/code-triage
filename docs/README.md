@@ -11,6 +11,7 @@ This folder describes how **Code Triage** is put together, what the main feature
 | [HTTP API](./http-api.md) | REST endpoints the web UI and tools use |
 | [Config, state, and worktrees](./config-and-state.md) | `~/.code-triage` files, comment keys, fix jobs, `.cr-worktrees` |
 | [Implementation plan](./implementation-plan.md) | Prioritized backlog of enhancements (solo, local-first) |
+| [Railway hosted plan](./railway-hosted-plan.md) | Hosted control plane + local runners architecture and rollout |
 
 ## Internal design notes
 
