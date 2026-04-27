@@ -1,6 +1,6 @@
-import { api } from "../api";
 import { getQueryClient } from "../lib/query-client";
 import { qk } from "../lib/query-keys";
+import { trpcClient } from "../lib/trpc";
 import type { SliceCreator, PullsSlice } from "./types";
 
 export const createPullsSlice: SliceCreator<PullsSlice> = (set, get) => ({
@@ -13,7 +13,7 @@ export const createPullsSlice: SliceCreator<PullsSlice> = (set, get) => ({
 
   fetchPulls: async (_isInitial = false, resetRepoPollOnRefresh = false) => {
     if (resetRepoPollOnRefresh) {
-      await api.clearRepoPollSchedule();
+      await trpcClient.clearRepoPollScheduleAction.mutate();
     }
     const qc = getQueryClient();
     const filter = get().repoFilter;

@@ -1,4 +1,6 @@
-import { getRawSqlite } from "./db/client.js";
+import { and, asc, desc, eq, isNull, lte, or, sql } from "drizzle-orm";
+import * as schema from "./db/schema.js";
+import { openStateDatabase } from "./db/client.js";
 import type { CoherenceAlert } from "./coherence.js";
 
 /** Set `CODE_TRIAGE_LOG_ATTENTION=0` to silence `[attention]` / `[coherence]` poll logs. Skipped when `NODE_ENV=test`. Emits on stderr so lines stay visible under the Ink TUI (stdout). */
@@ -27,10 +29,10 @@ export interface AttentionItem {
 }
 
 export function refreshAttentionFeed(alerts: CoherenceAlert[]): { added: number; removed: number } {
-  const db = getRawSqlite();
+  const database = openStateDatabase();
   const now = new Date().toISOString();
   const activeIds = new Set(alerts.map((a) => a.id));
-  const existing = db.prepare("SELECT id FROM attention_items").all() as Array<{ id: string }>;
+  const existing = database.select({ id: schema.attentionItems.id }).from(schema.attentionItems).all();
   const existingIds = new Set(existing.map((e) => e.id));
 
   if (shouldLogAttentionPipeline()) {
@@ -48,43 +50,43 @@ export function refreshAttentionFeed(alerts: CoherenceAlert[]): { added: number;
   let added = 0;
   let removed = 0;
 
-  const run = db.transaction(() => {
+  database.transaction((tx) => {
     for (const row of existing) {
       if (!activeIds.has(row.id)) {
-        db.prepare("DELETE FROM attention_items WHERE id = ?").run(row.id);
+        tx.delete(schema.attentionItems).where(eq(schema.attentionItems.id, row.id)).run();
         removed += 1;
       }
     }
-
-    const upsert = db.prepare(`
-      INSERT INTO attention_items (id, type, entity_kind, entity_identifier, priority, title, stage, stuck_since, first_seen_at, pinned)
-      VALUES (@id, @type, @entity_kind, @entity_identifier, @priority, @title, @stage, @stuck_since, @first_seen_at, 0)
-      ON CONFLICT(id) DO UPDATE SET
-        priority = @priority,
-        title = @title,
-        stage = @stage,
-        stuck_since = @stuck_since
-    `);
 
     for (const alert of alerts) {
       if (!existingIds.has(alert.id)) {
         added += 1;
       }
-      upsert.run({
-        id: alert.id,
-        type: alert.type,
-        entity_kind: alert.entityKind,
-        entity_identifier: alert.entityIdentifier,
-        priority: alert.priority,
-        title: alert.title,
-        stage: alert.stage ?? null,
-        stuck_since: alert.stuckSince ?? null,
-        first_seen_at: now,
-      });
+      tx.insert(schema.attentionItems)
+        .values({
+          id: alert.id,
+          type: alert.type,
+          entityKind: alert.entityKind,
+          entityIdentifier: alert.entityIdentifier,
+          priority: alert.priority,
+          title: alert.title,
+          stage: alert.stage ?? null,
+          stuckSince: alert.stuckSince ?? null,
+          firstSeenAt: now,
+          pinned: 0,
+        })
+        .onConflictDoUpdate({
+          target: schema.attentionItems.id,
+          set: {
+            priority: alert.priority,
+            title: alert.title,
+            stage: alert.stage ?? null,
+            stuckSince: alert.stuckSince ?? null,
+          },
+        })
+        .run();
     }
   });
-
-  run();
 
   if (shouldLogAttentionPipeline()) {
     const byType = new Map<string, number>();
@@ -115,53 +117,75 @@ export function refreshAttentionFeed(alerts: CoherenceAlert[]): { added: number;
 }
 
 export function getAttentionItems(opts?: { includeAll?: boolean }): AttentionItem[] {
-  const db = getRawSqlite();
+  const database = openStateDatabase();
   const now = new Date().toISOString();
 
-  let sql = "SELECT * FROM attention_items";
-  if (!opts?.includeAll) {
-    sql += " WHERE dismissed_at IS NULL AND (snoozed_until IS NULL OR snoozed_until <= ?)";
-  }
-  sql += " ORDER BY CASE priority WHEN 'high' THEN 0 WHEN 'medium' THEN 1 WHEN 'low' THEN 2 END, pinned DESC, first_seen_at ASC";
+  const order = [
+    sql`CASE ${schema.attentionItems.priority} WHEN 'high' THEN 0 WHEN 'medium' THEN 1 WHEN 'low' THEN 2 END`,
+    desc(schema.attentionItems.pinned),
+    asc(schema.attentionItems.firstSeenAt),
+  ];
 
   const rows = opts?.includeAll
-    ? db.prepare(sql).all()
-    : db.prepare(sql).all(now);
+    ? database.select().from(schema.attentionItems).orderBy(...order).all()
+    : database
+        .select()
+        .from(schema.attentionItems)
+        .where(
+          and(
+            isNull(schema.attentionItems.dismissedAt),
+            or(isNull(schema.attentionItems.snoozedUntil), lte(schema.attentionItems.snoozedUntil, now)),
+          ),
+        )
+        .orderBy(...order)
+        .all();
 
-  return (rows as Array<Record<string, unknown>>).map(rowToItem);
-}
-
-function rowToItem(row: Record<string, unknown>): AttentionItem {
-  return {
-    id: row.id as string,
-    type: row.type as string,
-    entityKind: row.entity_kind as "pr" | "ticket",
-    entityIdentifier: row.entity_identifier as string,
-    priority: row.priority as "high" | "medium" | "low",
-    title: row.title as string,
-    stage: (row.stage ?? undefined) as string | undefined,
-    stuckSince: (row.stuck_since ?? undefined) as string | undefined,
-    firstSeenAt: row.first_seen_at as string,
-    snoozedUntil: (row.snoozed_until ?? undefined) as string | undefined,
-    dismissedAt: (row.dismissed_at ?? undefined) as string | undefined,
-    pinned: row.pinned === 1,
-  };
+  return rows.map(
+    (row): AttentionItem => ({
+      id: row.id,
+      type: row.type,
+      entityKind: row.entityKind as "pr" | "ticket",
+      entityIdentifier: row.entityIdentifier,
+      priority: row.priority as "high" | "medium" | "low",
+      title: row.title,
+      stage: row.stage ?? undefined,
+      stuckSince: row.stuckSince ?? undefined,
+      firstSeenAt: row.firstSeenAt,
+      snoozedUntil: row.snoozedUntil ?? undefined,
+      dismissedAt: row.dismissedAt ?? undefined,
+      pinned: row.pinned === 1,
+    }),
+  );
 }
 
 export function snoozeItem(id: string, until: string): void {
-  const db = getRawSqlite();
-  db.prepare("UPDATE attention_items SET snoozed_until = ? WHERE id = ?").run(until, id);
+  openStateDatabase()
+    .update(schema.attentionItems)
+    .set({ snoozedUntil: until })
+    .where(eq(schema.attentionItems.id, id))
+    .run();
 }
 
 export function dismissItem(id: string): void {
-  const db = getRawSqlite();
   const now = new Date().toISOString();
-  db.prepare("UPDATE attention_items SET dismissed_at = ? WHERE id = ?").run(now, id);
+  openStateDatabase()
+    .update(schema.attentionItems)
+    .set({ dismissedAt: now })
+    .where(eq(schema.attentionItems.id, id))
+    .run();
 }
 
 export function pinItem(id: string): void {
-  const db = getRawSqlite();
-  const current = db.prepare("SELECT pinned FROM attention_items WHERE id = ?").get(id) as { pinned: number } | undefined;
+  const database = openStateDatabase();
+  const current = database
+    .select({ pinned: schema.attentionItems.pinned })
+    .from(schema.attentionItems)
+    .where(eq(schema.attentionItems.id, id))
+    .get();
   if (!current) return;
-  db.prepare("UPDATE attention_items SET pinned = ? WHERE id = ?").run(current.pinned ? 0 : 1, id);
+  database
+    .update(schema.attentionItems)
+    .set({ pinned: current.pinned ? 0 : 1 })
+    .where(eq(schema.attentionItems.id, id))
+    .run();
 }

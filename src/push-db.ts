@@ -1,4 +1,6 @@
-import { getRawSqlite, openStateDatabase } from "./db/client.js";
+import { eq } from "drizzle-orm";
+import * as schema from "./db/schema.js";
+import { openStateDatabase } from "./db/client.js";
 
 export interface PushSubscriptionRecord {
   endpoint: string;
@@ -6,57 +8,58 @@ export interface PushSubscriptionRecord {
 }
 
 export function savePushSubscription(sub: PushSubscriptionRecord): void {
-  openStateDatabase();
-  const db = getRawSqlite();
-  db.prepare(
-    `INSERT INTO push_subscriptions (endpoint, keys_json, created_at)
-     VALUES (?, ?, ?)
-     ON CONFLICT(endpoint) DO UPDATE SET keys_json = excluded.keys_json, created_at = excluded.created_at`,
-  ).run(sub.endpoint, JSON.stringify(sub.keys), new Date().toISOString());
+  const now = new Date().toISOString();
+  openStateDatabase()
+    .insert(schema.pushSubscriptions)
+    .values({
+      endpoint: sub.endpoint,
+      keysJson: JSON.stringify(sub.keys),
+      createdAt: now,
+    })
+    .onConflictDoUpdate({
+      target: schema.pushSubscriptions.endpoint,
+      set: { keysJson: JSON.stringify(sub.keys), createdAt: now },
+    })
+    .run();
 }
 
 export function deletePushSubscription(endpoint: string): void {
-  openStateDatabase();
-  getRawSqlite().prepare("DELETE FROM push_subscriptions WHERE endpoint = ?").run(endpoint);
+  openStateDatabase().delete(schema.pushSubscriptions).where(eq(schema.pushSubscriptions.endpoint, endpoint)).run();
 }
 
 export function getAllPushSubscriptions(): PushSubscriptionRecord[] {
-  openStateDatabase();
-  const rows = getRawSqlite()
-    .prepare("SELECT endpoint, keys_json FROM push_subscriptions")
-    .all() as Array<{ endpoint: string; keys_json: string }>;
+  const rows = openStateDatabase()
+    .select({ endpoint: schema.pushSubscriptions.endpoint, keysJson: schema.pushSubscriptions.keysJson })
+    .from(schema.pushSubscriptions)
+    .all();
   return rows.map((r) => ({
     endpoint: r.endpoint,
-    keys: JSON.parse(r.keys_json) as { p256dh: string; auth: string },
+    keys: JSON.parse(r.keysJson) as { p256dh: string; auth: string },
   }));
 }
 
 export function mutePR(repo: string, number: number): void {
-  openStateDatabase();
-  getRawSqlite()
-    .prepare("INSERT OR IGNORE INTO muted_prs (pr_key) VALUES (?)")
-    .run(`${repo}:${number}`);
+  openStateDatabase()
+    .insert(schema.mutedPrs)
+    .values({ prKey: `${repo}:${number}` })
+    .onConflictDoNothing()
+    .run();
 }
 
 export function unmutePR(repo: string, number: number): void {
-  openStateDatabase();
-  getRawSqlite()
-    .prepare("DELETE FROM muted_prs WHERE pr_key = ?")
-    .run(`${repo}:${number}`);
+  openStateDatabase().delete(schema.mutedPrs).where(eq(schema.mutedPrs.prKey, `${repo}:${number}`)).run();
 }
 
 export function getMutedPRs(): string[] {
-  openStateDatabase();
-  const rows = getRawSqlite()
-    .prepare("SELECT pr_key FROM muted_prs")
-    .all() as Array<{ pr_key: string }>;
-  return rows.map((r) => r.pr_key);
+  const rows = openStateDatabase().select({ prKey: schema.mutedPrs.prKey }).from(schema.mutedPrs).all();
+  return rows.map((r) => r.prKey);
 }
 
 export function isPRMuted(repo: string, number: number): boolean {
-  openStateDatabase();
-  const row = getRawSqlite()
-    .prepare("SELECT 1 FROM muted_prs WHERE pr_key = ?")
-    .get(`${repo}:${number}`);
+  const row = openStateDatabase()
+    .select({ prKey: schema.mutedPrs.prKey })
+    .from(schema.mutedPrs)
+    .where(eq(schema.mutedPrs.prKey, `${repo}:${number}`))
+    .get();
   return !!row;
 }

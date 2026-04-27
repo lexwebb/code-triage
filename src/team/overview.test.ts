@@ -29,6 +29,7 @@ describe("team overview cache", () => {
       recentlyMerged: [],
       unlinkedPrs: [],
       unlinkedTickets: [],
+      memberSummaries: [],
     };
     writeTeamOverviewCache(snap, null);
     const read = readTeamOverviewCache();

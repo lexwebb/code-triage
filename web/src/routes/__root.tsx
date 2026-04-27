@@ -11,6 +11,7 @@ import { Toaster } from "../components/ui/sonner";
 import { AppShellSkeleton } from "../components/app-shell-skeleton";
 import { useServerQuerySync } from "../components/server-query-sync";
 import { X, ArrowRight, RefreshCw, Bell, Settings, HelpCircle } from "lucide-react";
+import { trpcClient } from "../lib/trpc";
 
 export const Route = createRootRoute({
   component: function RootLayout() {
@@ -174,7 +175,7 @@ export const Route = createRootRoute({
               description={`Test notification (permission: ${permission})`}
               icon={<Bell size={14} />}
               size="sm"
-              onClick={() => void fetch("/api/push/test", { method: "POST" })}
+              onClick={() => void trpcClient.pushTest.mutate()}
             />
             <IconButton
               description="Refresh lists and reset adaptive poll schedule"

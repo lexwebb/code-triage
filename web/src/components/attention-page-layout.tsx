@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { api } from "../api";
 import { qk } from "../lib/query-keys";
+import { trpcClient } from "../lib/trpc";
 import { useAppStore } from "../store";
 import { AttentionFeed } from "./attention-feed";
 import { TeamSnapshotPanel } from "./team-snapshot-panel";
@@ -28,13 +28,13 @@ export function AttentionPageLayout() {
 
   const teamOverviewQuery = useQuery({
     queryKey: qk.team.overview,
-    queryFn: () => api.getTeamOverview(),
+    queryFn: () => trpcClient.teamOverview.query(),
     staleTime: 60_000,
     enabled: appGate === "ready" && teamEnabled,
   });
 
   async function handleTeamRefresh() {
-    await api.refreshTeamOverview();
+    await trpcClient.teamOverviewRefresh.mutate();
     await queryClient.invalidateQueries({ queryKey: qk.team.overview });
   }
 

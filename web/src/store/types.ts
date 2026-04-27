@@ -214,7 +214,14 @@ export interface FixJobsSlice {
   discard: (branch: string, commentId?: number) => Promise<void>;
   sendReply: (repo: string, commentId: number, message: string) => Promise<void>;
   sendReplyAndResolve: (repo: string, commentId: number, prNumber: number, replyBody: string) => Promise<void>;
-  retryFix: (repo: string, commentId: number, prNumber: number, branch: string, originalComment: { path: string; line: number; body: string; diffHunk: string }) => Promise<void>;
+  retryFix: (
+    repo: string,
+    commentId: number,
+    prNumber: number,
+    branch: string,
+    originalComment: { path: string; line: number; body: string; diffHunk: string },
+    userInstructions?: string,
+  ) => Promise<void>;
 }
 
 // ── Notifications Slice ──
@@ -293,6 +300,13 @@ export interface SettingsFormState {
   coherenceTicketInactivityDays: number;
   teamEnabled: boolean;
   teamPollIntervalMinutes: number;
+  /** JSON array for Settings → Team → member identity links. */
+  teamMemberLinksJson: string;
+  teamClaudeMemberLinking: boolean;
+  teamClaudeMemberSummaries: boolean;
+  teamIncludeGithubOrgMemberPulls: boolean;
+  teamIncludeLinearTeamScopeIssues: boolean;
+  teamLinearTeamIssueCap: number;
 }
 
 // ── Tickets Slice ──

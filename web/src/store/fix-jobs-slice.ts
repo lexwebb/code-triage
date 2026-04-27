@@ -1,7 +1,7 @@
 import { toast } from "sonner";
-import { api } from "../api";
 import type { FixJobStatus } from "../api";
 import { celebrateFixApplied } from "../lib/fix-apply-celebration";
+import { trpcClient } from "../lib/trpc";
 import type { SliceCreator, FixJobsSlice } from "./types";
 
 const FIX_APPLY_EXTENDED_MS = 1200;
@@ -19,7 +19,7 @@ export const createFixJobsSlice: SliceCreator<FixJobsSlice> = (set, get) => ({
 
   cancelQueued: async (commentId) => {
     try {
-      await api.cancelQueuedFix(commentId);
+      await trpcClient.fixQueueCancel.mutate({ commentId });
       set((s) => ({ queue: s.queue.filter((q) => q.commentId !== commentId) }));
     } catch (err) {
       console.error("Cancel queued fix failed:", err);
@@ -81,7 +81,7 @@ export const createFixJobsSlice: SliceCreator<FixJobsSlice> = (set, get) => ({
       });
     }, FIX_APPLY_EXTENDED_MS);
     try {
-      const result = await api.fixApply(repo, commentId, prNumber, branch);
+      const result = await trpcClient.actionFixApply.mutate({ repo, commentId, prNumber, branch });
       if (result.recoveredWorktree) {
         toast.success("Fix applied and pushed. Missing worktree was restored from your saved diff.");
       } else {
@@ -109,7 +109,7 @@ export const createFixJobsSlice: SliceCreator<FixJobsSlice> = (set, get) => ({
       set((s) => ({ acting: { ...s.acting, [commentId]: true } }));
     }
     try {
-      await api.fixDiscard(branch, commentId);
+      await trpcClient.actionFixDiscard.mutate({ branch, commentId });
       set({ selectedJobId: null });
       await get().reloadComments();
     } catch (err) {
@@ -125,7 +125,7 @@ export const createFixJobsSlice: SliceCreator<FixJobsSlice> = (set, get) => ({
     if (!message.trim()) return;
     set((s) => ({ acting: { ...s.acting, [commentId]: true } }));
     try {
-      await api.fixReply(repo, commentId, message.trim());
+      await trpcClient.actionFixReply.mutate({ repo, commentId, message: message.trim() });
       set((s) => ({ replyText: { ...s.replyText, [commentId]: "" } }));
     } catch (err) {
       console.error("Reply failed:", err);
@@ -137,7 +137,7 @@ export const createFixJobsSlice: SliceCreator<FixJobsSlice> = (set, get) => ({
   sendReplyAndResolve: async (repo, commentId, prNumber, replyBody) => {
     set((s) => ({ acting: { ...s.acting, [commentId]: true } }));
     try {
-      await api.fixReplyAndResolve(repo, commentId, prNumber, replyBody);
+      await trpcClient.actionFixReplyAndResolve.mutate({ repo, commentId, prNumber, replyBody });
       set({ selectedJobId: null });
       await get().reloadComments();
     } catch (err) {
@@ -147,10 +147,17 @@ export const createFixJobsSlice: SliceCreator<FixJobsSlice> = (set, get) => ({
     }
   },
 
-  retryFix: async (repo, commentId, prNumber, branch, originalComment) => {
+  retryFix: async (repo, commentId, prNumber, branch, originalComment, userInstructions) => {
     set((s) => ({ acting: { ...s.acting, [commentId]: true } }));
     try {
-      await api.fixWithClaude(repo, commentId, prNumber, branch, originalComment);
+      await trpcClient.actionFix.mutate({
+        repo,
+        commentId,
+        prNumber,
+        branch,
+        comment: originalComment,
+        ...(userInstructions ? { userInstructions } : {}),
+      });
     } catch (err) {
       console.error("Retry failed:", err);
     } finally {

@@ -1,23 +1,35 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Link, useNavigate } from "@tanstack/react-router";
 import {
+  ChevronRight,
   ExternalLink,
   GitMerge,
   GitPullRequest,
+  Link2,
   Link2Off,
   Loader2,
   OctagonAlert,
   PanelRightOpen,
   RefreshCw,
+  Sparkles,
   Ticket,
   TriangleAlert,
 } from "lucide-react";
-import type { TeamOverviewResponse, TeamOverviewSnapshot } from "../api";
+import type {
+  TeamMemberSummaryIdentityHint,
+  TeamMemberSummaryItem,
+  TeamOverviewResponse,
+  TeamOverviewSnapshot,
+} from "../api";
 import { githubPullRequestUrl } from "../lib/github-url";
 import { linearIssueBrowserUrl } from "../lib/linear-url";
+import { memberSummaryNeedsIdentityLink } from "../lib/team-member-identity";
+import { reconcileMemberSummariesForDisplay } from "../lib/reconcile-member-summaries";
 import { teamManualRefreshAllowed, TEAM_MANUAL_REFRESH_COOLDOWN_MS } from "../lib/team-manual-refresh-cooldown";
 import { cn } from "../lib/utils";
+import { useAppStore } from "../store";
 import { LifecycleBar, coerceLifecycleStage, type LifecycleStage } from "./lifecycle-bar";
+import { TeamMemberLinkDialog } from "./team-member-link-dialog";
 
 interface TeamSnapshotPanelProps {
   data?: TeamOverviewResponse;
@@ -26,6 +38,8 @@ interface TeamSnapshotPanelProps {
   onRefresh: () => Promise<void>;
   /** When false, hides the link to the full-page team radar (e.g. on `/team`). Default true. */
   showRadarLink?: boolean;
+  /** Full team page: show per-person rollups above the snapshot sections. */
+  showMemberSummary?: boolean;
 }
 
 function formatCooldownMs(ms: number): string {
@@ -68,6 +82,39 @@ function parseStuckPrId(entityIdentifier: string): { repo: string; number: numbe
   const m = entityIdentifier.match(/^([^/]+)\/([^#]+)#(\d+)$/);
   if (!m) return null;
   return { repo: `${m[1]}/${m[2]}`, number: Number(m[3]) };
+}
+
+/** Cached snapshots may still use `{ title, ref }` items — coerce for display. */
+function normalizeMemberSummaryItem(
+  item: TeamMemberSummaryItem | { title: string; ref: string; waitLabel?: string },
+): TeamMemberSummaryItem | null {
+  if ("entityKind" in item && (item.entityKind === "pr" || item.entityKind === "ticket")) {
+    return item as TeamMemberSummaryItem;
+  }
+  if (!("ref" in item) || typeof item.ref !== "string" || typeof item.title !== "string") {
+    return null;
+  }
+  const mergedSuffix = /\s*·\s*merged\s*$/i;
+  const ref = item.ref.replace(mergedSuffix, "").trim();
+  const waitLabel = "waitLabel" in item && typeof item.waitLabel === "string" ? item.waitLabel : undefined;
+  if (/^[A-Za-z][A-Za-z0-9]*-\d+$/.test(ref)) {
+    return {
+      title: item.title,
+      entityKind: "ticket",
+      entityIdentifier: ref,
+      waitLabel,
+    };
+  }
+  const pr = parseStuckPrId(ref);
+  if (pr && Number.isFinite(pr.number)) {
+    return {
+      title: item.title,
+      entityKind: "pr",
+      entityIdentifier: `${pr.repo}#${pr.number}`,
+      waitLabel,
+    };
+  }
+  return null;
 }
 
 const accentStyles = {
@@ -249,12 +296,278 @@ function emptyRow(label: string) {
   );
 }
 
+function MemberSummaryItemRow({
+  rawItem,
+  accent,
+  openPrInApp,
+  openTicketInApp,
+}: {
+  rawItem: TeamMemberSummaryItem | { title: string; ref: string; waitLabel?: string };
+  accent: Accent;
+  openPrInApp: (repo: string, number: number) => void;
+  openTicketInApp: (identifier: string) => void;
+}) {
+  const item = normalizeMemberSummaryItem(rawItem);
+  if (!item) return null;
+
+  if (item.entityKind === "pr") {
+    const pr = parseStuckPrId(item.entityIdentifier);
+    const gh = pr ? githubPullRequestUrl(pr.repo, pr.number) : null;
+    return (
+      <li key={`pr:${item.entityIdentifier}:${item.title}`} className="list-none">
+        <RowChrome
+          accent={accent}
+          externalHref={gh}
+          externalLabel={gh ? `Open ${item.entityIdentifier} on GitHub` : "Open on GitHub"}
+          onOpenInApp={pr ? () => openPrInApp(pr.repo, pr.number) : null}
+          footer={
+            <RowMeta
+              lifecycleStage={item.lifecycleStage}
+              lifecycleStuck={item.lifecycleStuck}
+              actorKind="author"
+            />
+          }
+        >
+          <p className="text-sm font-medium leading-snug text-zinc-200">{item.title}</p>
+          <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5">
+            <span className="font-mono text-[11px] text-zinc-500">
+              {pr ? (
+                <>
+                  {pr.repo}
+                  <span className="text-zinc-600">#{pr.number}</span>
+                </>
+              ) : (
+                item.entityIdentifier
+              )}
+            </span>
+            {item.waitLabel ? (
+              <span className="rounded bg-zinc-800/90 px-1.5 py-px text-[10px] font-medium text-zinc-400">
+                {item.waitLabel}
+              </span>
+            ) : null}
+          </div>
+        </RowChrome>
+      </li>
+    );
+  }
+
+  const linearHref = linearIssueBrowserUrl({
+    providerUrl: item.providerUrl,
+    identifier: item.entityIdentifier,
+  });
+  return (
+    <li key={`ticket:${item.entityIdentifier}:${item.title}`} className="list-none">
+      <RowChrome
+        accent={accent}
+        externalHref={linearHref}
+        externalLabel={linearHref ? "Open in Linear" : "Open externally"}
+        onOpenInApp={() => openTicketInApp(item.entityIdentifier)}
+        footer={
+          <RowMeta
+            lifecycleStage={item.lifecycleStage}
+            lifecycleStuck={item.lifecycleStuck}
+            actorKind="assignee"
+          />
+        }
+      >
+        <p className="text-sm font-medium leading-snug text-zinc-200">{item.title}</p>
+        <p className="mt-1 flex items-center gap-1.5 font-mono text-[11px] text-zinc-500">
+          <Ticket className="h-3 w-3 text-zinc-600" strokeWidth={2} />
+          {item.entityIdentifier}
+        </p>
+        {item.waitLabel ? (
+          <span className="mt-1 inline-block rounded bg-zinc-800/90 px-1.5 py-px text-[10px] font-medium text-zinc-400">
+            {item.waitLabel}
+          </span>
+        ) : null}
+      </RowChrome>
+    </li>
+  );
+}
+
+function MemberSummaryBucket({
+  heading,
+  items,
+  emptyText,
+  accent,
+  openPrInApp,
+  openTicketInApp,
+}: {
+  heading: string;
+  items: Array<TeamMemberSummaryItem | { title: string; ref: string; waitLabel?: string }>;
+  emptyText: string;
+  accent: Accent;
+  openPrInApp: (repo: string, number: number) => void;
+  openTicketInApp: (identifier: string) => void;
+}) {
+  return (
+    <div className="min-w-0">
+      <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-zinc-500">{heading}</p>
+      {items.length === 0 ? (
+        <p className="text-[11px] text-zinc-600">{emptyText}</p>
+      ) : (
+        <ul className="divide-y divide-zinc-800/60 rounded-md border border-zinc-800/60 bg-zinc-950/30">
+          {items.map((raw) => (
+            <MemberSummaryItemRow
+              key={`${heading}:${("entityIdentifier" in raw ? raw.entityIdentifier : raw.ref) ?? raw.title}`}
+              rawItem={raw}
+              accent={accent}
+              openPrInApp={openPrInApp}
+              openTicketInApp={openTicketInApp}
+            />
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function TeamMemberSummarySection({ snapshot }: { snapshot: TeamOverviewSnapshot }) {
+  const navigate = useNavigate();
+  const config = useAppStore((s) => s.config);
+  const memberLinks = config?.team?.memberLinks;
+  const [linkDialog, setLinkDialog] = useState<{
+    label: string;
+    hints: TeamMemberSummaryIdentityHint[] | undefined;
+  } | null>(null);
+
+  const rows = useMemo(
+    () => reconcileMemberSummariesForDisplay(snapshot.memberSummaries, memberLinks),
+    [snapshot.memberSummaries, memberLinks],
+  );
+
+  const openPrInApp = (repo: string, number: number) => {
+    const idx = repo.indexOf("/");
+    if (idx <= 0) return;
+    const owner = repo.slice(0, idx);
+    const repoName = repo.slice(idx + 1);
+    void navigate({
+      to: "/reviews/$owner/$repo/pull/$number",
+      params: { owner, repo: repoName, number: String(number) },
+      search: { tab: "threads", file: undefined },
+    });
+  };
+
+  const openTicketInApp = (identifier: string) => {
+    void navigate({ to: "/tickets/$ticketId", params: { ticketId: identifier } });
+  };
+
+  if (rows.length === 0) {
+    return (
+      <div className="mb-4 rounded-lg border border-zinc-800/80 bg-zinc-950/40 px-3 py-3">
+        <div className="flex items-center gap-2 text-xs text-zinc-500">
+          <Sparkles className="h-3.5 w-3.5 shrink-0 text-zinc-600" />
+          <span>No per-person summary yet — run a team snapshot refresh after there is PR and ticket activity.</span>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <section className="mb-4">
+      <div className="mb-2 flex items-center gap-2">
+        <Sparkles className="h-3.5 w-3.5 text-cyan-400/90" strokeWidth={2.25} />
+        <h3 className="text-[11px] font-semibold uppercase tracking-wide text-zinc-400">By teammate</h3>
+      </div>
+      <div className="max-h-[min(70vh,40rem)] space-y-2 overflow-y-auto pr-0.5">
+        {rows.map((row) => {
+          const n = row.workingOn.length + row.waiting.length + row.comingUp.length;
+          const needsLink = memberSummaryNeedsIdentityLink(row.identityHints, memberLinks);
+          return (
+            <details
+              key={row.memberLabel}
+              className="group rounded-lg border border-zinc-800/90 bg-zinc-950/50 open:border-zinc-700/90"
+            >
+              <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2.5 [&::-webkit-details-marker]:hidden">
+                <ChevronRight
+                  className="h-4 w-4 shrink-0 text-zinc-500 transition-transform group-open:rotate-90"
+                  aria-hidden
+                />
+                <span className="min-w-0 flex-1 truncate text-sm font-medium text-zinc-100">{row.memberLabel}</span>
+                <span className="shrink-0 text-[10px] tabular-nums text-zinc-500">
+                  {n} item{n === 1 ? "" : "s"}
+                </span>
+                {needsLink ? (
+                  <button
+                    type="button"
+                    className="inline-flex shrink-0 items-center gap-1 rounded-md border border-violet-700/60 bg-violet-950/40 px-2 py-1 text-[10px] font-medium text-violet-200 hover:bg-violet-900/50"
+                    title="Add GitHub ↔ Linear identity link"
+                    onClick={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      setLinkDialog({ label: row.memberLabel, hints: row.identityHints });
+                    }}
+                  >
+                    <Link2 className="h-3 w-3" />
+                    Link
+                  </button>
+                ) : null}
+              </summary>
+              <div className="space-y-4 border-t border-zinc-800/70 px-2 pb-3 pt-2">
+                {row.aiDigest?.bullets?.length ? (
+                  <div className="rounded-md border border-cyan-900/40 bg-cyan-950/20 px-2.5 py-2">
+                    <p className="mb-1.5 text-[10px] font-medium uppercase tracking-wide text-cyan-500/90">
+                      AI summary                      {row.aiDigest.generatedAt ? (
+                        <span className="ml-1.5 font-normal normal-case text-zinc-600">
+                          · {new Date(row.aiDigest.generatedAt).toLocaleString()}
+                        </span>
+                      ) : null}
+                    </p>
+                    <ul className="list-disc space-y-1 pl-4 text-xs leading-snug text-zinc-300">
+                      {row.aiDigest.bullets.map((b, i) => (
+                        <li key={i}>{b}</li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
+                <MemberSummaryBucket
+                  heading="Working on"
+                  items={row.workingOn}
+                  emptyText="Nothing in flight in this snapshot."
+                  accent="emerald"
+                  openPrInApp={openPrInApp}
+                  openTicketInApp={openTicketInApp}
+                />
+                <MemberSummaryBucket
+                  heading="Waiting / blocked"
+                  items={row.waiting}
+                  emptyText="No blocked or waiting items."
+                  accent="amber"
+                  openPrInApp={openPrInApp}
+                  openTicketInApp={openTicketInApp}
+                />
+                <MemberSummaryBucket
+                  heading="Coming up"
+                  items={row.comingUp}
+                  emptyText="No queued tickets."
+                  accent="violet"
+                  openPrInApp={openPrInApp}
+                  openTicketInApp={openTicketInApp}
+                />
+              </div>
+            </details>
+          );
+        })}
+      </div>
+           <TeamMemberLinkDialog
+        open={linkDialog != null}
+        onOpenChange={(open) => {
+          if (!open) setLinkDialog(null);
+        }}
+        displayLabel={linkDialog?.label ?? ""}
+        identityHints={linkDialog?.hints}
+      />
+    </section>
+  );
+}
+
 export function TeamSnapshotPanel({
   data,
   loading,
   error,
   onRefresh,
   showRadarLink = true,
+  showMemberSummary = false,
 }: TeamSnapshotPanelProps) {
   const [lastManualRefreshMs, setLastManualRefreshMs] = useState<number | null>(null);
   const [cooldownNowMs, setCooldownNowMs] = useState<number>(() => Date.now());
@@ -376,7 +689,10 @@ export function TeamSnapshotPanel({
         )}
 
         {snapshot && (
-          <SnapshotBody snapshot={snapshot} summary={summary} />
+          <>
+            {showMemberSummary ? <TeamMemberSummarySection snapshot={snapshot} /> : null}
+            <SnapshotBody snapshot={snapshot} summary={summary} />
+          </>
         )}
       </div>
     </section>

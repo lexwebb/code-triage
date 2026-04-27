@@ -1,7 +1,8 @@
 import { useQuery } from "@tanstack/react-query";
 import { useEffect } from "react";
-import { api } from "../api";
+import type { PullsBundleResponse } from "../api";
 import { qk } from "../lib/query-keys";
+import { trpcClient } from "../lib/trpc";
 import { useAppStore } from "../store";
 
 /**
@@ -13,23 +14,23 @@ export function useServerQuerySync() {
   const repoFilter = useAppStore((s) => s.repoFilter);
   const teamEnabled = useAppStore((s) => s.config?.team?.enabled !== false);
 
-  const pullsQuery = useQuery({
+  const pullsQuery = useQuery<PullsBundleResponse>({
     queryKey: qk.pulls.bundle(repoFilter),
-    queryFn: () => api.getPullsBundle(repoFilter || undefined),
+    queryFn: () => trpcClient.pullsBundle.query({ repo: repoFilter || undefined }) as Promise<PullsBundleResponse>,
     staleTime: 20_000,
     enabled: appGate === "ready",
   });
 
   const attentionQuery = useQuery({
     queryKey: qk.attention.list(false),
-    queryFn: () => api.getAttentionItems(),
+    queryFn: () => trpcClient.attentionItems.query({ all: false }),
     staleTime: 15_000,
     enabled: appGate === "ready",
   });
 
   useQuery({
     queryKey: qk.team.overview,
-    queryFn: () => api.getTeamOverview(),
+    queryFn: () => trpcClient.teamOverview.query(),
     staleTime: 60_000,
     enabled: appGate === "ready" && teamEnabled,
   });

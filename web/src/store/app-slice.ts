@@ -1,4 +1,5 @@
-import { api } from "../api";
+import type { ConfigGetResponse } from "../api";
+import { trpcClient } from "../lib/trpc";
 import type { SliceCreator, AppSlice } from "./types";
 import { payloadToForm } from "./settings-form";
 
@@ -14,7 +15,7 @@ export const createAppSlice: SliceCreator<AppSlice> = (set, get) => ({
 
   initialize: async () => {
     try {
-      const r = await api.getConfig();
+      const r = await trpcClient.configGet.query() as unknown as ConfigGetResponse;
       set({
         setupConfig: r,
         config: r.config,
@@ -28,9 +29,9 @@ export const createAppSlice: SliceCreator<AppSlice> = (set, get) => ({
 
       // Pulls load via ServerQuerySync (TanStack Query) once appGate is ready
       const [, ,] = await Promise.allSettled([
-        api.getUser().then((u) => set({ currentUser: u.login || null })),
-        api.getRepos().then((repos) => set({ repos })),
-        api.getVersion().then((v) => {
+        trpcClient.userGet.query().then((u) => set({ currentUser: u.login || null })),
+        trpcClient.reposGet.query().then((repos) => set({ repos })),
+        trpcClient.versionGet.query().then((v) => {
           if (v.behind > 0) set({ updateAvailable: v });
         }),
       ]);
@@ -44,13 +45,13 @@ export const createAppSlice: SliceCreator<AppSlice> = (set, get) => ({
   },
 
   saveConfig: async (body) => {
-    const result = await api.saveConfig(body);
+    const result = await trpcClient.configSave.mutate(body) as { ok: boolean; restartRequired: boolean };
     if (typeof body.preferredEditor === "string") {
       set({ preferredEditor: body.preferredEditor });
     }
     // Refresh repos and pulls after config change
     await Promise.allSettled([
-      api.getRepos().then((repos) => set({ repos })),
+      trpcClient.reposGet.query().then((repos) => set({ repos })),
       get().fetchPulls(false),
     ]);
     return result;

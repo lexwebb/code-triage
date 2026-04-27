@@ -26,8 +26,9 @@ export function reduceCiToTriState(input: {
   if (statusState === "failure" || statusState === "error") return "failure";
   if (checks && checks.failure > 0) return "failure";
 
-  if (statusState === "pending" && hasStatuses) return "pending";
+  // Prefer check-run pending when available; legacy commit statuses can be stale.
   if (checks && checks.pending > 0) return "pending";
+  if (!checks && statusState === "pending" && hasStatuses) return "pending";
 
   if (statusState === "success" || (checks && checks.success > 0)) return "success";
   return "pending";

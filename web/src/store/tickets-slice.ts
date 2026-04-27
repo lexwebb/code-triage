@@ -1,6 +1,6 @@
-import { api } from "../api";
 import { getQueryClient } from "../lib/query-client";
 import { qk } from "../lib/query-keys";
+import { trpcClient } from "../lib/trpc";
 import type { SliceCreator, TicketsSlice } from "./types";
 import { router } from "../tanstack-router";
 
@@ -21,9 +21,9 @@ export const createTicketsSlice: SliceCreator<TicketsSlice> = (set, get) => ({
         queryKey: qk.tickets.bundle,
         queryFn: async () => {
           const [mineR, repoR, mapR] = await Promise.allSettled([
-            api.getMyTickets(),
-            api.getRepoLinkedTickets(),
-            api.getTicketLinkMap(),
+            trpcClient.ticketsMine.query(),
+            trpcClient.ticketsRepoLinked.query(),
+            trpcClient.ticketsLinkMap.query(),
           ]);
           if (mineR.status === "rejected") throw mineR.reason;
           const mine = mineR.value;
@@ -72,7 +72,7 @@ export const createTicketsSlice: SliceCreator<TicketsSlice> = (set, get) => ({
     try {
       const detail = await getQueryClient().fetchQuery({
         queryKey: qk.tickets.detail(id),
-        queryFn: () => api.getTicketDetail(id),
+        queryFn: () => trpcClient.ticketDetail.query({ id }),
       });
       if (get().selectedTicket !== id) return;
       set({ ticketDetail: detail, ticketDetailLoading: false });

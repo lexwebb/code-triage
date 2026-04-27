@@ -1,4 +1,6 @@
-import { getRawSqlite, openStateDatabase } from "./db/client.js";
+import { eq } from "drizzle-orm";
+import * as schema from "./db/schema.js";
+import { openStateDatabase } from "./db/client.js";
 
 export interface RepoPollScheduleOptions {
   /** After this many days without activity, treat repo as “cold”. Set ≤0 to poll all repos every cycle. */
@@ -19,26 +21,31 @@ export function selectReposToPoll(repoPaths: string[], now: number, opts: RepoPo
   }
   if (repoPaths.length === 0) return [];
 
-  openStateDatabase();
-  const sqlite = getRawSqlite();
+  const database = openStateDatabase();
   const staleMs = opts.staleAfterDays * 86_400_000;
   const coldMs = opts.coldIntervalMinutes * 60_000;
   const superCold = Math.max(1, Math.floor(opts.superColdMultiplier ?? 1));
-  const stmt = sqlite.prepare("SELECT last_activity_ms, last_poll_ms FROM repo_poll WHERE repo = ?");
   const out: string[] = [];
 
   for (const repo of repoPaths) {
-    const row = stmt.get(repo) as { last_activity_ms: number; last_poll_ms: number } | undefined;
+    const row = database
+      .select({
+        lastActivityMs: schema.repoPoll.lastActivityMs,
+        lastPollMs: schema.repoPoll.lastPollMs,
+      })
+      .from(schema.repoPoll)
+      .where(eq(schema.repoPoll.repo, repo))
+      .get();
     if (!row) {
       out.push(repo);
       continue;
     }
-    const hot = now - row.last_activity_ms < staleMs;
+    const hot = now - row.lastActivityMs < staleMs;
     if (hot) {
       out.push(repo);
     } else {
-      const spacingMs = row.last_activity_ms <= 0 ? coldMs * superCold : coldMs;
-      if (now - row.last_poll_ms >= spacingMs) {
+      const spacingMs = row.lastActivityMs <= 0 ? coldMs * superCold : coldMs;
+      if (now - row.lastPollMs >= spacingMs) {
         out.push(repo);
       }
     }
@@ -52,36 +59,39 @@ export function selectReposToPoll(repoPaths: string[], now: number, opts: RepoPo
  */
 export function recordPollOutcomes(entries: Array<{ repo: string; hadActivity: boolean }>, now: number): void {
   if (entries.length === 0) return;
-  openStateDatabase();
-  const sqlite = getRawSqlite();
-  const selectPrev = sqlite.prepare("SELECT last_activity_ms FROM repo_poll WHERE repo = ?");
-  const upsert = sqlite.prepare(`
-    INSERT INTO repo_poll (repo, last_activity_ms, last_poll_ms)
-    VALUES (?, ?, ?)
-    ON CONFLICT(repo) DO UPDATE SET
-      last_activity_ms = excluded.last_activity_ms,
-      last_poll_ms = excluded.last_poll_ms
-  `);
+  const database = openStateDatabase();
 
   for (const { repo, hadActivity } of entries) {
-    const prev = selectPrev.get(repo) as { last_activity_ms: number } | undefined;
+    const prev = database
+      .select({ lastActivityMs: schema.repoPoll.lastActivityMs })
+      .from(schema.repoPoll)
+      .where(eq(schema.repoPoll.repo, repo))
+      .get();
+
     let lastActivityMs: number;
     if (hadActivity) {
       lastActivityMs = now;
     } else if (prev) {
-      lastActivityMs = prev.last_activity_ms;
+      lastActivityMs = prev.lastActivityMs;
     } else {
       /* First row: no triage activity yet — not “hot” (avoids 7d false warmth from `lastActivityMs = now`). */
       lastActivityMs = 0;
     }
-    upsert.run(repo, lastActivityMs, now);
+
+    database
+      .insert(schema.repoPoll)
+      .values({ repo, lastActivityMs, lastPollMs: now })
+      .onConflictDoUpdate({
+        target: schema.repoPoll.repo,
+        set: { lastActivityMs, lastPollMs: now },
+      })
+      .run();
   }
 }
 
 /** Clears adaptive poll timing so the next CLI poll cycle recomputes hot/cold from scratch. */
 export function clearRepoPollSchedule(): void {
-  openStateDatabase();
-  getRawSqlite().prepare("DELETE FROM repo_poll").run();
+  openStateDatabase().delete(schema.repoPoll).run();
 }
 
 /** Vitest / isolated runs. */

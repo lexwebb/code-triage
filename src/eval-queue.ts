@@ -1,6 +1,8 @@
-import { getRawSqlite, openStateDatabase } from "./db/client.js";
+import { asc, count, eq, gte, sql } from "drizzle-orm";
+import * as schema from "./db/schema.js";
+import { openStateDatabase } from "./db/client.js";
 import { loadState, markEvaluating, needsEvaluation, saveState, markEvalFailed, markCommentWithEvaluation } from "./state.js";
-import { evaluateComment, clampEvalConcurrency } from "./actioner.js";
+import { evaluateComment, clampEvalConcurrency, resolveThread } from "./actioner.js";
 import { updateClaudeStats, sseBroadcast, broadcastPollStatus } from "./server.js";
 import { notifyEvalComplete } from "./push.js";
 import { loadConfig } from "./config.js";
@@ -18,8 +20,7 @@ export interface QueueItem {
 }
 
 function db() {
-  openStateDatabase();
-  return getRawSqlite();
+  return openStateDatabase();
 }
 
 export function enqueueEvaluation(
@@ -29,8 +30,12 @@ export function enqueueEvaluation(
   state: CrWatchState,
 ): "queued" | "already-evaluated" | "already-queued" {
   const commentKey = `${repo}:${comment.id}`;
-  const sqlite = db();
-  const existing = sqlite.prepare("SELECT comment_key FROM eval_queue WHERE comment_key = ?").get(commentKey);
+  const database = db();
+  const existing = database
+    .select({ commentKey: schema.evalQueue.commentKey })
+    .from(schema.evalQueue)
+    .where(eq(schema.evalQueue.commentKey, commentKey))
+    .get();
   if (existing) {
     return "already-queued";
   }
@@ -40,20 +45,26 @@ export function enqueueEvaluation(
   }
 
   const now = new Date().toISOString();
-  sqlite.prepare(
-    `INSERT INTO eval_queue (comment_key, comment_id, repo, pr_number, comment_json, status, attempts, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, 'queued', 0, ?, ?)`,
-  ).run(commentKey, comment.id, repo, prNumber, JSON.stringify(comment), now, now);
+  database
+    .insert(schema.evalQueue)
+    .values({
+      commentKey,
+      commentId: comment.id,
+      repo,
+      prNumber,
+      commentJson: JSON.stringify(comment),
+      status: "queued",
+      attempts: 0,
+      createdAt: now,
+      updatedAt: now,
+    })
+    .run();
 
   markEvaluating(state, comment.id, prNumber, repo);
   return "queued";
 }
 
-export function enqueueMany(
-  comments: CrComment[],
-  repo: string,
-  state: CrWatchState,
-): number {
+export function enqueueMany(comments: CrComment[], repo: string, state: CrWatchState): number {
   let enqueued = 0;
   for (const comment of comments) {
     const result = enqueueEvaluation(comment, comment.prNumber, repo, state);
@@ -68,23 +79,19 @@ export function enqueueMany(
 
 export function dequeueItems(limit: number): QueueItem[] {
   const rows = db()
-    .prepare("SELECT * FROM eval_queue WHERE status = 'queued' ORDER BY created_at ASC LIMIT ?")
-    .all(limit) as Array<{
-      comment_key: string;
-      comment_id: number;
-      repo: string;
-      pr_number: number;
-      comment_json: string;
-      status: string;
-      attempts: number;
-    }>;
+    .select()
+    .from(schema.evalQueue)
+    .where(eq(schema.evalQueue.status, "queued"))
+    .orderBy(asc(schema.evalQueue.createdAt))
+    .limit(limit)
+    .all();
 
   return rows.map((r) => ({
-    commentKey: r.comment_key,
-    commentId: r.comment_id,
+    commentKey: r.commentKey,
+    commentId: r.commentId,
     repo: r.repo,
-    prNumber: r.pr_number,
-    comment: JSON.parse(r.comment_json) as CrComment,
+    prNumber: r.prNumber,
+    comment: JSON.parse(r.commentJson) as CrComment,
     status: r.status as "queued" | "in_flight",
     attempts: r.attempts,
   }));
@@ -92,63 +99,87 @@ export function dequeueItems(limit: number): QueueItem[] {
 
 export function markInFlight(commentKey: string): void {
   db()
-    .prepare("UPDATE eval_queue SET status = 'in_flight', updated_at = ? WHERE comment_key = ?")
-    .run(new Date().toISOString(), commentKey);
+    .update(schema.evalQueue)
+    .set({ status: "in_flight", updatedAt: new Date().toISOString() })
+    .where(eq(schema.evalQueue.commentKey, commentKey))
+    .run();
 }
 
 export function completeItem(commentKey: string): void {
-  db().prepare("DELETE FROM eval_queue WHERE comment_key = ?").run(commentKey);
+  db().delete(schema.evalQueue).where(eq(schema.evalQueue.commentKey, commentKey)).run();
 }
 
 const MAX_ATTEMPTS = 3;
 
 export function failItem(commentKey: string): void {
-  const sqlite = db();
+  const database = db();
   const now = new Date().toISOString();
-  sqlite
-    .prepare("UPDATE eval_queue SET attempts = attempts + 1, status = 'queued', updated_at = ? WHERE comment_key = ?")
-    .run(now, commentKey);
+  database
+    .update(schema.evalQueue)
+    .set({
+      attempts: sql`${schema.evalQueue.attempts} + 1`,
+      status: "queued",
+      updatedAt: now,
+    })
+    .where(eq(schema.evalQueue.commentKey, commentKey))
+    .run();
 
-  const row = sqlite
-    .prepare("SELECT attempts, repo, comment_id FROM eval_queue WHERE comment_key = ?")
-    .get(commentKey) as { attempts: number; repo: string; comment_id: number } | undefined;
+  const row = database
+    .select({
+      attempts: schema.evalQueue.attempts,
+      repo: schema.evalQueue.repo,
+      commentId: schema.evalQueue.commentId,
+    })
+    .from(schema.evalQueue)
+    .where(eq(schema.evalQueue.commentKey, commentKey))
+    .get();
 
   if (row && row.attempts >= MAX_ATTEMPTS) {
-    sqlite.prepare("DELETE FROM eval_queue WHERE comment_key = ?").run(commentKey);
+    database.delete(schema.evalQueue).where(eq(schema.evalQueue.commentKey, commentKey)).run();
     const state = loadState();
-    markEvalFailed(state, row.comment_id, row.repo);
+    markEvalFailed(state, row.commentId, row.repo);
     saveState(state);
   }
 }
 
 export function getQueueDepth(): { queued: number; inFlight: number } {
   const rows = db()
-    .prepare("SELECT status, COUNT(*) as cnt FROM eval_queue GROUP BY status")
-    .all() as Array<{ status: string; cnt: number }>;
+    .select({ status: schema.evalQueue.status, cnt: count().as("cnt") })
+    .from(schema.evalQueue)
+    .groupBy(schema.evalQueue.status)
+    .all();
   let queued = 0;
   let inFlight = 0;
   for (const r of rows) {
-    if (r.status === "queued") queued = r.cnt;
-    if (r.status === "in_flight") inFlight = r.cnt;
+    if (r.status === "queued") queued = Number(r.cnt);
+    if (r.status === "in_flight") inFlight = Number(r.cnt);
   }
   return { queued, inFlight };
 }
 
 export function recoverQueue(): void {
-  db()
-    .prepare("UPDATE eval_queue SET status = 'queued', updated_at = ? WHERE status = 'in_flight'")
-    .run(new Date().toISOString());
+  const database = db();
+  database
+    .update(schema.evalQueue)
+    .set({ status: "queued", updatedAt: new Date().toISOString() })
+    .where(eq(schema.evalQueue.status, "in_flight"))
+    .run();
 
-  const sqlite = db();
-  const deadLettered = sqlite
-    .prepare("SELECT comment_key, comment_id, repo FROM eval_queue WHERE attempts >= ?")
-    .all(MAX_ATTEMPTS) as Array<{ comment_key: string; comment_id: number; repo: string }>;
+  const deadLettered = database
+    .select({
+      commentKey: schema.evalQueue.commentKey,
+      commentId: schema.evalQueue.commentId,
+      repo: schema.evalQueue.repo,
+    })
+    .from(schema.evalQueue)
+    .where(gte(schema.evalQueue.attempts, MAX_ATTEMPTS))
+    .all();
 
   if (deadLettered.length > 0) {
     const state = loadState();
     for (const row of deadLettered) {
-      markEvalFailed(state, row.comment_id, row.repo);
-      sqlite.prepare("DELETE FROM eval_queue WHERE comment_key = ?").run(row.comment_key);
+      markEvalFailed(state, row.commentId, row.repo);
+      database.delete(schema.evalQueue).where(eq(schema.evalQueue.commentKey, row.commentKey)).run();
     }
     saveState(state);
   }
@@ -165,7 +196,8 @@ export async function drainOnce(concurrency?: number): Promise<void> {
   draining = true;
 
   try {
-    const cap = concurrency ?? clampEvalConcurrency(loadConfig().evalConcurrency ?? 2);
+    const config = loadConfig();
+    const cap = concurrency ?? clampEvalConcurrency(config.evalConcurrency ?? 2);
     const items = dequeueItems(cap);
     if (items.length === 0) return;
 
@@ -178,7 +210,17 @@ export async function drainOnce(concurrency?: number): Promise<void> {
       try {
         const evaluation = await evaluateComment(item.comment, item.repo);
         const state = loadState();
-        markCommentWithEvaluation(state, item.commentId, "pending", item.prNumber, evaluation, item.repo);
+        let nextStatus: "pending" | "replied" = "pending";
+        if (config.autoResolveOnEvaluation && evaluation.action === "resolve") {
+          try {
+            await resolveThread(item.repo, item.commentId, item.prNumber, evaluation.reply);
+            nextStatus = "replied";
+          } catch (err) {
+            // Keep the triaged result so users can resolve manually if the API call fails.
+            console.error(`Auto-resolve failed for ${item.commentKey}: ${(err as Error).message}`);
+          }
+        }
+        markCommentWithEvaluation(state, item.commentId, nextStatus, item.prNumber, evaluation, item.repo);
         saveState(state);
         completeItem(item.commentKey);
         updateClaudeStats({ evalFinished: true });

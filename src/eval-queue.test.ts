@@ -11,14 +11,16 @@ import type { CrComment } from "./types.js";
 vi.mock("./actioner.js", () => ({
   evaluateComment: vi.fn().mockResolvedValue({ action: "reply", summary: "ok", reply: "hi" }),
   clampEvalConcurrency: (n: number) => Math.min(8, Math.max(1, n)),
+  resolveThread: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock("./server.js", () => ({
   updateClaudeStats: vi.fn(),
   sseBroadcast: vi.fn(),
   broadcastPollStatus: vi.fn(),
 }));
+const mockLoadConfig = vi.fn(() => ({ evalConcurrency: 2, autoResolveOnEvaluation: false }));
 vi.mock("./config.js", () => ({
-  loadConfig: () => ({ evalConcurrency: 2 }),
+  loadConfig: () => mockLoadConfig(),
 }));
 
 let testRoot: string;
@@ -39,6 +41,8 @@ afterAll(() => {
 });
 
 beforeEach(() => {
+  mockLoadConfig.mockReset();
+  mockLoadConfig.mockReturnValue({ evalConcurrency: 2, autoResolveOnEvaluation: false });
   closeStateDatabase();
   const dir = getStateDir();
   mkdirSync(dir, { recursive: true });
@@ -167,5 +171,31 @@ describe("eval-queue worker", () => {
     const items = dequeueItems(10);
     expect(items).toHaveLength(1);
     expect(items[0].attempts).toBe(1);
+  });
+
+  it("auto-resolves when evaluation action is resolve and config is enabled", async () => {
+    const { evaluateComment, resolveThread } = await import("./actioner.js");
+    (evaluateComment as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      action: "resolve",
+      summary: "already addressed",
+      reply: "Resolved automatically",
+    });
+    mockLoadConfig.mockReturnValue({ evalConcurrency: 2, autoResolveOnEvaluation: true });
+
+    const state = loadState();
+    enqueueEvaluation(makeComment(90), 1, "o/r", state);
+    saveState(state);
+
+    await drainOnce(2);
+
+    expect(resolveThread as ReturnType<typeof vi.fn>).toHaveBeenCalledWith(
+      "o/r",
+      90,
+      1,
+      "Resolved automatically",
+    );
+    const updated = loadState();
+    expect(updated.comments["o/r:90"]?.status).toBe("replied");
+    expect(updated.comments["o/r:90"]?.evaluation?.action).toBe("resolve");
   });
 });

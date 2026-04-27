@@ -41,5 +41,11 @@ export function payloadToForm(c: AppConfigPayload): SettingsFormState {
     coherenceTicketInactivityDays: c.coherence?.ticketInactivityDays ?? 5,
     teamEnabled: c.team.enabled,
     teamPollIntervalMinutes: c.team.pollIntervalMinutes,
+    teamMemberLinksJson: JSON.stringify(c.team.memberLinks ?? [], null, 2),
+    teamClaudeMemberLinking: c.team.claudeMemberLinking !== false,
+    teamClaudeMemberSummaries: c.team.claudeMemberSummaries !== false,
+    teamIncludeGithubOrgMemberPulls: c.team.includeGithubOrgMemberPulls !== false,
+    teamIncludeLinearTeamScopeIssues: c.team.includeLinearTeamScopeIssues !== false,
+    teamLinearTeamIssueCap: c.team.linearTeamIssueCap ?? 200,
   };
 }

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, type PrCompanionChatMessage, type PrCompanionBatchFix, type PrCompanionQueueFix } from "../api";
+import type { PrCompanionChatMessage, PrCompanionBatchFix, PrCompanionQueueFix } from "../api";
+import { trpcClient } from "../lib/trpc";
 import { useAppStore } from "../store";
 import { Button } from "./ui/button";
 import { cn } from "../lib/utils";
@@ -91,8 +92,9 @@ export function PrCompanionPanel({
   useEffect(() => {
     let cancel = false;
     setLoadingSession(true);
-    void api
-      .getPrCompanionSession(repo, prNumber)
+    void trpcClient
+      .companionSession
+      .query({ repo, prNumber })
       .then((s) => {
         if (cancel) return;
         setMessages(s.messages);
@@ -127,7 +129,7 @@ export function PrCompanionPanel({
     setLoading(true);
     setInput("");
     try {
-      const out = await api.postPrCompanionMessage({
+      const out = await trpcClient.companionMessage.mutate({
         repo,
         prNumber,
         userMessage: text,
@@ -167,7 +169,7 @@ export function PrCompanionPanel({
   async function handleReset() {
     setError(null);
     try {
-      await api.resetPrCompanionSession(repo, prNumber);
+      await trpcClient.companionReset.mutate({ repo, prNumber });
       setMessages([]);
       setBundleUpdatedAtMs(null);
       setBundleThreadCount(0);

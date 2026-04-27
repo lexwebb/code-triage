@@ -1,4 +1,6 @@
-import { getRawSqlite, openStateDatabase } from "./db/client.js";
+import { asc, eq, sql } from "drizzle-orm";
+import * as schema from "./db/schema.js";
+import { openStateDatabase } from "./db/client.js";
 import { sseBroadcast, getActiveFixForBranch, setFixJobStatus, getRepos, getAllFixJobStatuses } from "./server.js";
 import { loadState, saveState, addFixJob, removeFixJob } from "./state.js";
 import { createWorktree, removeWorktree, getDiffInWorktree } from "./worktree.js";
@@ -32,72 +34,101 @@ export interface EnqueueFixRequest {
 let nextPosition = 0;
 
 function db() {
-  openStateDatabase();
-  return getRawSqlite();
+  return openStateDatabase();
 }
 
 export function loadFixQueue(): void {
-  const maxPos = db().prepare("SELECT MAX(position) as m FROM fix_queue").get() as { m: number | null } | undefined;
-  nextPosition = (maxPos?.m ?? 0) + 1;
+  const row = db()
+    .select({ m: sql<number | null>`max(${schema.fixQueue.position})` })
+    .from(schema.fixQueue)
+    .get();
+  nextPosition = (row?.m ?? 0) + 1;
 }
 
 export function enqueueFix(req: EnqueueFixRequest): FixQueueItem {
   const now = new Date().toISOString();
   const pos = nextPosition++;
-  db().prepare(
-    `INSERT INTO fix_queue (comment_id, repo, pr_number, branch, path, line, body, diff_hunk, user_instructions, queued_at, position)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).run(
-    req.commentId, req.repo, req.prNumber, req.branch,
-    req.comment.path, req.comment.line, req.comment.body, req.comment.diffHunk,
-    req.userInstructions ?? null, now, pos,
-  );
+  db()
+    .insert(schema.fixQueue)
+    .values({
+      commentId: req.commentId,
+      repo: req.repo,
+      prNumber: req.prNumber,
+      branch: req.branch,
+      path: req.comment.path,
+      line: req.comment.line,
+      body: req.comment.body,
+      diffHunk: req.comment.diffHunk,
+      userInstructions: req.userInstructions ?? null,
+      queuedAt: now,
+      position: pos,
+    })
+    .run();
   const item: FixQueueItem = {
-    id: 0, commentId: req.commentId, repo: req.repo, prNumber: req.prNumber,
-    branch: req.branch, path: req.comment.path, line: req.comment.line,
-    body: req.comment.body, diffHunk: req.comment.diffHunk,
-    userInstructions: req.userInstructions ?? null, queuedAt: now, position: pos,
+    id: 0,
+    commentId: req.commentId,
+    repo: req.repo,
+    prNumber: req.prNumber,
+    branch: req.branch,
+    path: req.comment.path,
+    line: req.comment.line,
+    body: req.comment.body,
+    diffHunk: req.comment.diffHunk,
+    userInstructions: req.userInstructions ?? null,
+    queuedAt: now,
+    position: pos,
   };
   broadcastQueue();
   return item;
 }
 
 export function getFixQueue(): FixQueueItem[] {
-  const rows = db()
-    .prepare("SELECT * FROM fix_queue ORDER BY position ASC")
-    .all() as Array<{
-      id: number; comment_id: number; repo: string; pr_number: number;
-      branch: string; path: string; line: number; body: string; diff_hunk: string;
-      user_instructions: string | null; queued_at: string; position: number;
-    }>;
+  const rows = db().select().from(schema.fixQueue).orderBy(asc(schema.fixQueue.position)).all();
   return rows.map((r) => ({
-    id: r.id, commentId: r.comment_id, repo: r.repo, prNumber: r.pr_number,
-    branch: r.branch, path: r.path, line: r.line, body: r.body, diffHunk: r.diff_hunk,
-    userInstructions: r.user_instructions, queuedAt: r.queued_at, position: r.position,
+    id: r.id,
+    commentId: r.commentId,
+    repo: r.repo,
+    prNumber: r.prNumber,
+    branch: r.branch,
+    path: r.path,
+    line: r.line,
+    body: r.body,
+    diffHunk: r.diffHunk,
+    userInstructions: r.userInstructions,
+    queuedAt: r.queuedAt,
+    position: r.position,
   }));
 }
 
 export function dequeueNextFix(): FixQueueItem | null {
   const row = db()
-    .prepare("SELECT * FROM fix_queue ORDER BY position ASC LIMIT 1")
-    .get() as {
-      id: number; comment_id: number; repo: string; pr_number: number;
-      branch: string; path: string; line: number; body: string; diff_hunk: string;
-      user_instructions: string | null; queued_at: string; position: number;
-    } | undefined;
+    .select()
+    .from(schema.fixQueue)
+    .orderBy(asc(schema.fixQueue.position))
+    .limit(1)
+    .get();
   if (!row) return null;
-  db().prepare("DELETE FROM fix_queue WHERE id = ?").run(row.id);
+  db().delete(schema.fixQueue).where(eq(schema.fixQueue.id, row.id)).run();
   broadcastQueue();
   return {
-    id: row.id, commentId: row.comment_id, repo: row.repo, prNumber: row.pr_number,
-    branch: row.branch, path: row.path, line: row.line, body: row.body, diffHunk: row.diff_hunk,
-    userInstructions: row.user_instructions, queuedAt: row.queued_at, position: row.position,
+    id: row.id,
+    commentId: row.commentId,
+    repo: row.repo,
+    prNumber: row.prNumber,
+    branch: row.branch,
+    path: row.path,
+    line: row.line,
+    body: row.body,
+    diffHunk: row.diffHunk,
+    userInstructions: row.userInstructions,
+    queuedAt: row.queuedAt,
+    position: row.position,
   };
 }
 
 export function removeFromFixQueue(commentId: number): boolean {
-  const result = db().prepare("DELETE FROM fix_queue WHERE comment_id = ?").run(commentId);
-  if (result.changes > 0) {
+  const result = db().delete(schema.fixQueue).where(eq(schema.fixQueue.commentId, commentId)).run();
+  if ((result.changes ?? 0) > 0) {
     broadcastQueue();
     return true;
   }
@@ -105,20 +136,28 @@ export function removeFromFixQueue(commentId: number): boolean {
 }
 
 export function isInFixQueue(commentId: number): boolean {
-  const row = db().prepare("SELECT 1 FROM fix_queue WHERE comment_id = ?").get(commentId);
+  const row = db()
+    .select({ c: schema.fixQueue.commentId })
+    .from(schema.fixQueue)
+    .where(eq(schema.fixQueue.commentId, commentId))
+    .limit(1)
+    .get();
   return !!row;
 }
 
 function broadcastQueue(): void {
   const queue = getFixQueue();
-  sseBroadcast("fix-queue", queue.map((q) => ({
-    commentId: q.commentId,
-    repo: q.repo,
-    prNumber: q.prNumber,
-    path: q.path,
-    position: q.position,
-    queuedAt: q.queuedAt,
-  })));
+  sseBroadcast(
+    "fix-queue",
+    queue.map((q) => ({
+      commentId: q.commentId,
+      repo: q.repo,
+      prNumber: q.prNumber,
+      path: q.path,
+      position: q.position,
+      queuedAt: q.queuedAt,
+    })),
+  );
 }
 
 export function advanceQueue(): void {
@@ -140,7 +179,7 @@ export function advanceQueue(): void {
     if (!repoInfo?.localPath) continue; // skip — repo not found
 
     // Remove from queue
-    db().prepare("DELETE FROM fix_queue WHERE id = ?").run(item.id);
+    db().delete(schema.fixQueue).where(eq(schema.fixQueue.id, item.id)).run();
     broadcastQueue();
 
     // Start the fix (same flow as the /api/actions/fix handler)
@@ -155,8 +194,12 @@ function startFixFromQueue(item: FixQueueItem, repoLocalPath: string): void {
     worktreePath = createWorktree(item.branch, repoLocalPath);
   } catch (err) {
     setFixJobStatus({
-      commentId: item.commentId, repo: item.repo, prNumber: item.prNumber,
-      path: item.path, startedAt: Date.now(), status: "failed",
+      commentId: item.commentId,
+      repo: item.repo,
+      prNumber: item.prNumber,
+      path: item.path,
+      startedAt: Date.now(),
+      status: "failed",
       error: `Failed to create worktree: ${(err as Error).message}`,
     });
     // Try next item
@@ -165,16 +208,25 @@ function startFixFromQueue(item: FixQueueItem, repoLocalPath: string): void {
   }
 
   const jobRecord: FixJobRecord = {
-    commentId: item.commentId, repo: item.repo, prNumber: item.prNumber,
-    branch: item.branch, path: item.path, worktreePath, startedAt: new Date().toISOString(),
+    commentId: item.commentId,
+    repo: item.repo,
+    prNumber: item.prNumber,
+    branch: item.branch,
+    path: item.path,
+    worktreePath,
+    startedAt: new Date().toISOString(),
   };
   const state = loadState();
   addFixJob(state, jobRecord);
   saveState(state);
 
   setFixJobStatus({
-    commentId: item.commentId, repo: item.repo, prNumber: item.prNumber,
-    path: item.path, startedAt: Date.now(), status: "running",
+    commentId: item.commentId,
+    repo: item.repo,
+    prNumber: item.prNumber,
+    path: item.path,
+    startedAt: Date.now(),
+    status: "running",
   });
 
   // Run Claude in background (don't await — same pattern as api.ts)
@@ -198,10 +250,16 @@ function startFixFromQueue(item: FixQueueItem, repoLocalPath: string): void {
           saveState(s);
         }
         setFixJobStatus({
-          commentId: item.commentId, repo: item.repo, prNumber: item.prNumber,
-          path: item.path, startedAt: Date.now(), status: "awaiting_response",
-          branch: item.branch, claudeOutput: result.rawOutput,
-          sessionId, conversation,
+          commentId: item.commentId,
+          repo: item.repo,
+          prNumber: item.prNumber,
+          path: item.path,
+          startedAt: Date.now(),
+          status: "awaiting_response",
+          branch: item.branch,
+          claudeOutput: result.rawOutput,
+          sessionId,
+          conversation,
         });
         advanceQueue(); // skip — advance to next
         return;
@@ -215,9 +273,14 @@ function startFixFromQueue(item: FixQueueItem, repoLocalPath: string): void {
         removeFixJob(s, item.commentId);
         saveState(s);
         setFixJobStatus({
-          commentId: item.commentId, repo: item.repo, prNumber: item.prNumber,
-          path: item.path, startedAt: Date.now(), status: "no_changes",
-          suggestedReply: result.message, claudeOutput: result.message,
+          commentId: item.commentId,
+          repo: item.repo,
+          prNumber: item.prNumber,
+          path: item.path,
+          startedAt: Date.now(),
+          status: "no_changes",
+          suggestedReply: result.message,
+          claudeOutput: result.message,
         });
         advanceQueue(); // skip — advance to next
         return;
@@ -227,9 +290,15 @@ function startFixFromQueue(item: FixQueueItem, repoLocalPath: string): void {
       removeFixJob(s, item.commentId);
       saveState(s);
       setFixJobStatus({
-        commentId: item.commentId, repo: item.repo, prNumber: item.prNumber,
-        path: item.path, startedAt: Date.now(), status: "completed",
-        diff, branch: item.branch, claudeOutput: result.message,
+        commentId: item.commentId,
+        repo: item.repo,
+        prNumber: item.prNumber,
+        path: item.path,
+        startedAt: Date.now(),
+        status: "completed",
+        diff,
+        branch: item.branch,
+        claudeOutput: result.message,
         conversation: [{ role: "claude" as const, message: result.message }],
       });
       // completed blocks queue — don't advance
@@ -239,8 +308,12 @@ function startFixFromQueue(item: FixQueueItem, repoLocalPath: string): void {
       removeFixJob(s, item.commentId);
       saveState(s);
       setFixJobStatus({
-        commentId: item.commentId, repo: item.repo, prNumber: item.prNumber,
-        path: item.path, startedAt: Date.now(), status: "failed",
+        commentId: item.commentId,
+        repo: item.repo,
+        prNumber: item.prNumber,
+        path: item.path,
+        startedAt: Date.now(),
+        status: "failed",
         error: (err as Error).message,
       });
       advanceQueue(); // skip — advance to next

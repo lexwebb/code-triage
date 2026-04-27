@@ -1,23 +1,35 @@
-import { eq } from "drizzle-orm";
+import { and, count, eq, inArray, isNotNull, isNull, lt, lte, ne, or } from "drizzle-orm";
 import type { CommentTriagePatch, CrWatchState, CommentStatus, CommentRecord, Evaluation, FixJobRecord } from "./types.js";
 import * as schema from "./db/schema.js";
-import { openStateDatabase, writeStateToDb, getRawSqlite } from "./db/client.js";
+import { openStateDatabase, writeStateToDb } from "./db/client.js";
 
 /** Pending local triage rows per PR (not replied/dismissed/fixed), excluding active snoozes. Keys: `owner/repo:prNumber`. */
 export function getPendingTriageCountsByPr(): Map<string, number> {
-  const sqlite = getRawSqlite();
+  const db = openStateDatabase();
   const now = new Date().toISOString();
-  const rows = sqlite.prepare(`
-    SELECT repo, pr_number, COUNT(*) AS cnt
-    FROM comments
-    WHERE status = 'pending'
-      AND repo IS NOT NULL AND repo != ''
-      AND (snooze_until IS NULL OR snooze_until = '' OR snooze_until <= ?)
-    GROUP BY repo, pr_number
-  `).all(now) as Array<{ repo: string; pr_number: number; cnt: number }>;
+  const rows = db
+    .select({
+      repo: schema.comments.repo,
+      prNumber: schema.comments.prNumber,
+      cnt: count().as("cnt"),
+    })
+    .from(schema.comments)
+    .where(
+      and(
+        eq(schema.comments.status, "pending"),
+        isNotNull(schema.comments.repo),
+        ne(schema.comments.repo, ""),
+        or(isNull(schema.comments.snoozeUntil), eq(schema.comments.snoozeUntil, ""), lte(schema.comments.snoozeUntil, now)),
+      ),
+    )
+    .groupBy(schema.comments.repo, schema.comments.prNumber)
+    .all();
+
   const m = new Map<string, number>();
   for (const r of rows) {
-    m.set(`${r.repo}:${r.pr_number}`, r.cnt);
+    if (r.repo) {
+      m.set(`${r.repo}:${r.prNumber}`, Number(r.cnt));
+    }
   }
   return m;
 }
@@ -25,15 +37,14 @@ export function getPendingTriageCountsByPr(): Map<string, number> {
 /** Mark locally-pending comments as dismissed when their GitHub thread has been resolved. Returns count updated. */
 export function reconcileResolvedComments(resolvedIds: Set<number>): number {
   if (resolvedIds.size === 0) return 0;
-  const sqlite = getRawSqlite();
+  const db = openStateDatabase();
   const ids = [...resolvedIds];
-  const placeholders = ids.map(() => "?").join(",");
-  const result = sqlite.prepare(`
-    UPDATE comments SET status = 'dismissed'
-    WHERE comment_id IN (${placeholders})
-      AND status = 'pending'
-  `).run(...ids);
-  return result.changes;
+  const result = db
+    .update(schema.comments)
+    .set({ status: "dismissed" })
+    .where(and(inArray(schema.comments.commentId, ids), eq(schema.comments.status, "pending")))
+    .run();
+  return result.changes ?? 0;
 }
 
 /** Remove old replied/dismissed/fixed rows from SQLite (pending always kept). Returns rows deleted. */
@@ -41,15 +52,18 @@ export function compactCommentHistory(retentionDays: number): number {
   if (!Number.isFinite(retentionDays) || retentionDays <= 0) {
     return 0;
   }
-  openStateDatabase();
-  const sqlite = getRawSqlite();
+  const db = openStateDatabase();
   const cutoff = new Date(Date.now() - retentionDays * 86_400_000).toISOString();
-  const result = sqlite
-    .prepare(
-      `DELETE FROM comments WHERE status IN ('replied', 'dismissed', 'fixed') AND timestamp < ?`,
+  const result = db
+    .delete(schema.comments)
+    .where(
+      and(
+        inArray(schema.comments.status, ["replied", "dismissed", "fixed"]),
+        lt(schema.comments.timestamp, cutoff),
+      ),
     )
-    .run(cutoff);
-  return Number(result.changes);
+    .run();
+  return Number(result.changes ?? 0);
 }
 
 export function loadState(): CrWatchState {
@@ -102,7 +116,7 @@ export function loadState(): CrWatchState {
 }
 
 export function saveState(state: CrWatchState): void {
-  writeStateToDb(getRawSqlite(), state);
+  writeStateToDb(state);
 }
 
 function commentKey(commentId: number, repo?: string): string {

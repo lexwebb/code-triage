@@ -14,8 +14,8 @@ type IssueNode = {
     | undefined;
   priority: number;
   assignee:
-    | Promise<{ name: string; avatarUrl?: string | null } | null | undefined>
-    | { name: string; avatarUrl?: string | null }
+    | Promise<{ id?: string; name: string; avatarUrl?: string | null } | null | undefined>
+    | { id?: string; name: string; avatarUrl?: string | null }
     | null
     | undefined;
   labels: (vars?: Record<string, unknown>) => Promise<{ nodes: Array<{ name: string; color: string }> }>;
@@ -36,7 +36,7 @@ type GqlIssueNode = {
   title: string;
   state?: { name: string; color: string; type: string } | null;
   priority: number;
-  assignee?: { name: string; avatarUrl?: string | null } | null;
+  assignee?: { id?: string; name: string; avatarUrl?: string | null } | null;
   labels?: { nodes: Array<{ name: string; color: string }> } | null;
   attachments?: { nodes: Array<{ url: string; title?: string | null }> } | null;
   // Optional in query because older/stricter schemas may reject this field.
@@ -91,7 +91,7 @@ const ISSUES_LIST_GQL_WITH_SYNCED_WITH = `
         canceledAt
         url
         state { name color type }
-        assignee { name avatarUrl }
+        assignee { id name avatarUrl }
         labels(first: 50) { nodes { name color } }
         attachments(first: 100) { nodes { url title } }
         syncedWith {
@@ -127,13 +127,36 @@ const ISSUES_LIST_GQL = `
         canceledAt
         url
         state { name color type }
-        assignee { name avatarUrl }
+        assignee { id name avatarUrl }
         labels(first: 50) { nodes { name color } }
         attachments(first: 100) { nodes { url title } }
       }
     }
   }
 `;
+
+const WORKSPACE_USERS_GQL = `
+  query CodeTriageWorkspaceUsers($first: Int!, $after: String) {
+    users(first: $first, after: $after) {
+      pageInfo {
+        hasNextPage
+        endCursor
+      }
+      nodes {
+        id
+        name
+        displayName
+      }
+    }
+  }
+`;
+
+type GqlUsersConnection = {
+  users: {
+    pageInfo: { hasNextPage: boolean; endCursor?: string | null };
+    nodes: Array<{ id: string; name: string; displayName?: string | null }>;
+  };
+};
 
 export class LinearProvider implements TicketProvider {
   private client: LinearClient;
@@ -165,6 +188,24 @@ export class LinearProvider implements TicketProvider {
     };
 
     const issues = await this.fetchIssuesByFilter(filter);
+    this.primeIdentifierCache(issues);
+    return issues;
+  }
+
+  /**
+   * Non-assignee-scoped issues for configured `linearTeamKeys` (active states only).
+   * Requires `linearTeamKeys`; returns [] when unset to avoid workspace-wide fetch.
+   */
+  async fetchTeamScopeIssues(maxIssues: number): Promise<TicketIssue[]> {
+    const cap = Math.max(1, Math.floor(maxIssues));
+    if (!this.teamKeys?.length) return [];
+
+    const filter = {
+      team: { key: { in: this.teamKeys } },
+      state: { type: { nin: ["completed", "canceled"] } },
+    };
+
+    const issues = await this.fetchIssuesByFilterCapped(filter, cap);
     this.primeIdentifierCache(issues);
     return issues;
   }
@@ -232,6 +273,25 @@ export class LinearProvider implements TicketProvider {
       const data = await this.fetchIssuesPage(filter, after);
       for (const node of data.issues.nodes) {
         all.push(this.ticketIssueFromGqlNode(node));
+      }
+      if (!data.issues.pageInfo.hasNextPage) break;
+      after = data.issues.pageInfo.endCursor ?? undefined;
+      if (!after) break;
+    }
+    return all;
+  }
+
+  private async fetchIssuesByFilterCapped(
+    filter: Record<string, unknown>,
+    maxIssues: number,
+  ): Promise<TicketIssue[]> {
+    const all: TicketIssue[] = [];
+    let after: string | undefined;
+    for (;;) {
+      const data = await this.fetchIssuesPage(filter, after);
+      for (const node of data.issues.nodes) {
+        all.push(this.ticketIssueFromGqlNode(node));
+        if (all.length >= maxIssues) return all;
       }
       if (!data.issues.pageInfo.hasNextPage) break;
       after = data.issues.pageInfo.endCursor ?? undefined;
@@ -314,7 +374,11 @@ export class LinearProvider implements TicketProvider {
       ),
       providerLinkedPulls: providerLinkedPulls.length > 0 ? providerLinkedPulls : undefined,
       assignee: node.assignee
-        ? { name: node.assignee.name, avatarUrl: node.assignee.avatarUrl ?? undefined }
+        ? {
+            ...(node.assignee.id ? { id: node.assignee.id } : {}),
+            name: node.assignee.name,
+            avatarUrl: node.assignee.avatarUrl ?? undefined,
+          }
         : undefined,
       labels: (node.labels?.nodes ?? []).map((label) => ({ name: label.name, color: label.color })),
       updatedAt: node.updatedAt,
@@ -357,6 +421,34 @@ export class LinearProvider implements TicketProvider {
     recordLinearRequest("teams");
     const result = await this.client.teams();
     return result.nodes.map((t) => ({ id: t.id, key: t.key, name: t.name }));
+  }
+
+  async listWorkspaceUsers(): Promise<Array<{ id: string; name: string }>> {
+    recordLinearRequest("users");
+    const out: Array<{ id: string; name: string }> = [];
+    let after: string | null = null;
+    const pageSize = 100;
+    for (;;) {
+      const data: GqlUsersConnection = await linearGraphQL<GqlUsersConnection>(
+        this.linearApiKey,
+        WORKSPACE_USERS_GQL,
+        {
+          first: pageSize,
+          after,
+        },
+      );
+      const conn: GqlUsersConnection["users"] = data.users;
+      for (const u of conn.nodes ?? []) {
+        const display = (u.displayName?.trim() || u.name?.trim() || "").trim();
+        if (u.id && display) {
+          out.push({ id: u.id, name: display });
+        }
+      }
+      if (!conn.pageInfo.hasNextPage || !conn.pageInfo.endCursor) break;
+      after = conn.pageInfo.endCursor;
+      if (out.length > 2_000) break;
+    }
+    return out;
   }
 
   /**
@@ -411,7 +503,13 @@ export class LinearProvider implements TicketProvider {
           || terminalByWorkflowName,
       ),
       providerLinkedPulls: providerLinkedPulls.length > 0 ? providerLinkedPulls : undefined,
-      assignee: assignee ? { name: assignee.name, avatarUrl: assignee.avatarUrl ?? undefined } : undefined,
+      assignee: assignee
+        ? {
+            ...(assignee.id ? { id: assignee.id } : {}),
+            name: assignee.name,
+            avatarUrl: assignee.avatarUrl ?? undefined,
+          }
+        : undefined,
       labels: labelNodes,
       updatedAt: node.updatedAt.toISOString(),
       providerUrl: node.url,
@@ -491,7 +589,7 @@ function dedupeLinkedPrRefs(refs: LinkedPRRef[]): LinkedPRRef[] {
   return out;
 }
 
-function dedupeIssuesByIdentifier(issues: TicketIssue[]): TicketIssue[] {
+export function dedupeIssuesByIdentifier(issues: TicketIssue[]): TicketIssue[] {
   const seen = new Set<string>();
   const out: TicketIssue[] = [];
   for (const issue of issues) {

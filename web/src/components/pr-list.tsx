@@ -16,7 +16,8 @@ function prKey(pr: PullRequest): string {
 }
 
 function StatusIcon({ pr }: { pr: PullRequest }) {
-  const mergeReady = pr.checksStatus === "success" && pr.openComments === 0 && pr.hasHumanApproval;
+  const actionableCount = pr.pendingTriage ?? 0;
+  const mergeReady = pr.checksStatus === "success" && actionableCount === 0 && pr.hasHumanApproval;
   const failed = pr.checksStatus === "failure";
   const pending = pr.checksStatus === "pending";
 
@@ -58,9 +59,10 @@ export default function PRList({ pulls, showRepo }: PRListProps) {
       {pulls.map((pr) => {
         const key = prKey(pr);
         const isSelected = selectedPR?.number === pr.number && selectedPR?.repo === pr.repo;
-        const mergeReady = pr.checksStatus === "success" && pr.openComments === 0 && pr.hasHumanApproval;
-        const failed = pr.checksStatus === "failure";
         const pendingTriage = pr.pendingTriage ?? 0;
+        const mergeReady = pr.checksStatus === "success" && pendingTriage === 0 && pr.hasHumanApproval;
+        const failed = pr.checksStatus === "failure";
+        const actionableCount = pendingTriage;
         const prKeyRef = `${pr.repo}#${pr.number}`;
         const ticketIds = prToTickets[prKeyRef] ?? [];
         const linkedTicket = [...myTickets, ...repoLinkedTickets].find((t) =>
@@ -106,18 +108,13 @@ export default function PRList({ pulls, showRepo }: PRListProps) {
             <div className="flex items-center justify-between">
               <span className="text-gray-500 text-xs font-mono">#{pr.number}</span>
               <span className="flex items-center gap-1.5">
-                {pr.openComments > 0 && (
-                  <StatusBadge color="orange" title={`${pr.openComments} open thread${pr.openComments !== 1 ? "s" : ""} (GitHub)`}>
-                    {pr.openComments}
-                  </StatusBadge>
-                )}
-                {pendingTriage > 0 && (
+                {actionableCount > 0 && (
                   <StatusBadge
                     color="amber"
                     className="tabular-nums"
-                    title={`${pendingTriage} pending in local triage (not dismissed / replied / fixed)`}
+                    title={`${actionableCount} action${actionableCount !== 1 ? "s" : ""} needed in local triage`}
                   >
-                    {pendingTriage}
+                    {actionableCount} actions
                   </StatusBadge>
                 )}
                 <StatusIcon pr={pr} />

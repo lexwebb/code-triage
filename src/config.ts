@@ -1,6 +1,7 @@
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
+import { regenerateMemberLinks, type TeamMemberLink } from "./team/member-identity.js";
 
 const CONFIG_DIR = join(homedir(), ".code-triage");
 const CONFIG_FILE = join(CONFIG_DIR, "config.json");
@@ -16,6 +17,11 @@ export interface Config {
    * (same scope as the web “review requested” list) and runs Claude on new ones. Default false to limit API/Claude usage.
    */
   pollReviewRequested?: boolean;
+  /**
+   * When true, evaluation results with action "resolve" are auto-resolved on GitHub.
+   * Disabled by default to keep actions explicitly user-driven.
+   */
+  autoResolveOnEvaluation?: boolean;
   /** Drop replied/dismissed/fixed comment rows older than this many days after each successful poll (0 = disabled). */
   commentRetentionDays?: number;
   ignoredBots?: string[]; // additional bot logins to ignore during polling
@@ -71,6 +77,34 @@ export interface Config {
     enabled?: boolean;
     /** Minutes between CLI-driven team snapshot refreshes. Default 5. */
     pollIntervalMinutes?: number;
+    /**
+     * Map GitHub logins and Linear people to one label for the team member summary.
+     * Linear workspace users are also loaded at snapshot time to resolve assignee IDs to names.
+     */
+    memberLinks?: TeamMemberLink[];
+    /**
+     * When not `false`, run Claude during team snapshot rebuild to suggest extra identity links (merged after `memberLinks`).
+     * Default on.
+     */
+    claudeMemberLinking?: boolean;
+    /**
+     * When not `false`, run Claude during team snapshot rebuild to add per-teammate bullet summaries from their PRs/tickets.
+     * Skips a teammate when their work-item fingerprint matches the last run (see `team_member_ai_digest` in SQLite).
+     * Default on.
+     */
+    claudeMemberSummaries?: boolean;
+    /**
+     * When not `false`, team overview includes open PRs in tracked repos authored by other members of GitHub orgs
+     * you belong to when the org is a tracked repo owner. Default on.
+     */
+    includeGithubOrgMemberPulls?: boolean;
+    /**
+     * When not `false` and `linearTeamKeys` is set, team overview also loads active issues for those teams
+     * (not only issues assigned to you). Default on.
+     */
+    includeLinearTeamScopeIssues?: boolean;
+    /** Max Linear issues to load for team-scope overview (1–500). Default 200. */
+    linearTeamIssueCap?: number;
   };
 }
 
@@ -80,6 +114,7 @@ const DEFAULTS: Config = {
   interval: 1,
   evalConcurrency: 2,
   pollReviewRequested: false,
+  autoResolveOnEvaluation: false,
   repoPollStaleAfterDays: 3,
   repoPollColdIntervalMinutes: 120,
   repoPollSuperColdMultiplier: 3,
@@ -108,9 +143,13 @@ export function loadConfig(): Config {
   if (!existsSync(CONFIG_FILE)) {
     return { ...DEFAULTS };
   }
-  try {
+   try {
     const raw = JSON.parse(readFileSync(CONFIG_FILE, "utf-8")) as Partial<Config>;
-    return { ...DEFAULTS, ...raw };
+    const cfg = { ...DEFAULTS, ...raw };
+    if (cfg.team?.memberLinks?.length) {
+      cfg.team.memberLinks = regenerateMemberLinks(cfg.team.memberLinks as TeamMemberLink[]);
+    }
+    return cfg;
   } catch {
     return { ...DEFAULTS };
   }

@@ -1,7 +1,7 @@
-import { api } from "../api";
 import type { QueuedFixItem } from "../api";
 import { getQueryClient } from "../lib/query-client";
 import { invalidatePullBundleQueries, qk } from "../lib/query-keys";
+import { trpcClient } from "../lib/trpc";
 import type { SliceCreator, PrDetailSlice } from "./types";
 
 function isAuthoredPR(
@@ -105,15 +105,15 @@ export const createPrDetailSlice: SliceCreator<PrDetailSlice> = (set, get) => ({
       const [detail, files, comments] = await Promise.all([
         qc.fetchQuery({
           queryKey: qk.pull.detail(repo, number),
-          queryFn: () => api.getPull(number, repo),
+          queryFn: () => trpcClient.pullDetail.query({ number, repo }),
         }),
         qc.fetchQuery({
           queryKey: qk.pull.files(repo, number),
-          queryFn: () => api.getPullFiles(number, repo),
+          queryFn: () => trpcClient.pullFiles.query({ number, repo }),
         }),
         qc.fetchQuery({
           queryKey: qk.pull.comments(repo, number, autoEvaluate),
-          queryFn: () => api.getPullComments(number, repo, { autoEvaluate }),
+          queryFn: () => trpcClient.pullComments.query({ number, repo, autoEvaluate }),
         }),
       ]);
       // Bail if user navigated away
@@ -147,7 +147,7 @@ export const createPrDetailSlice: SliceCreator<PrDetailSlice> = (set, get) => ({
       await qc.invalidateQueries({ queryKey: qk.pull.comments(pr.repo, pr.number, autoEvaluate) });
       const comments = await qc.fetchQuery({
         queryKey: qk.pull.comments(pr.repo, pr.number, autoEvaluate),
-        queryFn: () => api.getPullComments(pr.number, pr.repo, { autoEvaluate }),
+        queryFn: () => trpcClient.pullComments.query({ number: pr.number, repo: pr.repo, autoEvaluate }),
         staleTime: 0,
       });
       set({ comments });
@@ -165,11 +165,11 @@ export const createPrDetailSlice: SliceCreator<PrDetailSlice> = (set, get) => ({
       const [detail, comments] = await Promise.all([
         qc.fetchQuery({
           queryKey: qk.pull.detail(repo, prNumber),
-          queryFn: () => api.getPull(prNumber, repo),
+          queryFn: () => trpcClient.pullDetail.query({ number: prNumber, repo }),
         }),
         qc.fetchQuery({
           queryKey: qk.pull.comments(repo, prNumber, autoEvaluate),
-          queryFn: () => api.getPullComments(prNumber, repo, { autoEvaluate }),
+          queryFn: () => trpcClient.pullComments.query({ number: prNumber, repo, autoEvaluate }),
           staleTime: 0,
         }),
       ]);
@@ -185,14 +185,14 @@ export const createPrDetailSlice: SliceCreator<PrDetailSlice> = (set, get) => ({
     if (!pr || !detail) return;
     set({ reviewSubmitting: true, reviewError: null });
     try {
-      await api.submitReview(pr.repo, pr.number, event, body);
+      await trpcClient.actionReview.mutate({ repo: pr.repo, prNumber: pr.number, event, body });
       set({ showRequestChanges: false, reviewBody: "" });
       // Refresh detail to update reviewer states
       try {
         const qc = getQueryClient();
         const updated = await qc.fetchQuery({
           queryKey: qk.pull.detail(pr.repo, pr.number),
-          queryFn: () => api.getPull(pr.number, pr.repo),
+          queryFn: () => trpcClient.pullDetail.query({ number: pr.number, repo: pr.repo }),
           staleTime: 0,
         });
         set({ detail: updated });
@@ -263,7 +263,7 @@ export const createPrDetailSlice: SliceCreator<PrDetailSlice> = (set, get) => ({
     if (!pr) return;
     set((s) => ({ actingThreads: new Set(s.actingThreads).add(commentId) }));
     try {
-      await api.replyToComment(pr.repo, commentId, pr.number);
+      await trpcClient.actionReply.mutate({ repo: pr.repo, commentId, prNumber: pr.number });
       await get().reloadComments();
     } finally {
       set((s) => {
@@ -279,7 +279,7 @@ export const createPrDetailSlice: SliceCreator<PrDetailSlice> = (set, get) => ({
     if (!pr) return;
     set((s) => ({ actingThreads: new Set(s.actingThreads).add(commentId) }));
     try {
-      await api.resolveComment(pr.repo, commentId, pr.number);
+      await trpcClient.actionResolve.mutate({ repo: pr.repo, commentId, prNumber: pr.number });
       await get().reloadComments();
     } finally {
       set((s) => {
@@ -295,7 +295,7 @@ export const createPrDetailSlice: SliceCreator<PrDetailSlice> = (set, get) => ({
     if (!pr) return;
     set((s) => ({ actingThreads: new Set(s.actingThreads).add(commentId) }));
     try {
-      await api.dismissComment(pr.repo, commentId, pr.number);
+      await trpcClient.actionDismiss.mutate({ repo: pr.repo, commentId, prNumber: pr.number });
       await get().reloadComments();
     } finally {
       set((s) => {
@@ -311,7 +311,7 @@ export const createPrDetailSlice: SliceCreator<PrDetailSlice> = (set, get) => ({
     if (!pr) return;
     set((s) => ({ reEvaluatingThreads: new Set(s.reEvaluatingThreads).add(commentId) }));
     try {
-      await api.reEvaluate(pr.repo, commentId, pr.number);
+      await trpcClient.actionReEvaluate.mutate({ repo: pr.repo, commentId, prNumber: pr.number });
       void invalidatePullBundleQueries(getQueryClient());
       await get().reloadComments();
     } finally {
@@ -331,7 +331,7 @@ export const createPrDetailSlice: SliceCreator<PrDetailSlice> = (set, get) => ({
       const qc = getQueryClient();
       const comments = await qc.fetchQuery({
         queryKey: qk.pull.comments(pr.repo, pr.number, true),
-        queryFn: () => api.getPullComments(pr.number, pr.repo, { autoEvaluate: true }),
+        queryFn: () => trpcClient.pullComments.query({ number: pr.number, repo: pr.repo, autoEvaluate: true }),
         staleTime: 0,
       });
       set({ comments });
@@ -348,7 +348,14 @@ export const createPrDetailSlice: SliceCreator<PrDetailSlice> = (set, get) => ({
     if (!pr) return;
     set((s) => ({ triageBusyThreads: new Set(s.triageBusyThreads).add(commentId) }));
     try {
-      await api.updateCommentTriage(pr.repo, commentId, pr.number, patch);
+      await trpcClient.actionCommentTriage.mutate({
+        repo: pr.repo,
+        commentId,
+        prNumber: pr.number,
+        ...(patch.snoozeUntil !== undefined ? { snoozeUntil: patch.snoozeUntil } : {}),
+        ...(patch.priority !== undefined ? { priority: patch.priority } : {}),
+        ...(patch.triageNote !== undefined ? { triageNote: patch.triageNote } : {}),
+      });
       await get().reloadComments();
     } finally {
       set((s) => {
@@ -377,7 +384,7 @@ export const createPrDetailSlice: SliceCreator<PrDetailSlice> = (set, get) => ({
       return { fixingThreads: nextFixing, fixErrors: nextErrors };
     });
     try {
-      const result = await api.batchFixWithClaude({
+      const result = await trpcClient.actionBatchFix.mutate({
         repo: pr.repo,
         prNumber: pr.number,
         branch: detail.branch,
@@ -431,9 +438,14 @@ export const createPrDetailSlice: SliceCreator<PrDetailSlice> = (set, get) => ({
       fixErrors: { ...s.fixErrors, [commentId]: null },
     }));
     try {
-      const result = await api.fixWithClaude(
-        pr.repo, commentId, pr.number, detail.branch, comment, userInstructions,
-      );
+      const result = await trpcClient.actionFix.mutate({
+        repo: pr.repo,
+        commentId,
+        prNumber: pr.number,
+        branch: detail.branch,
+        comment,
+        ...(userInstructions ? { userInstructions } : {}),
+      });
       if (result.success) {
         if (result.status === "queued") {
           const queueItem: QueuedFixItem = {
@@ -489,7 +501,7 @@ export const createPrDetailSlice: SliceCreator<PrDetailSlice> = (set, get) => ({
         commentId,
         prNumber: pr.number,
       }));
-      await api.batchAction(action, items);
+      await trpcClient.actionBatch.mutate({ action, items });
       set({ threadSelected: new Set() });
       await get().reloadComments();
     } finally {
@@ -508,7 +520,15 @@ export const createPrDetailSlice: SliceCreator<PrDetailSlice> = (set, get) => ({
     if (!pr || !line || !body) return;
     set({ commentSubmitting: true });
     try {
-      await api.createComment(pr.repo, pr.number, commitId, filename, line.line, line.side, body);
+      await trpcClient.actionComment.mutate({
+        repo: pr.repo,
+        prNumber: pr.number,
+        commitId,
+        path: filename,
+        line: line.line,
+        side: line.side,
+        body,
+      });
       set({ commentingLine: null, commentBody: "" });
       await get().reloadComments();
     } finally {
@@ -530,7 +550,7 @@ export const createPrDetailSlice: SliceCreator<PrDetailSlice> = (set, get) => ({
       const qc = getQueryClient();
       const suites = await qc.fetchQuery({
         queryKey: qk.pull.checks(pr.repo, pr.number, sha),
-        queryFn: () => api.getChecks(pr.number, pr.repo, headSha),
+        queryFn: () => trpcClient.pullChecks.query({ number: pr.number, repo: pr.repo, ...(headSha ? { sha: headSha } : {}) }),
       });
       // Bail if PR changed while loading
       if (get().checksKey !== key) return;

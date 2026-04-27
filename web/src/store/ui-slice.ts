@@ -1,4 +1,5 @@
-import { api } from "../api";
+import type { ConfigGetResponse } from "../api";
+import { trpcClient } from "../lib/trpc";
 import type { SliceCreator, UiSlice } from "./types";
 import { selectFlatPulls } from "./selectors";
 import { payloadToForm } from "./settings-form";
@@ -22,7 +23,7 @@ export const createUiSlice: SliceCreator<UiSlice> = (set, get) => ({
 
   loadSettingsConfig: async () => {
     try {
-      const r = await api.getConfig();
+      const r = await trpcClient.configGet.query() as unknown as ConfigGetResponse;
       set({
         settingsConfig: r,
         settingsForm: payloadToForm(r.config),
@@ -119,6 +120,15 @@ export const createUiSlice: SliceCreator<UiSlice> = (set, get) => ({
       try { evalPromptAppendByRepo = JSON.parse(form.evalPromptAppendByRepoJson); } catch { /* ignore */ }
       let evalClaudeExtraArgs: string[] = [];
       try { evalClaudeExtraArgs = JSON.parse(form.evalClaudeExtraArgsJson); } catch { /* ignore */ }
+      let teamMemberLinks: unknown[] = [];
+      try {
+        teamMemberLinks = JSON.parse(form.teamMemberLinksJson || "[]") as unknown[];
+      } catch {
+        throw new Error("Team member links must be valid JSON (array of objects).");
+      }
+      if (!Array.isArray(teamMemberLinks)) {
+        throw new Error("Team member links must be a JSON array.");
+      }
 
       const body: Record<string, unknown> = {
         root: form.root,
@@ -147,6 +157,12 @@ export const createUiSlice: SliceCreator<UiSlice> = (set, get) => ({
         team: {
           enabled: form.teamEnabled,
           pollIntervalMinutes: form.teamPollIntervalMinutes,
+          memberLinks: teamMemberLinks,
+          claudeMemberLinking: form.teamClaudeMemberLinking,
+          claudeMemberSummaries: form.teamClaudeMemberSummaries,
+          includeGithubOrgMemberPulls: form.teamIncludeGithubOrgMemberPulls,
+          includeLinearTeamScopeIssues: form.teamIncludeLinearTeamScopeIssues,
+          linearTeamIssueCap: Math.max(1, Math.min(500, form.teamLinearTeamIssueCap || 200)),
         },
         accounts: form.accounts.map((a) => ({
           name: a.name,

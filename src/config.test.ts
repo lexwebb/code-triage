@@ -26,6 +26,7 @@ describe("loadConfig", () => {
     expect(c.root).toBe("~/src");
     expect(c.port).toBe(3100);
     expect(c.evalConcurrency).toBe(2);
+    expect(c.autoResolveOnEvaluation).toBe(false);
   });
 
   it("merges JSON file with defaults", () => {
@@ -103,7 +104,7 @@ describe("coherence config", () => {
 describe("team config", () => {
   it("provides default team snapshot settings", () => {
     const config = loadConfig();
-    expect(config.team).toEqual({
+    expect(config.team).toMatchObject({
       enabled: true,
       pollIntervalMinutes: 5,
     });

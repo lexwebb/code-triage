@@ -1,5 +1,9 @@
+import { useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
+import type { ConfigGetResponse } from "../api";
+import { trpcClient } from "../lib/trpc";
 import { useAppStore } from "../store";
+import { payloadToForm } from "../store/settings-form";
 import { Checkbox } from "./ui/checkbox";
 import { Skeleton } from "./ui/skeleton";
 
@@ -16,6 +20,25 @@ export default function SettingsView({
   const listenPort = useAppStore((s) => s.settingsConfig?.listenPort ?? 3100);
   const updateField = useAppStore((s) => s.updateSettingsField);
   const submit = useAppStore((s) => s.submitSettings);
+  const [regeneratingMemberLabels, setRegeneratingMemberLabels] = useState(false);
+
+  async function regenerateMemberLinkLabels() {
+    setRegeneratingMemberLabels(true);
+    try {
+      await trpcClient.regenerateTeamMemberLinkLabels.mutate();
+      const r = (await trpcClient.configGet.query()) as unknown as ConfigGetResponse;
+      useAppStore.setState({
+        config: r.config,
+        settingsConfig: r,
+        settingsForm: payloadToForm(r.config),
+        settingsError: null,
+      });
+    } catch (e) {
+      useAppStore.setState({ settingsError: (e as Error).message });
+    } finally {
+      setRegeneratingMemberLabels(false);
+    }
+  }
 
   if (form === null) {
     return (
@@ -506,6 +529,42 @@ export default function SettingsView({
             />
             <span className="text-sm text-gray-300">Enable team overview snapshot</span>
           </label>
+          <label className="flex items-center gap-2 cursor-pointer">
+            <Checkbox
+              checked={form.teamClaudeMemberLinking}
+              onCheckedChange={(v) => updateField("teamClaudeMemberLinking", v === true)}
+            />
+            <span className="text-sm text-gray-300">
+              Use Claude to suggest GitHub ↔ Linear links when someone is not covered yet (team snapshot)
+            </span>
+          </label>
+          <label className="flex items-center gap-2 cursor-pointer">
+            <Checkbox
+              checked={form.teamClaudeMemberSummaries}
+              onCheckedChange={(v) => updateField("teamClaudeMemberSummaries", v === true)}
+            />
+            <span className="text-sm text-gray-300">
+              Use Claude for per-teammate bullet summaries from PRs and tickets (only when their work set changes)
+            </span>
+          </label>
+          <label className="flex items-center gap-2 cursor-pointer">
+            <Checkbox
+              checked={form.teamIncludeGithubOrgMemberPulls}
+              onCheckedChange={(v) => updateField("teamIncludeGithubOrgMemberPulls", v === true)}
+            />
+            <span className="text-sm text-gray-300">
+              Include open PRs from org members (GitHub orgs you belong to that own tracked repos)
+            </span>
+          </label>
+          <label className="flex items-center gap-2 cursor-pointer">
+            <Checkbox
+              checked={form.teamIncludeLinearTeamScopeIssues}
+              onCheckedChange={(v) => updateField("teamIncludeLinearTeamScopeIssues", v === true)}
+            />
+            <span className="text-sm text-gray-300">
+              Include Linear team issues (uses ticket team keys below; not only assigned to you)
+            </span>
+          </label>
           <div className="grid grid-cols-2 gap-4">
             <label className="block space-y-1">
               <span className="text-sm text-gray-400">Snapshot refresh interval (minutes)</span>
@@ -517,7 +576,52 @@ export default function SettingsView({
                 onChange={(e) => updateField("teamPollIntervalMinutes", Math.max(1, parseInt(e.target.value, 10) || 1))}
               />
             </label>
+            <label className="block space-y-1">
+              <span className="text-sm text-gray-400">Linear team-scope issue cap</span>
+              <input
+                type="number"
+                min={1}
+                max={500}
+                className="w-full rounded-md border border-gray-700 bg-gray-900 px-3 py-2 text-sm"
+                value={form.teamLinearTeamIssueCap}
+                onChange={(e) =>
+                  updateField(
+                    "teamLinearTeamIssueCap",
+                    Math.max(1, Math.min(500, parseInt(e.target.value, 10) || 200)),
+                  )}
+              />
+            </label>
           </div>
+          <label className="block space-y-1">
+            <span className="text-sm text-gray-400">Team member identity links (JSON)</span>
+            <p className="text-xs text-gray-500 leading-relaxed">
+              Merge GitHub PR authors with Linear assignees under one teammate row. Each entry needs at least one of{" "}
+              <span className="font-mono text-gray-400">githubLogins</span>,{" "}
+              <span className="font-mono text-gray-400">linearNames</span>,{" "}
+              <span className="font-mono text-gray-400">linearUserIds</span>. Display names are always derived from those
+              fields (Linear names, then GitHub logins); <span className="font-mono text-gray-400">label</span> in JSON is
+              optional and overwritten when the config loads. Example:{" "}
+              <span className="font-mono text-gray-400">
+                {`[{"githubLogins":["jsmith"],"linearNames":["Jane Smith"],"linearUserIds":["…"]}]`}
+              </span>
+            </p>
+            <div className="flex flex-wrap gap-2 pb-1">
+              <button
+                type="button"
+                disabled={saving || regeneratingMemberLabels}
+                onClick={() => void regenerateMemberLinkLabels()}
+                className="rounded-md border border-gray-600 bg-gray-900 px-3 py-1.5 text-xs text-gray-200 hover:bg-gray-800 disabled:opacity-50"
+              >
+                {regeneratingMemberLabels ? "Regenerating…" : "Regenerate display names & merge overlaps"}
+              </button>
+            </div>
+            <textarea
+              className="w-full min-h-[7rem] rounded-md border border-gray-700 bg-gray-900 px-3 py-2 text-sm font-mono"
+              spellCheck={false}
+              value={form.teamMemberLinksJson}
+              onChange={(e) => updateField("teamMemberLinksJson", e.target.value)}
+            />
+          </label>
         </section>
 
         <div className="flex gap-3 pt-4 border-t border-gray-800">

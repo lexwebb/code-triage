@@ -1,13 +1,14 @@
 import React, { useEffect, useLayoutEffect } from "react";
 import { useAppStore } from "../store";
 import Comment from "./comment";
-import { ChevronRight, ChevronDown, ListOrdered } from "lucide-react";
+import { ChevronRight, ChevronDown, ListOrdered, Check } from "lucide-react";
 import { Button } from "./ui/button";
 import { StatusBadge } from "./ui/status-badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "./ui/dialog";
 import { cn } from "../lib/utils";
 import { findJobForComment } from "../lib/fix-job-for-comment";
 import { type Thread, isSnoozed, buildEditorUri, EDITOR_LABELS, EvalBadge, ThreadStatusBadge } from "./thread-utils";
+import { FixJobInlineReview } from "./fix-job-inline-review";
 
 export type ThreadKeyActions = {
   toggleExpand: () => void;
@@ -82,9 +83,10 @@ function FixConversation({ commentId, repo }: { commentId: number; repo: string 
   );
 }
 
-export function ThreadItem({ rootId, thread, fixBlocked, fixQueueSlot, isFocused, registerRowEl, threadActionsRef }: {
+export function ThreadItem({ rootId, thread, botReviewStatus, fixBlocked, fixQueueSlot, isFocused, registerRowEl, threadActionsRef }: {
   rootId: number;
   thread: Thread;
+  botReviewStatus?: { botLabel: string; state: "re_reviewing" | "manual_restart_required" };
   fixBlocked: boolean;
   /** When this thread’s fix is waiting in the server queue (place/total among pending fixes). */
   fixQueueSlot: { place: number; total: number } | null;
@@ -128,10 +130,18 @@ export function ThreadItem({ rootId, thread, fixBlocked, fixQueueSlot, isFocused
 
   const eval_ = thread.root.evaluation;
   const status = thread.root.crStatus;
-  const isActedOn = status === "replied" || status === "dismissed" || status === "fixed";
+  // "fixed" is local workflow progress; only treat as terminal once GitHub marks the thread resolved.
+  const isLocallyFixedOpen = status === "fixed" && !thread.isResolved;
+  const isActedOn = status === "replied" || status === "dismissed" || (status === "fixed" && thread.isResolved);
   const isEvaluating = status === "evaluating";
+  const isBotReReviewing = botReviewStatus?.state === "re_reviewing";
+  const botNeedsManualRestart = botReviewStatus?.state === "manual_restart_required";
+  const botLabel = botReviewStatus?.botLabel ?? "Bot";
 
-  const fixJob = findJobForComment(jobs, thread.root.id);
+  const fixJobsForThread = jobs
+    .filter((j) => j.commentId === thread.root.id || (j.batchCommentIds?.includes(thread.root.id) ?? false))
+    .sort((a, b) => b.startedAt - a.startedAt);
+  const fixJob = fixJobsForThread[0];
   const isAwaitingResponse = fixJob?.status === "awaiting_response";
   const isFixRunning = fixJob?.status === "running";
   const suppressEvalForFixOutcome =
@@ -258,8 +268,17 @@ export function ThreadItem({ rootId, thread, fixBlocked, fixQueueSlot, isFocused
               {fixQueueSlot.total > 1 ? `Queued ${fixQueueSlot.place}/${fixQueueSlot.total}` : "Queued"}
             </StatusBadge>
           )}
+          {!isEvaluating && !isAwaitingResponse && !isFixRunning && !isActedOn && isBotReReviewing && (
+            <StatusBadge color="blue">{botLabel} re-reviewing</StatusBadge>
+          )}
+          {!isEvaluating && !isAwaitingResponse && !isFixRunning && !isActedOn && botNeedsManualRestart && (
+            <StatusBadge color="orange">{botLabel} waiting for restart</StatusBadge>
+          )}
           {!isEvaluating && !isAwaitingResponse && !isFixRunning && isActedOn && <ThreadStatusBadge status={status!} />}
-          {!isEvaluating && !isAwaitingResponse && !isFixRunning && !isActedOn && eval_ && !suppressEvalForFixOutcome && (
+          {!isEvaluating && !isAwaitingResponse && !isFixRunning && isLocallyFixedOpen && (
+            <StatusBadge color="blue" icon={<Check size={12} />}>Fixed (pending resolve)</StatusBadge>
+          )}
+          {!isEvaluating && !isAwaitingResponse && !isFixRunning && !isActedOn && !isLocallyFixedOpen && eval_ && !suppressEvalForFixOutcome && (
             <EvalBadge action={eval_.action} />
           )}
           {!isEvaluating && !isActedOn && !eval_ && thread.root.evalFailed && (
@@ -382,6 +401,23 @@ export function ThreadItem({ rootId, thread, fixBlocked, fixQueueSlot, isFocused
             </div>
           )}
 
+          {/* Inline suggested-fix review (stack all matching jobs) */}
+          {fixJobsForThread.length > 0 && (
+            <div className="mx-1 mt-2">
+              {fixJobsForThread.map((job) => (
+                <FixJobInlineReview key={`${job.commentId}-${job.startedAt}-${job.status}`} job={job} ownerCommentId={thread.root.id} />
+              ))}
+            </div>
+          )}
+
+          {(isBotReReviewing || botNeedsManualRestart) && !isActedOn && (
+            <div className="mx-1 mt-2 p-2 rounded border border-blue-500/30 bg-blue-500/5 text-xs text-blue-200">
+              {isBotReReviewing
+                ? `${botLabel} is currently re-reviewing this PR. This thread is temporarily excluded from your actionable queue until the bot responds.`
+                : `${botLabel} is waiting for manual restart. Use the bot check/comment instructions to resume review; this thread is excluded from actionable items while waiting.`}
+            </div>
+          )}
+
           {/* Fix conversation */}
           {fixJob && (fixJob.status === "awaiting_response" || (fixJob.status === "running" && fixJob.conversation?.length)) && (
             <FixConversation commentId={rootId} repo={repo} />
@@ -400,7 +436,7 @@ export function ThreadItem({ rootId, thread, fixBlocked, fixQueueSlot, isFocused
                   variant="orange"
                   size="xs"
                   onClick={() => setFixModalOpen(rootId, true)}
-                  disabled={acting || fixing || isQueued}
+                  disabled={acting || fixing || isQueued || isBotReReviewing || botNeedsManualRestart}
                   title={isQueued ? "Already queued for fixing" : fixBlocked ? "Will be queued" : undefined}
                 >
                   {fixing ? "Starting fix..." : isQueued ? "Queued" : fixBlocked ? "Queue Fix" : "Fix with Claude"}

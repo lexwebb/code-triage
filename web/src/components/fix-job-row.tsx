@@ -35,10 +35,7 @@ export function FixJobRow({ job, onSelect }: { job: FixJobStatus; onSelect: () =
   const batchN = job.batchCommentIds?.length ?? 0;
 
   return (
-    <button
-      onClick={onSelect}
-      className="w-full flex items-center gap-3 px-4 py-1.5 text-xs hover:bg-gray-800/50 transition-colors text-left"
-    >
+    <div className="w-full flex items-center gap-3 px-4 py-1.5 text-xs text-left">
       <span className={cn("flex items-center gap-1", statusColors[job.status] ?? "text-gray-400")}>
         {statusIcons[job.status] ?? null} {job.status === "no_changes" ? "no changes" : job.status}
         {batchN > 1 && <span className="text-purple-400/90 font-normal">batch</span>}
@@ -46,6 +43,13 @@ export function FixJobRow({ job, onSelect }: { job: FixJobStatus; onSelect: () =
       <span className="text-gray-400 font-mono">{repoShort}#{job.prNumber}</span>
       <span className="text-gray-500 truncate flex-1">{job.path}</span>
       <span className="text-gray-600">{elapsed(job.startedAt)}</span>
-    </button>
+      <button
+        type="button"
+        onClick={onSelect}
+        className="text-gray-600 hover:text-gray-400 transition-colors"
+      >
+        Details
+      </button>
+    </div>
   );
 }

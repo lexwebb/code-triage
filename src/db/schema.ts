@@ -33,6 +33,40 @@ export const fixJobs = sqliteTable("fix_jobs", {
   conversationJson: text("conversation_json"),
 });
 
+/** Persisted fix-job UI status (survives process restart). */
+export const fixJobResults = sqliteTable("fix_job_results", {
+  commentId: integer("comment_id").primaryKey(),
+  statusJson: text("status_json").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});
+
+/** Cached GitHub “can this token push?” per repo (see `github-batching`). */
+export const repoAccess = sqliteTable("repo_access", {
+  repo: text("repo").primaryKey(),
+  hasPush: integer("has_push").notNull(),
+  checkedAt: integer("checked_at").notNull(),
+});
+
+/** Async Claude evaluation queue. */
+export const evalQueue = sqliteTable("eval_queue", {
+  commentKey: text("comment_key").primaryKey(),
+  commentId: integer("comment_id").notNull(),
+  repo: text("repo").notNull(),
+  prNumber: integer("pr_number").notNull(),
+  commentJson: text("comment_json").notNull(),
+  status: text("status").notNull().default("queued"),
+  attempts: integer("attempts").notNull().default(0),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});
+
+/** Cached closed authored PRs for ticket linking (`api.ts`). */
+export const repoClosedAuthoredCache = sqliteTable("repo_closed_authored_cache", {
+  repo: text("repo").primaryKey(),
+  dataJson: text("data_json").notNull(),
+  fetchedAtMs: integer("fetched_at_ms").notNull(),
+});
+
 /** Per-repo adaptive polling: last "interesting" activity vs last poll time. */
 export const repoPoll = sqliteTable("repo_poll", {
   repo: text("repo").primaryKey(),
@@ -86,6 +120,14 @@ export const teamOverviewCache = sqliteTable("team_overview_cache", {
   payloadJson: text("payload_json").notNull(),
   updatedAtMs: integer("updated_at_ms").notNull(),
   refreshError: text("refresh_error"),
+});
+
+/** Cached Claude bullet summaries per team member; invalidated by work fingerprint. */
+export const teamMemberAiDigest = sqliteTable("team_member_ai_digest", {
+  memberLabel: text("member_label").primaryKey(),
+  workFingerprint: text("work_fingerprint").notNull(),
+  summaryJson: text("summary_json").notNull(),
+  generatedAtMs: integer("generated_at_ms").notNull(),
 });
 
 /** PR-scoped multi-turn chat for the web reviews “PR assistant” panel (soft companion; not fix jobs). */

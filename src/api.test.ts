@@ -8,6 +8,7 @@ const baseConfig: Config = {
   interval: 1,
   evalConcurrency: 2,
   pollReviewRequested: false,
+  autoResolveOnEvaluation: false,
 };
 
 describe("toInt", () => {
@@ -38,6 +39,7 @@ describe("serializeConfigForClient", () => {
     const out = serializeConfigForClient(c);
     expect(out.evalConcurrency).toBe(2);
     expect(out.pollReviewRequested).toBe(false);
+    expect(out.autoResolveOnEvaluation).toBe(false);
     expect(out.commentRetentionDays).toBe(0);
     expect(out.hasGithubToken).toBe(true);
     expect(out.accounts).toEqual([{ name: "a1", orgs: ["o"], hasToken: true }]);
@@ -62,9 +64,33 @@ describe("serializeConfigForClient", () => {
     expect(serializeConfigForClient(baseConfig).team).toEqual({
       enabled: true,
       pollIntervalMinutes: 5,
+      memberLinks: [],
+      claudeMemberLinking: true,
+      claudeMemberSummaries: true,
+      includeGithubOrgMemberPulls: true,
+      includeLinearTeamScopeIssues: true,
+      linearTeamIssueCap: 200,
     });
     const c: Config = { ...baseConfig, team: { enabled: true, pollIntervalMinutes: 9 } };
-    expect(serializeConfigForClient(c).team).toEqual({ enabled: true, pollIntervalMinutes: 9 });
+    expect(serializeConfigForClient(c).team).toEqual({
+      enabled: true,
+      pollIntervalMinutes: 9,
+      memberLinks: [],
+      claudeMemberLinking: true,
+      claudeMemberSummaries: true,
+      includeGithubOrgMemberPulls: true,
+      includeLinearTeamScopeIssues: true,
+      linearTeamIssueCap: 200,
+    });
+    const withLinks: Config = {
+      ...baseConfig,
+      team: {
+        enabled: true,
+        pollIntervalMinutes: 5,
+        memberLinks: [{ label: "X", githubLogins: ["x"] }],
+      },
+    };
+    expect(serializeConfigForClient(withLinks).team?.memberLinks).toEqual([{ label: "X", githubLogins: ["x"] }]);
   });
 });
 
@@ -77,6 +103,14 @@ describe("mergeConfigFromBody", () => {
     expect(next.root).toBe("/tmp/r");
     expect(next.port).toBe(9000);
     expect(next.interval).toBe(5);
+  });
+
+  it("merges autoResolveOnEvaluation boolean setting", () => {
+    const next = mergeConfigFromBody(
+      { root: "/tmp/r", autoResolveOnEvaluation: true },
+      baseConfig,
+    );
+    expect(next.autoResolveOnEvaluation).toBe(true);
   });
 
   it("throws on invalid port or interval", () => {
@@ -165,16 +199,85 @@ describe("mergeConfigFromBody", () => {
     expect(mergeConfigFromBody({ root: "/x" }, baseConfig).team).toEqual({
       enabled: true,
       pollIntervalMinutes: 5,
+      claudeMemberLinking: true,
+      claudeMemberSummaries: true,
+      includeGithubOrgMemberPulls: true,
+      includeLinearTeamScopeIssues: true,
+      linearTeamIssueCap: 200,
     });
     const prev: Config = { ...baseConfig, team: { enabled: true, pollIntervalMinutes: 7 } };
     expect(
       mergeConfigFromBody({ root: "/x", team: { enabled: false, pollIntervalMinutes: "2" } }, prev).team,
-    ).toEqual({ enabled: false, pollIntervalMinutes: 2 });
+    ).toEqual({
+      enabled: false,
+      pollIntervalMinutes: 2,
+      claudeMemberLinking: true,
+      claudeMemberSummaries: true,
+      includeGithubOrgMemberPulls: true,
+      includeLinearTeamScopeIssues: true,
+      linearTeamIssueCap: 200,
+    });
     expect(
       mergeConfigFromBody({ root: "/x", team: { enabled: true, pollIntervalMinutes: 0 } }, baseConfig).team,
-    ).toEqual({ enabled: true, pollIntervalMinutes: 1 });
+    ).toEqual({
+      enabled: true,
+      pollIntervalMinutes: 1,
+      claudeMemberLinking: true,
+      claudeMemberSummaries: true,
+      includeGithubOrgMemberPulls: true,
+      includeLinearTeamScopeIssues: true,
+      linearTeamIssueCap: 200,
+    });
     expect(
       mergeConfigFromBody({ root: "/x", team: {} }, prev).team,
-    ).toEqual({ enabled: true, pollIntervalMinutes: 7 });
+    ).toEqual({
+      enabled: true,
+      pollIntervalMinutes: 7,
+      claudeMemberLinking: true,
+      claudeMemberSummaries: true,
+      includeGithubOrgMemberPulls: true,
+      includeLinearTeamScopeIssues: true,
+      linearTeamIssueCap: 200,
+    });
+  });
+
+  it("merges team.claudeMemberLinking", () => {
+    const prev: Config = { ...baseConfig, team: { enabled: true, pollIntervalMinutes: 5, claudeMemberLinking: false } };
+    expect(
+      mergeConfigFromBody({ root: "/x", team: { claudeMemberLinking: true } }, prev).team?.claudeMemberLinking,
+    ).toBe(true);
+    expect(
+      mergeConfigFromBody({ root: "/x", team: {} }, prev).team?.claudeMemberLinking,
+    ).toBe(false);
+  });
+
+  it("merges team.claudeMemberSummaries", () => {
+    const prev: Config = { ...baseConfig, team: { enabled: true, pollIntervalMinutes: 5, claudeMemberSummaries: false } };
+    expect(
+      mergeConfigFromBody({ root: "/x", team: { claudeMemberSummaries: true } }, prev).team?.claudeMemberSummaries,
+    ).toBe(true);
+    expect(
+      mergeConfigFromBody({ root: "/x", team: {} }, prev).team?.claudeMemberSummaries,
+    ).toBe(false);
+  });
+
+  it("merges team.memberLinks and clears when empty array is sent", () => {
+    const prev: Config = {
+      ...baseConfig,
+      team: { enabled: true, pollIntervalMinutes: 5, memberLinks: [{ label: "A", githubLogins: ["a"] }] },
+    };
+    const next = mergeConfigFromBody(
+      {
+        root: "/x",
+        team: {
+          memberLinks: [{ label: "B", linearNames: ["b"] }],
+        },
+      },
+      prev,
+    );
+    expect(next.team?.memberLinks).toEqual([{ label: "b", linearNames: ["b"] }]);
+
+    const cleared = mergeConfigFromBody({ root: "/x", team: { memberLinks: [] } }, prev);
+    expect(cleared.team?.memberLinks).toBeUndefined();
   });
 });

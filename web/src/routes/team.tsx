@@ -2,8 +2,8 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { createRoute, Link } from "@tanstack/react-router";
 import { Users } from "lucide-react";
 import { Route as rootRoute } from "./__root";
-import { api } from "../api";
 import { qk } from "../lib/query-keys";
+import { trpcClient } from "../lib/trpc";
 import { useAppStore } from "../store";
 import { TeamSnapshotPanel } from "../components/team-snapshot-panel";
 
@@ -17,13 +17,13 @@ export const Route = createRoute({
 
     const teamOverviewQuery = useQuery({
       queryKey: qk.team.overview,
-      queryFn: () => api.getTeamOverview(),
+      queryFn: () => trpcClient.teamOverview.query(),
       staleTime: 60_000,
       enabled: appGate === "ready" && teamEnabled,
     });
 
     async function handleTeamRefresh() {
-      await api.refreshTeamOverview();
+      await trpcClient.teamOverviewRefresh.mutate();
       await queryClient.invalidateQueries({ queryKey: qk.team.overview });
     }
 
@@ -57,6 +57,7 @@ export const Route = createRoute({
             error={teamOverviewQuery.isError ? (teamOverviewQuery.error as Error).message : null}
             onRefresh={handleTeamRefresh}
             showRadarLink={false}
+            showMemberSummary
           />
         </div>
       </div>

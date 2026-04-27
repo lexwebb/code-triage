@@ -1,8 +1,7 @@
-import { api } from "../api";
 import type { FixJobStatus, PollStatus, QueuedFixItem } from "../api";
 import { getQueryClient } from "../lib/query-client";
 import { invalidatePrPullQueries, invalidatePullBundleQueries, qk } from "../lib/query-keys";
-import { subscribeReconnectingSse } from "../lib/sse-reconnecting";
+import { trpcClient } from "../lib/trpc";
 import type { SliceCreator, PollStatusSlice } from "./types";
 
 export const createPollStatusSlice: SliceCreator<PollStatusSlice> = (set, get) => ({
@@ -41,84 +40,80 @@ export const createPollStatusSlice: SliceCreator<PollStatusSlice> = (set, get) =
       }, 300);
     };
 
-    const dispose = subscribeReconnectingSse(
-      "/api/events",
-      (es) => {
-        set({ _eventSource: es });
-
-        es.addEventListener("poll-status", (ev) => {
-          try {
-            const data = JSON.parse((ev as MessageEvent).data) as { status?: PollStatus };
-            if (data.status) get().applyPollStatus(data.status);
-          } catch { /* ignore */ }
-        });
-
-        es.addEventListener("fix-queue", (ev) => {
-          try {
-            const data = JSON.parse((ev as MessageEvent).data) as QueuedFixItem[];
-            get().setQueue(data);
-          } catch { /* ignore */ }
-        });
-
-        es.addEventListener("fix-job", (ev) => {
-          try {
-            const raw = JSON.parse((ev as MessageEvent).data) as Partial<FixJobStatus> & { commentId?: unknown };
-            if (typeof raw.commentId !== "number") return;
-            const patch: Partial<FixJobStatus> & { commentId: number } = { ...raw, commentId: raw.commentId };
-            get().mergeFixJob(patch);
-            const st = patch.status;
-            if (
-              (st === "completed" || st === "failed" || st === "no_changes")
-              && patch.repo
-              && patch.prNumber != null
-            ) {
-              void invalidatePrPullQueries(getQueryClient(), patch.repo, patch.prNumber);
-              void get().refreshIfMatch(patch.repo, patch.prNumber);
-            }
-          } catch { /* ignore */ }
-        });
-
-        es.addEventListener("eval-complete", (ev) => {
-          try {
-            const data = JSON.parse((ev as MessageEvent).data) as { repo?: string; prNumber?: number };
-            // Keep sidebar PR badges/counts in sync when evaluations finish.
-            schedulePullsRefresh();
-            if (data.repo && data.prNumber) {
-              void invalidatePrPullQueries(getQueryClient(), data.repo, data.prNumber);
-              void get().refreshIfMatch(data.repo, data.prNumber);
-            }
-          } catch { /* ignore */ }
-        });
-
-        es.addEventListener("ticket-status", () => {
-          void get().fetchTickets();
-        });
-
-        es.addEventListener("attention", () => {
-          void getQueryClient().invalidateQueries({ queryKey: qk.attention.root });
-        });
-
-        es.addEventListener("team-overview", () => {
-          void getQueryClient().invalidateQueries({ queryKey: qk.team.root });
-        });
-
-        es.addEventListener("poll", (ev) => {
-          void getQueryClient().invalidateQueries({ queryKey: qk.attention.root });
-          try {
-            const data = JSON.parse((ev as MessageEvent).data) as { ok?: boolean };
-            if (data.ok === false) return;
-          } catch {
-            /* ignore parse errors */
+    const sub = trpcClient.events.subscribe({
+      events: [
+        "poll-status",
+        "fix-queue",
+        "fix-job",
+        "eval-complete",
+        "ticket-status",
+        "attention",
+        "team-overview",
+        "poll",
+      ],
+    }, {
+      onStarted: () => {
+        void get().fetchInitialStatus();
+      },
+      onData: (message: { event: string; data: unknown; at: number }) => {
+        if (message.event === "poll-status") {
+          const data = message.data as { status?: PollStatus };
+          if (data.status) get().applyPollStatus(data.status);
+          return;
+        }
+        if (message.event === "fix-queue") {
+          get().setQueue(message.data as QueuedFixItem[]);
+          return;
+        }
+        if (message.event === "fix-job") {
+          const raw = message.data as Partial<FixJobStatus> & { commentId?: unknown };
+          if (typeof raw.commentId !== "number") return;
+          const patch: Partial<FixJobStatus> & { commentId: number } = { ...raw, commentId: raw.commentId };
+          get().mergeFixJob(patch);
+          const st = patch.status;
+          if (
+            (st === "completed" || st === "failed" || st === "no_changes")
+            && patch.repo
+            && patch.prNumber != null
+          ) {
+            void invalidatePrPullQueries(getQueryClient(), patch.repo, patch.prNumber);
+            void get().refreshIfMatch(patch.repo, patch.prNumber);
           }
+          return;
+        }
+        if (message.event === "eval-complete") {
+          const data = message.data as { repo?: string; prNumber?: number };
+          schedulePullsRefresh();
+          if (data.repo && data.prNumber) {
+            void invalidatePrPullQueries(getQueryClient(), data.repo, data.prNumber);
+            void get().refreshIfMatch(data.repo, data.prNumber);
+          }
+          return;
+        }
+        if (message.event === "ticket-status") {
+          void get().fetchTickets();
+          return;
+        }
+        if (message.event === "attention") {
+          void getQueryClient().invalidateQueries({ queryKey: qk.attention.root });
+          return;
+        }
+        if (message.event === "team-overview") {
+          void getQueryClient().invalidateQueries({ queryKey: qk.team.root });
+          return;
+        }
+        if (message.event === "poll") {
+          void getQueryClient().invalidateQueries({ queryKey: qk.attention.root });
+          const data = message.data as { ok?: boolean };
+          if (data.ok === false) return;
           void invalidatePullBundleQueries(getQueryClient());
-        });
+        }
       },
-      {
-        onOpen: () => void get().fetchInitialStatus(),
-        onResync: () => get().fetchInitialStatus(),
-        maxBackoffMs: 60_000,
+      onError: () => {
+        void get().fetchInitialStatus();
       },
-    );
+    });
+    const dispose = () => sub.unsubscribe();
 
     set({ _sseDispose: dispose });
 
@@ -151,11 +146,11 @@ export const createPollStatusSlice: SliceCreator<PollStatusSlice> = (set, get) =
 
   fetchInitialStatus: async () => {
     try {
-      const status = await api.getPollStatus();
+      const status = await trpcClient.pollStatus.query();
       get().applyPollStatus(status);
     } catch { /* ignore */ }
     try {
-      const queue = await api.getFixQueue();
+      const queue = await trpcClient.fixQueue.query();
       get().setQueue(queue);
     } catch { /* ignore */ }
   },
@@ -231,7 +226,7 @@ export const createPollStatusSlice: SliceCreator<PollStatusSlice> = (set, get) =
     get().stopRateLimitPoller();
     const id = setInterval(() => {
       if (get().rateLimited) {
-        void api.getPollStatus().then((s) => get().applyPollStatus(s)).catch(() => {});
+        void trpcClient.pollStatus.query().then((s: PollStatus) => get().applyPollStatus(s)).catch(() => {});
       }
     }, 20_000);
     set({ _rateLimitPollInterval: id });

@@ -135,7 +135,7 @@ export interface TicketIssue {
   isDone?: boolean;
   providerLinkedPulls?: Array<{ number: number; repo: string; title: string }>;
   priority: number;
-  assignee?: { name: string; avatarUrl?: string };
+  assignee?: { id?: string; name: string; avatarUrl?: string };
   labels: Array<{ name: string; color: string }>;
   updatedAt: string;
   providerUrl: string;

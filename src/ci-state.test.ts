@@ -41,6 +41,15 @@ describe("reduceCiToTriState", () => {
     ).toBe("pending");
   });
 
+  it("ignores stale legacy pending when checks show no pending", () => {
+    expect(
+      reduceCiToTriState({
+        status: { state: "pending", hasStatuses: true },
+        checks: { success: 3, failure: 0, pending: 0 },
+      }),
+    ).toBe("success");
+  });
+
   it("returns success when at least one successful signal exists", () => {
     expect(
       reduceCiToTriState({

@@ -1,4 +1,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "http";
+import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
+import { applyWSSHandler } from "@trpc/server/adapters/ws";
+import { WebSocketServer } from "ws";
 import { notifyFixJobComplete } from "./push.js";
 import { registerRoutes } from "./api.js";
 import { readFileSync, existsSync } from "fs";
@@ -6,11 +9,16 @@ import { join, extname } from "path";
 import { fileURLToPath } from "url";
 import type { RepoInfo } from "./discovery.js";
 import { getRateLimitState, getGitHubRequestStatsSnapshot } from "./exec.js";
-import { getRawSqlite, openStateDatabase } from "./db/client.js";
+import { eq } from "drizzle-orm";
+import * as schema from "./db/schema.js";
+import { openStateDatabase } from "./db/client.js";
 import { getFixQueue } from "./fix-queue.js";
 import type { TicketIssue } from "./tickets/types.js";
 import type { LinkMap } from "./tickets/linker.js";
 import { getLinearRequestStatsSnapshot } from "./tickets/stats.js";
+import { appRouter } from "./trpc/router.js";
+import { createTrpcContext } from "./trpc/context.js";
+import { publishTrpcEvent } from "./trpc/events.js";
 
 declare module "http" {
   interface IncomingMessage {
@@ -292,6 +300,7 @@ interface SseClient {
 const sseClients = new Set<SseClient>();
 
 export function sseBroadcast(event: string, data: unknown): void {
+  publishTrpcEvent(event, data);
   const payload = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
   for (const client of sseClients) {
     try {
@@ -353,30 +362,37 @@ export function subscribeSse(req: IncomingMessage, res: ServerResponse): void {
 }
 
 function persistFixJobResult(job: FixJobStatus): void {
-  openStateDatabase();
-  const sqlite = getRawSqlite();
-  sqlite.prepare(
-    `INSERT INTO fix_job_results (comment_id, status_json, updated_at)
-     VALUES (?, ?, ?)
-     ON CONFLICT(comment_id) DO UPDATE SET status_json = excluded.status_json, updated_at = excluded.updated_at`,
-  ).run(job.commentId, JSON.stringify(job), new Date().toISOString());
+  const now = new Date().toISOString();
+  openStateDatabase()
+    .insert(schema.fixJobResults)
+    .values({
+      commentId: job.commentId,
+      statusJson: JSON.stringify(job),
+      updatedAt: now,
+    })
+    .onConflictDoUpdate({
+      target: schema.fixJobResults.commentId,
+      set: { statusJson: JSON.stringify(job), updatedAt: now },
+    })
+    .run();
 }
 
 function removePersistedFixJobResult(commentId: number): void {
-  openStateDatabase();
-  const sqlite = getRawSqlite();
-  sqlite.prepare("DELETE FROM fix_job_results WHERE comment_id = ?").run(commentId);
+  openStateDatabase().delete(schema.fixJobResults).where(eq(schema.fixJobResults.commentId, commentId)).run();
 }
 
 export function loadPersistedFixJobResults(): void {
-  openStateDatabase();
-  const sqlite = getRawSqlite();
-  const rows = sqlite.prepare("SELECT status_json FROM fix_job_results").all() as Array<{ status_json: string }>;
+  const rows = openStateDatabase()
+    .select({ statusJson: schema.fixJobResults.statusJson })
+    .from(schema.fixJobResults)
+    .all();
   for (const row of rows) {
     try {
-      const job = JSON.parse(row.status_json) as FixJobStatus;
+      const job = JSON.parse(row.statusJson) as FixJobStatus;
       fixJobStatuses.set(job.commentId, job);
-    } catch { /* ignore corrupt rows */ }
+    } catch {
+      /* ignore corrupt rows */
+    }
   }
 }
 
@@ -568,6 +584,38 @@ function readBody(req: IncomingMessage): Promise<string> {
   });
 }
 
+async function toFetchRequest(req: IncomingMessage, url: URL): Promise<Request> {
+  const headers = new Headers();
+  for (const [key, value] of Object.entries(req.headers)) {
+    if (value == null) continue;
+    if (Array.isArray(value)) {
+      for (const item of value) headers.append(key, item);
+      continue;
+    }
+    headers.set(key, value);
+  }
+  const method = req.method ?? "GET";
+  if (method === "GET" || method === "HEAD") {
+    return new Request(url.toString(), { method, headers });
+  }
+  const bodyText = await readBody(req);
+  return new Request(url.toString(), {
+    method,
+    headers,
+    body: bodyText.length > 0 ? bodyText : undefined,
+  });
+}
+
+async function writeFetchResponse(res: ServerResponse, response: Response): Promise<void> {
+  const headers: Record<string, string> = {};
+  response.headers.forEach((value, key) => {
+    headers[key] = value;
+  });
+  res.writeHead(response.status, headers);
+  const body = await response.text();
+  res.end(body);
+}
+
 export function startServer(port: number, repos: RepoInfo[]): void {
   listenPort = port;
   currentRepos = repos;
@@ -578,6 +626,22 @@ export function startServer(port: number, repos: RepoInfo[]): void {
     const url = new URL(req.url || "/", `http://localhost:${port}`);
     const pathname = url.pathname;
     const query = url.searchParams;
+
+    if (pathname.startsWith("/trpc")) {
+      try {
+        const trpcReq = await toFetchRequest(req, url);
+        const response = await fetchRequestHandler({
+          endpoint: "/trpc",
+          req: trpcReq,
+          router: appRouter,
+          createContext: () => createTrpcContext(),
+        });
+        await writeFetchResponse(res, response);
+      } catch (err) {
+        json(res, { error: (err as Error).message }, 500);
+      }
+      return;
+    }
 
     // CORS preflight
     if (req.method === "OPTIONS") {
@@ -627,6 +691,16 @@ export function startServer(port: number, repos: RepoInfo[]): void {
 
   server.listen(port, () => {
     console.log(`  WebUI: http://localhost:${port}\n`);
+  });
+
+  const wss = new WebSocketServer({
+    server,
+    path: "/trpc",
+  });
+  applyWSSHandler({
+    wss,
+    router: appRouter,
+    createContext: () => createTrpcContext(),
   });
 }
 

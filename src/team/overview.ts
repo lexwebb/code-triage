@@ -1,7 +1,13 @@
-import { getRawSqlite } from "../db/client.js";
-import { loadConfig } from "../config.js";
+import { eq } from "drizzle-orm";
+import * as schema from "../db/schema.js";
+import { openStateDatabase } from "../db/client.js";
+import { log } from "../logger.js";
+import { isTeamFeaturesEnabled, loadConfig } from "../config.js";
 import { getRepos, getTicketState } from "../server.js";
+import { getGitHubViewerCached } from "../exec.js";
+import { discoverTrackedOrgMemberLogins } from "../github-org-team-scope.js";
 import { buildPullSidebarLists, fetchMergedAuthoredLinkablePRs } from "../api.js";
+import { dedupeIssuesByIdentifier } from "../tickets/linear.js";
 import {
   filterPrToTicketsRecordForMutedRepos,
   filterPullRowsByMutedRepos,
@@ -18,6 +24,34 @@ import {
   type LifecycleStage,
   type OpenPullLike,
 } from "../lifecycle-stage.js";
+import {
+  createTeamMemberIdentityResolver,
+  normalizeTeamIdentityKey,
+  regenerateMemberLinks,
+  type LinearUserRef,
+  type TeamMemberLink,
+} from "./member-identity.js";
+
+/** GitHub login or Linear person contributing to a member rollup (for linking UI). */
+export type TeamMemberSummaryIdentityHint =
+  | { kind: "github"; login: string }
+  | { kind: "linear"; userId?: string; name: string };
+
+/** One PR or ticket line in the per-teammate accordion (same core fields as radar rows). */
+export type TeamMemberSummaryItem = {
+  title: string;
+  entityKind: "pr" | "ticket";
+  entityIdentifier: string;
+  lifecycleStage?: LifecycleStage;
+  lifecycleStuck?: boolean;
+  providerUrl?: string;
+  waitLabel?: string;
+  /**
+   * ISO timestamp for AI digest freshness: PR `updated_at` / `created_at`, ticket `updatedAt`, or merge time.
+   * Used to exclude work older than 30 days from Claude summaries (see `member-summary-ai`).
+   */
+  activityAt?: string;
+};
 
 export interface TeamOverviewSnapshot {
   generatedAt: string;
@@ -75,6 +109,33 @@ export interface TeamOverviewSnapshot {
     /** e.g. Linear issue URL from the API */
     providerUrl?: string;
   }>;
+  /** Per-person rollups derived from snapshot inputs (GitHub login for PR authors, ticket assignee display names). */
+  memberSummaries: Array<{
+    memberLabel: string;
+    /** Raw identities seen for this label; used to suggest manual GitHub ↔ Linear links. */
+    identityHints?: TeamMemberSummaryIdentityHint[];
+    workingOn: TeamMemberSummaryItem[];
+    waiting: TeamMemberSummaryItem[];
+    comingUp: TeamMemberSummaryItem[];
+    /**
+     * Claude-generated bullet summary from this snapshot's PRs/tickets for this teammate.
+     * Regenerated only when `workFingerprint` differs from the last cached run for this teammate.
+     */
+    aiDigest?: {
+      bullets: string[];
+      workFingerprint: string;
+      generatedAt: string;
+    };
+  }>;
+  /**
+   * Fingerprint of the entire team's work-item sets (PRs + tickets per member).
+   * When this changes vs the previous snapshot, at least one teammate's digest inputs changed.
+   */
+  teamMemberAiDigestInputFingerprint?: string;
+  /** Fingerprint of manual links + unrecognised GitHub logins + uncovered assignees when Claude linking last ran. */
+  memberLinkClaudeFingerprint?: string;
+  /** Last Claude-suggested identity links (merged after manual config `team.memberLinks`). */
+  claudeMemberLinkSuggestions?: TeamMemberLink[];
 }
 
 const STUCK_ALERT_TYPES = new Set([
@@ -94,7 +155,319 @@ function emptySnapshot(generatedAt: string): TeamOverviewSnapshot {
     recentlyMerged: [],
     unlinkedPrs: [],
     unlinkedTickets: [],
+    memberSummaries: [],
   };
+}
+
+const MEMBER_SUMMARY_CAP = 6;
+
+function ticketAssigneeLabel(ticket: TicketIssue): string {
+  const n = ticket.assignee?.name?.trim();
+  return n || "Unassigned";
+}
+
+function ticketIsInProgress(ticket: TicketIssue): boolean {
+  return ticket.state.type.toLowerCase() === "started";
+}
+
+function ticketIsUpcoming(ticket: TicketIssue): boolean {
+  const ty = ticket.state.type.toLowerCase();
+  return ty === "unstarted" || ty === "backlog";
+}
+
+type MemberSummaryWaitingInternal = TeamMemberSummaryItem & { sortKey: number };
+
+type MemberBuckets = {
+  workingOn: TeamMemberSummaryItem[];
+  waiting: MemberSummaryWaitingInternal[];
+  comingUp: TeamMemberSummaryItem[];
+};
+
+function identityHintKey(h: TeamMemberSummaryIdentityHint): string {
+  if (h.kind === "github") return `g:${normalizeTeamIdentityKey(h.login)}`;
+  return `l:${h.userId ?? ""}:${normalizeTeamIdentityKey(h.name)}`;
+}
+
+function buildMemberSummariesFromData(input: {
+  authored: Array<Record<string, unknown>>;
+  reviewRequested: Array<Record<string, unknown>>;
+  generatedAt: string;
+  myIssues: TicketIssue[];
+  repoLinkedIssues: TicketIssue[];
+  recentlyMerged: Array<{ repo: string; number: number; title: string; mergedAt: string; authorLogin?: string }>;
+  stuck: TeamOverviewSnapshot["stuck"];
+  awaitingReview: TeamOverviewSnapshot["awaitingReview"];
+  unlinkedPrs: TeamOverviewSnapshot["unlinkedPrs"];
+  unlinkedTickets: TeamOverviewSnapshot["unlinkedTickets"];
+  resolveMember: (raw: string, opts?: { linearUserId?: string | null }) => string;
+  lifecycleCtx: {
+    prToTickets: Record<string, string[]>;
+    openPulls: OpenPullLike[];
+    myTickets: TicketIssue[];
+    repoLinkedTickets: TicketIssue[];
+  };
+}): TeamOverviewSnapshot["memberSummaries"] {
+  const { resolveMember, lifecycleCtx } = input;
+  const fallbackActivity = input.generatedAt;
+  const ticketByIdentifier = new Map<string, TicketIssue>();
+  for (const t of [...input.myIssues, ...input.repoLinkedIssues]) {
+    ticketByIdentifier.set(t.identifier, t);
+  }
+
+  const buckets = new Map<string, MemberBuckets>();
+  const hintByLabel = new Map<string, Map<string, TeamMemberSummaryIdentityHint>>();
+
+  const ensure = (label: string): MemberBuckets => {
+    let b = buckets.get(label);
+    if (!b) {
+      b = { workingOn: [], waiting: [], comingUp: [] };
+      buckets.set(label, b);
+    }
+    return b;
+  };
+
+  const addHints = (label: string, hints: TeamMemberSummaryIdentityHint[]) => {
+    let m = hintByLabel.get(label);
+    if (!m) {
+      m = new Map();
+      hintByLabel.set(label, m);
+    }
+    for (const h of hints) {
+      m.set(identityHintKey(h), h);
+    }
+  };
+
+  const pushCap = <T>(arr: T[], item: T, cap: number) => {
+    if (arr.length < cap) arr.push(item);
+  };
+
+  const stuckPrKeys = new Set(
+    input.stuck.filter((s) => s.entityKind === "pr").map((s) => s.entityIdentifier),
+  );
+  const stuckTicketIds = new Set(
+    input.stuck.filter((s) => s.entityKind === "ticket").map((s) => s.entityIdentifier),
+  );
+
+  for (const row of input.authored) {
+    const repo = row.repo as string;
+    const number = row.number as number;
+    const key = prEntityKey(repo, number);
+    if (stuckPrKeys.has(key)) continue;
+    const ghLogin = sidebarAuthorLogin(row);
+    const label = resolveMember(ghLogin ?? "Unknown");
+    if (ghLogin && ghLogin !== "Unknown") {
+      addHints(label, [{ kind: "github", login: ghLogin }]);
+    }
+    pushCap(ensure(label).workingOn, {
+      title: row.title as string,
+      entityKind: "pr",
+      entityIdentifier: key,
+      lifecycleStage: resolveAttentionLifecycleStage({ entityKind: "pr", entityIdentifier: key }, lifecycleCtx),
+      lifecycleStuck: false,
+      activityAt: coalesceActivityIso(fallbackActivity, activityIsoFromSidebarRow(row)),
+    }, MEMBER_SUMMARY_CAP);
+  }
+
+  const seenTicket = new Set<string>();
+  for (const ticket of [...input.myIssues, ...input.repoLinkedIssues]) {
+    const id = ticket.identifier;
+    if (seenTicket.has(id)) continue;
+    seenTicket.add(id);
+    if (isDoneTicket(ticket)) continue;
+    const label = resolveMember(ticketAssigneeLabel(ticket), { linearUserId: ticket.assignee?.id });
+    const b = ensure(label);
+    if (ticket.assignee && (ticket.assignee.name?.trim() || ticket.assignee.id)) {
+      addHints(label, [{
+        kind: "linear",
+        userId: ticket.assignee.id,
+        name: ticket.assignee.name?.trim() || "Unknown",
+      }]);
+    }
+    if (stuckTicketIds.has(id)) continue;
+    if (ticketIsInProgress(ticket)) {
+      pushCap(b.workingOn, {
+        title: ticket.title,
+        entityKind: "ticket",
+        entityIdentifier: id,
+        lifecycleStage: deriveTicketIssueLifecycleStage(ticket, lifecycleCtx.prToTickets, lifecycleCtx.openPulls),
+        lifecycleStuck: false,
+        providerUrl: ticket.providerUrl,
+        activityAt: coalesceActivityIso(fallbackActivity, ticket.updatedAt),
+      }, MEMBER_SUMMARY_CAP);
+    } else if (ticketIsUpcoming(ticket)) {
+      pushCap(b.comingUp, {
+        title: ticket.title,
+        entityKind: "ticket",
+        entityIdentifier: id,
+        lifecycleStage: deriveTicketIssueLifecycleStage(ticket, lifecycleCtx.prToTickets, lifecycleCtx.openPulls),
+        lifecycleStuck: false,
+        providerUrl: ticket.providerUrl,
+        activityAt: coalesceActivityIso(fallbackActivity, ticket.updatedAt),
+      }, MEMBER_SUMMARY_CAP);
+    }
+  }
+
+  for (const pr of input.recentlyMerged) {
+    const raw = pr.authorLogin?.trim() || "Unknown";
+    if (!raw || raw === "Unknown") continue;
+    const label = resolveMember(raw);
+    addHints(label, [{ kind: "github", login: raw }]);
+    const ref = prEntityKey(pr.repo, pr.number);
+    pushCap(ensure(label).workingOn, {
+      title: pr.title,
+      entityKind: "pr",
+      entityIdentifier: ref,
+      lifecycleStage: mergedPullLifecycleStage(),
+      lifecycleStuck: false,
+      waitLabel: "Merged",
+      activityAt: coalesceActivityIso(fallbackActivity, pr.mergedAt),
+    }, MEMBER_SUMMARY_CAP);
+  }
+
+  for (const s of input.stuck) {
+    const raw = s.actorLabel?.trim() || "Unknown";
+    const ticket =
+      s.entityKind === "ticket" ? ticketByIdentifier.get(s.entityIdentifier) : undefined;
+    const linearUserId = ticket?.assignee?.id;
+    const label = resolveMember(raw, { linearUserId });
+    if (s.entityKind === "pr" && raw !== "Unknown") {
+      addHints(label, [{ kind: "github", login: raw }]);
+    }
+    if (s.entityKind === "ticket" && ticket?.assignee && (ticket.assignee.name?.trim() || ticket.assignee.id)) {
+      addHints(label, [{
+        kind: "linear",
+        userId: ticket.assignee.id,
+        name: ticket.assignee.name?.trim() || "Unknown",
+      }]);
+    }
+    const b = ensure(label);
+    const stuckActivity =
+      s.entityKind === "pr"
+        ? coalesceActivityIso(
+            fallbackActivity,
+            activityIsoFromSidebarRow(
+              findSidebarRowForPrKey(input.authored, input.reviewRequested, s.entityIdentifier),
+            ),
+          )
+        : coalesceActivityIso(fallbackActivity, ticket?.updatedAt);
+    pushCap(b.waiting, {
+      title: s.title,
+      entityKind: s.entityKind,
+      entityIdentifier: s.entityIdentifier,
+      lifecycleStage: s.lifecycleStage,
+      lifecycleStuck: s.lifecycleStuck,
+      providerUrl: s.entityKind === "ticket" ? ticket?.providerUrl : undefined,
+      waitLabel: "Stuck",
+      sortKey: 1e9,
+      activityAt: stuckActivity,
+    }, MEMBER_SUMMARY_CAP);
+  }
+
+  for (const pr of input.awaitingReview) {
+    const gh = pr.actorLabel?.trim() || "Unknown";
+    const label = resolveMember(gh);
+    if (gh !== "Unknown") {
+      addHints(label, [{ kind: "github", login: gh }]);
+    }
+    const ref = prEntityKey(pr.repo, pr.number);
+    const waitHours = pr.waitHours;
+    const waitLabel =
+      waitHours >= 72
+        ? `${Math.round(waitHours / 24)}d waiting`
+        : waitHours >= 1
+          ? `${Math.round(waitHours)}h waiting`
+          : "<1h waiting";
+    const prRow = findSidebarRowForPrKey(input.authored, input.reviewRequested, ref);
+    pushCap(
+      ensure(label).waiting,
+      {
+        title: pr.title,
+        entityKind: "pr",
+        entityIdentifier: ref,
+        lifecycleStage: pr.lifecycleStage,
+        lifecycleStuck: pr.lifecycleStuck,
+        waitLabel,
+        sortKey: waitHours,
+        activityAt: coalesceActivityIso(fallbackActivity, activityIsoFromSidebarRow(prRow)),
+      },
+      MEMBER_SUMMARY_CAP,
+    );
+  }
+
+  for (const pr of input.unlinkedPrs) {
+    const gh = pr.actorLabel?.trim() || "Unknown";
+    const label = resolveMember(gh);
+    if (gh !== "Unknown") {
+      addHints(label, [{ kind: "github", login: gh }]);
+    }
+    const uKey = prEntityKey(pr.repo, pr.number);
+    const uRow = findSidebarRowForPrKey(input.authored, input.reviewRequested, uKey);
+    pushCap(
+      ensure(label).waiting,
+      {
+        title: pr.title,
+        entityKind: "pr",
+        entityIdentifier: uKey,
+        lifecycleStage: pr.lifecycleStage,
+        lifecycleStuck: pr.lifecycleStuck,
+        waitLabel: "Unlinked PR",
+        sortKey: -1,
+        activityAt: coalesceActivityIso(fallbackActivity, activityIsoFromSidebarRow(uRow)),
+      },
+      MEMBER_SUMMARY_CAP,
+    );
+  }
+
+  for (const t of input.unlinkedTickets) {
+    const linearUserId = ticketByIdentifier.get(t.identifier)?.assignee?.id;
+    const label = resolveMember(t.actorLabel?.trim() || "Unassigned", { linearUserId });
+    const fullTicket = ticketByIdentifier.get(t.identifier);
+    if (fullTicket?.assignee && (fullTicket.assignee.name?.trim() || fullTicket.assignee.id)) {
+      addHints(label, [{
+        kind: "linear",
+        userId: fullTicket.assignee.id,
+        name: fullTicket.assignee.name?.trim() || "Unknown",
+      }]);
+    }
+    pushCap(
+      ensure(label).waiting,
+      {
+        title: t.title,
+        entityKind: "ticket",
+        entityIdentifier: t.identifier,
+        lifecycleStage: t.lifecycleStage,
+        lifecycleStuck: t.lifecycleStuck,
+        providerUrl: t.providerUrl,
+        waitLabel: "Unlinked ticket",
+        sortKey: -2,
+        activityAt: coalesceActivityIso(fallbackActivity, fullTicket?.updatedAt),
+      },
+      MEMBER_SUMMARY_CAP,
+    );
+  }
+
+  const out: TeamOverviewSnapshot["memberSummaries"] = [];
+  for (const [memberLabel, b] of buckets) {
+    if (
+      b.workingOn.length === 0 &&
+      b.waiting.length === 0 &&
+      b.comingUp.length === 0
+    ) {
+      continue;
+    }
+    b.waiting.sort((x, y) => y.sortKey - x.sortKey);
+    const hintsMap = hintByLabel.get(memberLabel);
+    const identityHints = hintsMap ? [...hintsMap.values()] : undefined;
+    out.push({
+      memberLabel,
+      ...(identityHints?.length ? { identityHints } : {}),
+      workingOn: b.workingOn,
+      waiting: b.waiting.map(({ sortKey: _s, ...rest }) => rest),
+      comingUp: b.comingUp,
+    });
+  }
+  out.sort((a, b) => a.memberLabel.localeCompare(b.memberLabel));
+  return out;
 }
 
 function isDoneTicket(ticket: TicketIssue): boolean {
@@ -138,6 +511,25 @@ function sidebarAuthorLogin(row: Record<string, unknown> | undefined): string | 
   return typeof a === "string" && a.trim() ? a.trim() : undefined;
 }
 
+function coalesceActivityIso(fallback: string, ...candidates: (string | undefined)[]): string {
+  for (const c of candidates) {
+    const s = c?.trim();
+    if (s && Number.isFinite(Date.parse(s))) return s;
+  }
+  return fallback;
+}
+
+function activityIsoFromSidebarRow(row: Record<string, unknown> | undefined): string | undefined {
+  if (!row) return undefined;
+  const u = row.updatedAt;
+  const c = row.createdAt;
+  const uStr = typeof u === "string" ? u : undefined;
+  const cStr = typeof c === "string" ? c : undefined;
+  if (uStr?.trim() && Number.isFinite(Date.parse(uStr))) return uStr;
+  if (cStr?.trim() && Number.isFinite(Date.parse(cStr))) return cStr;
+  return undefined;
+}
+
 function buildOpenPulls(
   authored: Array<Record<string, unknown>>,
   reviewRequested: Array<Record<string, unknown>>,
@@ -176,7 +568,7 @@ function mapSidebarRowToCoherencePR(p: Record<string, unknown>): CoherencePR {
 
 /**
  * Pure snapshot assembly for tests and for {@link rebuildTeamOverviewSnapshot}.
- * Uses the same in-repo data as the CLI coherence pass (personal scope until Team Radar widens inputs).
+ * Uses the same inputs as the team snapshot rebuild (including optional org-wide PRs and Linear team scope when configured).
  */
 export function buildTeamOverviewSnapshotFromData(input: {
   generatedAt: string;
@@ -189,6 +581,8 @@ export function buildTeamOverviewSnapshotFromData(input: {
   ticketToPRs: Record<string, Array<{ number: number; repo: string; title: string }>>;
   prToTickets: Record<string, string[]>;
   recentlyMerged: Array<{ repo: string; number: number; title: string; mergedAt: string; authorLogin?: string }>;
+  teamMemberLinks?: TeamMemberLink[];
+  linearUsers?: LinearUserRef[];
 }): TeamOverviewSnapshot {
   const openPulls = buildOpenPulls(input.authored, input.reviewRequested);
   const lifecycleCtx = {
@@ -300,6 +694,24 @@ export function buildTeamOverviewSnapshotFromData(input: {
       actorLabel: authorLogin,
     }));
 
+  const teamMemberLinksForResolve =
+    input.teamMemberLinks?.length ? regenerateMemberLinks(input.teamMemberLinks) : input.teamMemberLinks;
+  const { resolve } = createTeamMemberIdentityResolver(teamMemberLinksForResolve, input.linearUsers);
+  const memberSummaries = buildMemberSummariesFromData({
+    authored: input.authored,
+    reviewRequested: input.reviewRequested,
+    generatedAt: input.generatedAt,
+    myIssues: input.myIssues,
+    repoLinkedIssues: input.repoLinkedIssues,
+    recentlyMerged: input.recentlyMerged,
+    stuck,
+    awaitingReview,
+    unlinkedPrs,
+    unlinkedTickets,
+    resolveMember: resolve,
+    lifecycleCtx,
+  });
+
   return {
     generatedAt: input.generatedAt,
     summaryCounts: {
@@ -314,39 +726,49 @@ export function buildTeamOverviewSnapshotFromData(input: {
     recentlyMerged,
     unlinkedPrs,
     unlinkedTickets,
+    memberSummaries,
   };
 }
 
 export function readTeamOverviewCache():
   | { snapshot: TeamOverviewSnapshot; updatedAtMs: number; refreshError: string | null }
   | null {
-  const db = getRawSqlite();
-  const row = db.prepare(
-    "SELECT payload_json, updated_at_ms, refresh_error FROM team_overview_cache WHERE id = 1",
-  ).get() as { payload_json: string; updated_at_ms: number; refresh_error: string | null } | undefined;
+  const row = openStateDatabase()
+    .select({
+      payloadJson: schema.teamOverviewCache.payloadJson,
+      updatedAtMs: schema.teamOverviewCache.updatedAtMs,
+      refreshError: schema.teamOverviewCache.refreshError,
+    })
+    .from(schema.teamOverviewCache)
+    .where(eq(schema.teamOverviewCache.id, 1))
+    .get();
   if (!row) return null;
   return {
-    snapshot: JSON.parse(row.payload_json) as TeamOverviewSnapshot,
-    updatedAtMs: row.updated_at_ms,
-    refreshError: row.refresh_error,
+    snapshot: JSON.parse(row.payloadJson) as TeamOverviewSnapshot,
+    updatedAtMs: row.updatedAtMs,
+    refreshError: row.refreshError,
   };
 }
 
 export function writeTeamOverviewCache(snapshot: TeamOverviewSnapshot, errorMessage: string | null): void {
-  const db = getRawSqlite();
   const now = Date.now();
-  db.prepare(
-    `INSERT INTO team_overview_cache (id, payload_json, updated_at_ms, refresh_error)
-     VALUES (1, @payload_json, @updated_at_ms, @refresh_error)
-     ON CONFLICT(id) DO UPDATE SET
-       payload_json = excluded.payload_json,
-       updated_at_ms = excluded.updated_at_ms,
-       refresh_error = excluded.refresh_error`,
-  ).run({
-    payload_json: JSON.stringify(snapshot),
-    updated_at_ms: now,
-    refresh_error: errorMessage,
-  });
+  openStateDatabase()
+    .insert(schema.teamOverviewCache)
+    .values({
+      id: 1,
+      payloadJson: JSON.stringify(snapshot),
+      updatedAtMs: now,
+      refreshError: errorMessage,
+    })
+    .onConflictDoUpdate({
+      target: schema.teamOverviewCache.id,
+      set: {
+        payloadJson: JSON.stringify(snapshot),
+        updatedAtMs: now,
+        refreshError: errorMessage,
+      },
+    })
+    .run();
 }
 
 export async function rebuildTeamOverviewSnapshot(): Promise<{ snapshot: TeamOverviewSnapshot; error: string | null }> {
@@ -354,8 +776,16 @@ export async function rebuildTeamOverviewSnapshot(): Promise<{ snapshot: TeamOve
   try {
     const config = loadConfig();
     const repos = getRepos();
+    const includeOrgPulls = config.team?.includeGithubOrgMemberPulls !== false;
+    const viewer = includeOrgPulls ? await getGitHubViewerCached() : null;
+    const repoPaths = repos.map((r) => r.repo);
+
     const [lists, mergedLinkable] = await Promise.all([
-      buildPullSidebarLists(repos),
+      (async () => {
+        if (!viewer) return buildPullSidebarLists(repos);
+        const extra = await discoverTrackedOrgMemberLogins(repoPaths, viewer.login);
+        return buildPullSidebarLists(repos, extra.size ? { includeAuthoredByLogins: extra } : undefined);
+      })(),
       fetchMergedAuthoredLinkablePRs(repos),
     ]);
 
@@ -370,6 +800,26 @@ export async function rebuildTeamOverviewSnapshot(): Promise<{ snapshot: TeamOve
     const mergedLinkableVisible = filterPullRowsByMutedRepos(mergedLinkable, muted);
 
     const tState = getTicketState();
+
+    let teamScopeIssues: TicketIssue[] = [];
+    if (
+      config.team?.includeLinearTeamScopeIssues !== false
+      && (config.linearTeamKeys?.length ?? 0) > 0
+    ) {
+      try {
+        const { getTicketProvider } = await import("../tickets/index.js");
+        const provider = await getTicketProvider(config);
+        if (provider?.fetchTeamScopeIssues) {
+          const cap = Math.max(1, Math.min(500, config.team?.linearTeamIssueCap ?? 200));
+          teamScopeIssues = await provider.fetchTeamScopeIssues(cap);
+        }
+      } catch {
+        teamScopeIssues = [];
+      }
+    }
+
+    const overviewMyIssues = dedupeIssuesByIdentifier([...tState.myIssues, ...teamScopeIssues]);
+    const ticketsForClaude = dedupeIssuesByIdentifier([...overviewMyIssues, ...tState.repoLinkedIssues]);
     const toPRsRaw: Record<string, Array<{ number: number; repo: string; title: string }>> = {};
     for (const [k, v] of tState.linkMap.ticketToPRs) {
       toPRsRaw[k] = v;
@@ -383,7 +833,7 @@ export async function rebuildTeamOverviewSnapshot(): Promise<{ snapshot: TeamOve
 
     const now = Date.now();
     const coherenceInput: CoherenceInput = {
-      myTickets: tState.myIssues,
+      myTickets: overviewMyIssues,
       repoLinkedTickets: tState.repoLinkedIssues,
       authoredPRs: authored.map(mapSidebarRowToCoherencePR),
       reviewRequestedPRs: reviewRequested.map(mapSidebarRowToCoherencePR),
@@ -410,18 +860,101 @@ export async function rebuildTeamOverviewSnapshot(): Promise<{ snapshot: TeamOve
         authorLogin: p.authorLogin,
       }));
 
+    let linearUsers: LinearUserRef[] | undefined;
+    try {
+      const { getTicketProvider } = await import("../tickets/index.js");
+      const provider = await getTicketProvider(config);
+      if (provider?.listWorkspaceUsers) {
+        const users = await provider.listWorkspaceUsers();
+        if (users.length > 0) linearUsers = users;
+      }
+    } catch {
+      linearUsers = undefined;
+    }
+
+    const {
+      collectGithubLoginsForMemberLinking,
+      collectUncoveredAssigneeKeys,
+      hasUncoveredLinearAssigneeOnTickets,
+      listUnrecognisedGithubLogins,
+      memberLinkClaudeJobFingerprint,
+      mergeManualAndClaudeMemberLinks,
+      suggestMemberLinksWithClaude,
+    } = await import("./member-link-claude.js");
+
+    const githubLogins = collectGithubLoginsForMemberLinking(authored, reviewRequested, recentlyMerged);
+    const ticketList = ticketsForClaude;
+
+    const prevCache = readTeamOverviewCache();
+    const prevSnap = prevCache?.snapshot;
+    const prevClaude = Array.isArray(prevSnap?.claudeMemberLinkSuggestions)
+      ? prevSnap!.claudeMemberLinkSuggestions!
+      : [];
+
+    const mergedForCoverage = mergeManualAndClaudeMemberLinks(config.team?.memberLinks, prevClaude);
+    const unrecognisedGithub = listUnrecognisedGithubLogins(githubLogins, mergedForCoverage);
+    const hasUncoveredAssignee = hasUncoveredLinearAssigneeOnTickets(ticketList, mergedForCoverage);
+    const uncoveredAssigneeKeys = collectUncoveredAssigneeKeys(ticketList, mergedForCoverage);
+
+    let claudeMemberLinkSuggestions = prevClaude;
+    const claudeMemberLinkingOn = config.team?.claudeMemberLinking !== false;
+    const needsClaudeMemberJob =
+      claudeMemberLinkingOn && Boolean(linearUsers?.length)
+      && githubLogins.length > 0
+      && (unrecognisedGithub.length > 0 || hasUncoveredAssignee);
+
+    let memberLinkJobFp = "";
+    if (needsClaudeMemberJob && linearUsers) {
+      memberLinkJobFp = memberLinkClaudeJobFingerprint(
+        config.team?.memberLinks,
+        unrecognisedGithub,
+        uncoveredAssigneeKeys,
+      );
+      if (
+        prevSnap?.memberLinkClaudeFingerprint === memberLinkJobFp
+        && Array.isArray(prevSnap.claudeMemberLinkSuggestions)
+      ) {
+        claudeMemberLinkSuggestions = prevSnap.claudeMemberLinkSuggestions;
+      } else {
+        const githubForPrompt = hasUncoveredAssignee ? githubLogins : unrecognisedGithub;
+        const newSuggestions = await suggestMemberLinksWithClaude(githubForPrompt, linearUsers);
+        claudeMemberLinkSuggestions = mergeManualAndClaudeMemberLinks(prevClaude, newSuggestions);
+      }
+    }
+
+    const mergedMemberLinks = mergeManualAndClaudeMemberLinks(
+      config.team?.memberLinks,
+      claudeMemberLinkSuggestions,
+    );
+
     const snapshot = buildTeamOverviewSnapshotFromData({
       generatedAt,
       now,
       alerts,
       authored,
       reviewRequested,
-      myIssues: tState.myIssues,
+      myIssues: overviewMyIssues,
       repoLinkedIssues: tState.repoLinkedIssues,
       ticketToPRs,
       prToTickets,
       recentlyMerged,
+      teamMemberLinks: mergedMemberLinks,
+      linearUsers,
     });
+
+    if (memberLinkJobFp) {
+      snapshot.memberLinkClaudeFingerprint = memberLinkJobFp;
+    }
+    snapshot.claudeMemberLinkSuggestions = claudeMemberLinkSuggestions;
+
+    if (isTeamFeaturesEnabled(config) && config.team?.claudeMemberSummaries !== false) {
+      try {
+        const { enrichMemberSummariesWithAiDigests } = await import("./member-summary-ai.js");
+        await enrichMemberSummariesWithAiDigests(snapshot);
+      } catch (e) {
+        log.warn(`[team] member AI digests skipped: ${(e as Error).message}`);
+      }
+    }
 
     return { snapshot, error: null };
   } catch (e) {

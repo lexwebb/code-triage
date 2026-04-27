@@ -1,6 +1,6 @@
-import { api } from "../api";
 import { getQueryClient } from "../lib/query-client";
 import { qk } from "../lib/query-keys";
+import { trpcClient } from "../lib/trpc";
 import type { AttentionSlice, SliceCreator } from "./types";
 
 export const createAttentionSlice: SliceCreator<AttentionSlice> = (set) => ({
@@ -13,7 +13,7 @@ export const createAttentionSlice: SliceCreator<AttentionSlice> = (set) => ({
   },
 
   snoozeAttention: async (id: string, until: string) => {
-    await api.snoozeAttentionItem(id, until);
+    await trpcClient.attentionSnooze.mutate({ id, until });
     set((s) => ({
       attentionItems: s.attentionItems.filter((i) => i.id !== id),
     }));
@@ -21,7 +21,7 @@ export const createAttentionSlice: SliceCreator<AttentionSlice> = (set) => ({
   },
 
   dismissAttention: async (id: string) => {
-    await api.dismissAttentionItem(id);
+    await trpcClient.attentionDismiss.mutate({ id });
     set((s) => ({
       attentionItems: s.attentionItems.filter((i) => i.id !== id),
     }));
@@ -29,7 +29,7 @@ export const createAttentionSlice: SliceCreator<AttentionSlice> = (set) => ({
   },
 
   pinAttention: async (id: string) => {
-    await api.pinAttentionItem(id);
+    await trpcClient.attentionPin.mutate({ id });
     set((s) => ({
       attentionItems: s.attentionItems.map((i) => (i.id === id ? { ...i, pinned: !i.pinned } : i)),
     }));

@@ -1,4 +1,6 @@
-import { getRawSqlite } from "./db/client.js";
+import { eq, and } from "drizzle-orm";
+import * as schema from "./db/schema.js";
+import { openStateDatabase } from "./db/client.js";
 import { runPrCompanionPrompt } from "./actioner.js";
 
 export type CompanionChatRole = "user" | "assistant";
@@ -78,33 +80,29 @@ export function loadCompanionSession(repo: string, prNumber: number): {
   bundleJson: string | null;
   bundleUpdatedAtMs: number | null;
 } | null {
-  const raw = getRawSqlite();
-  const row = raw
-    .prepare(
-      `SELECT messages_json, bundle_json, bundle_updated_at_ms
-       FROM pr_companion_sessions WHERE repo = ? AND pr_number = ?`,
-    )
-    .get(repo, prNumber) as
-    | {
-        messages_json: string;
-        bundle_json: string | null;
-        bundle_updated_at_ms: number | null;
-      }
-    | undefined;
+  const row = openStateDatabase()
+    .select({
+      messagesJson: schema.prCompanionSessions.messagesJson,
+      bundleJson: schema.prCompanionSessions.bundleJson,
+      bundleUpdatedAtMs: schema.prCompanionSessions.bundleUpdatedAtMs,
+    })
+    .from(schema.prCompanionSessions)
+    .where(and(eq(schema.prCompanionSessions.repo, repo), eq(schema.prCompanionSessions.prNumber, prNumber)))
+    .get();
   if (!row) return null;
   try {
-    const parsed = JSON.parse(row.messages_json) as unknown;
+    const parsed = JSON.parse(row.messagesJson) as unknown;
     const messages = parseMessages(parsed);
     return {
       messages,
-      bundleJson: row.bundle_json,
-      bundleUpdatedAtMs: row.bundle_updated_at_ms,
+      bundleJson: row.bundleJson,
+      bundleUpdatedAtMs: row.bundleUpdatedAtMs,
     };
   } catch {
     return {
       messages: [],
-      bundleJson: row.bundle_json,
-      bundleUpdatedAtMs: row.bundle_updated_at_ms,
+      bundleJson: row.bundleJson,
+      bundleUpdatedAtMs: row.bundleUpdatedAtMs,
     };
   }
 }
@@ -178,32 +176,35 @@ export function saveCompanionSession(
   bundleJson: string | null,
   bundleUpdatedAtMs: number | null,
 ): void {
-  const raw = getRawSqlite();
   const now = Date.now();
   const messagesJson = JSON.stringify(messages);
-  raw
-    .prepare(
-      `INSERT INTO pr_companion_sessions (repo, pr_number, messages_json, bundle_json, bundle_updated_at_ms, updated_at_ms)
-       VALUES (@repo, @pr_number, @messages_json, @bundle_json, @bundle_updated_at_ms, @updated_at_ms)
-       ON CONFLICT(repo, pr_number) DO UPDATE SET
-         messages_json = excluded.messages_json,
-         bundle_json = excluded.bundle_json,
-         bundle_updated_at_ms = excluded.bundle_updated_at_ms,
-         updated_at_ms = excluded.updated_at_ms`,
-    )
-    .run({
+  openStateDatabase()
+    .insert(schema.prCompanionSessions)
+    .values({
       repo,
-      pr_number: prNumber,
-      messages_json: messagesJson,
-      bundle_json: bundleJson,
-      bundle_updated_at_ms: bundleUpdatedAtMs,
-      updated_at_ms: now,
-    });
+      prNumber,
+      messagesJson,
+      bundleJson,
+      bundleUpdatedAtMs,
+      updatedAtMs: now,
+    })
+    .onConflictDoUpdate({
+      target: [schema.prCompanionSessions.repo, schema.prCompanionSessions.prNumber],
+      set: {
+        messagesJson,
+        bundleJson,
+        bundleUpdatedAtMs,
+        updatedAtMs: now,
+      },
+    })
+    .run();
 }
 
 export function clearCompanionSession(repo: string, prNumber: number): void {
-  const raw = getRawSqlite();
-  raw.prepare(`DELETE FROM pr_companion_sessions WHERE repo = ? AND pr_number = ?`).run(repo, prNumber);
+  openStateDatabase()
+    .delete(schema.prCompanionSessions)
+    .where(and(eq(schema.prCompanionSessions.repo, repo), eq(schema.prCompanionSessions.prNumber, prNumber)))
+    .run();
 }
 
 /**

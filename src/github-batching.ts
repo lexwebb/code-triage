@@ -1,5 +1,7 @@
+import { eq } from "drizzle-orm";
+import * as schema from "./db/schema.js";
 import { ghGraphQL, partitionEntriesByToken, partitionRepoPathsByToken } from "./exec.js";
-import { getRawSqlite, openStateDatabase } from "./db/client.js";
+import { openStateDatabase } from "./db/client.js";
 import { reduceCiToTriState, type CiChecksSummary, type CiLegacyStatus, type CiTriState } from "./ci-state.js";
 
 /** Open PRs per repo in one GraphQL round-trip chunk. */
@@ -43,6 +45,7 @@ export interface OpenPull {
   updated_at?: string;
   draft?: boolean;
   requested_reviewers: Array<{ login: string }>;
+  review_decision?: "APPROVED" | "CHANGES_REQUESTED" | "REVIEW_REQUIRED";
 }
 
 /** Result of open-PR listing; `writableRepoPaths` is repos where the token may push. */
@@ -97,35 +100,45 @@ const PUSH_ACCESS_CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
  */
 export function loadCachedPushAccess(repoPaths: string[]): string[] | null {
   if (repoPaths.length === 0) return [];
-  openStateDatabase();
-  const sqlite = getRawSqlite();
-  const stmt = sqlite.prepare("SELECT has_push, checked_at FROM repo_access WHERE repo = ?");
+  const database = openStateDatabase();
   const now = Date.now();
   const allowed: string[] = [];
   for (const rp of repoPaths) {
-    const row = stmt.get(rp) as { has_push: number; checked_at: number } | undefined;
-    if (!row || now - row.checked_at > PUSH_ACCESS_CACHE_TTL_MS) {
+    const row = database
+      .select({ hasPush: schema.repoAccess.hasPush, checkedAt: schema.repoAccess.checkedAt })
+      .from(schema.repoAccess)
+      .where(eq(schema.repoAccess.repo, rp))
+      .get();
+    if (!row || now - row.checkedAt > PUSH_ACCESS_CACHE_TTL_MS) {
       return null; // cache miss — at least one repo is missing or expired
     }
-    if (row.has_push) allowed.push(rp);
+    if (row.hasPush) allowed.push(rp);
   }
   return allowed;
 }
 
 /** Persists push-access results so dev-mode restarts can skip the GitHub API call. */
 export function savePushAccessCache(repoPaths: string[], writableSet: Set<string>): void {
-  openStateDatabase();
-  const sqlite = getRawSqlite();
-  const upsert = sqlite.prepare(
-    "INSERT INTO repo_access (repo, has_push, checked_at) VALUES (?, ?, ?) ON CONFLICT(repo) DO UPDATE SET has_push = excluded.has_push, checked_at = excluded.checked_at",
-  );
+  const database = openStateDatabase();
   const now = Date.now();
-  const run = sqlite.transaction(() => {
+  database.transaction((tx) => {
     for (const rp of repoPaths) {
-      upsert.run(rp, writableSet.has(rp) ? 1 : 0, now);
+      tx.insert(schema.repoAccess)
+        .values({
+          repo: rp,
+          hasPush: writableSet.has(rp) ? 1 : 0,
+          checkedAt: now,
+        })
+        .onConflictDoUpdate({
+          target: schema.repoAccess.repo,
+          set: {
+            hasPush: writableSet.has(rp) ? 1 : 0,
+            checkedAt: now,
+          },
+        })
+        .run();
     }
   });
-  run();
 }
 
 type GqlOpenPullNode = {
@@ -139,6 +152,7 @@ type GqlOpenPullNode = {
   createdAt?: string;
   updatedAt?: string;
   isDraft?: boolean;
+  reviewDecision?: "APPROVED" | "CHANGES_REQUESTED" | "REVIEW_REQUIRED" | null;
   reviewRequests: {
     nodes: Array<{ requestedReviewer: { login?: string } | null }>;
   } | null;
@@ -164,6 +178,7 @@ function gqlOpenPullToOpenPull(node: GqlOpenPullNode): OpenPull {
     updated_at: node.updatedAt,
     draft: node.isDraft ?? false,
     requested_reviewers: reviewers,
+    review_decision: node.reviewDecision ?? undefined,
   };
 }
 
@@ -200,6 +215,7 @@ async function fetchOpenPullRequestsForReposUncached(repoPaths: string[]): Promi
               createdAt
               updatedAt
               isDraft
+              reviewDecision
               reviewRequests(first: 40) {
                 nodes {
                   requestedReviewer {
@@ -409,7 +425,7 @@ const PULL_POLL_FIELDS = `
   }
 `;
 
-function summarizeChecksFromSuites(suites: GqlCheckSuiteNode[]): CiChecksSummary | null {
+export function summarizeChecksFromSuites(suites: GqlCheckSuiteNode[]): CiChecksSummary | null {
   let success = 0;
   let failure = 0;
   let pending = 0;
@@ -430,19 +446,6 @@ function summarizeChecksFromSuites(suites: GqlCheckSuiteNode[]): CiChecksSummary
         }
       }
       continue;
-    }
-
-    // Fallback: no runs exposed, but suite itself carries a terminal state.
-    if (suite.status !== "completed") {
-      foundAny = true;
-      pending++;
-    } else if (suite.conclusion) {
-      foundAny = true;
-      if (suite.conclusion === "success" || suite.conclusion === "skipped" || suite.conclusion === "neutral") {
-        success++;
-      } else {
-        failure++;
-      }
     }
   }
 

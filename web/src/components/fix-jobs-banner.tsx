@@ -29,6 +29,7 @@ export default function FixJobsBanner() {
           {failed > 0 && <span className="text-red-400">{failed} failed</span>}
           {noChanges > 0 && <span className="text-blue-400">{noChanges} no changes</span>}
           {queue.length > 0 && <span className="text-gray-400">{queue.length} queued</span>}
+          <span className="ml-auto text-gray-600">Review in thread; use Details for modal</span>
         </div>
         <div className="max-h-40 overflow-y-auto">
           {fixJobs.map((job) => (

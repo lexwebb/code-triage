@@ -1,8 +1,5 @@
 import { addRoute, json, getRepos, getBody, getPollState, getHealthPayload, setFixJobStatus, clearFixJobStatus, getActiveFixForBranch, subscribeSse, getListenPort, notifyConfigSaved, getFixJobStatus, getFixJobStatusForComment, getAllFixJobStatuses, getTicketState, triggerManualPoll } from "./server.js";
 import { enqueueFix, isInFixQueue, advanceQueue, getFixQueue, removeFromFixQueue } from "./fix-queue.js";
-import { getVapidKeys } from "./vapid.js";
-import { savePushSubscription, deletePushSubscription, mutePR as dbMutePR, unmutePR as dbUnmutePR, getMutedPRs as dbGetMutedPRs } from "./push-db.js";
-import { sendTestPush } from "./push.js";
 import type { RepoInfo } from "./discovery.js";
 import { loadConfig, saveConfig, configExists, isTeamFeaturesEnabled, type Config } from "./config.js";
 import { loadState, markComment, patchCommentTriage, saveState, addFixJob as addFixJobState, removeFixJob as removeFixJobState, getFixJobs, getPendingTriageCountsByPr, needsEvaluation, reconcileResolvedComments } from "./state.js";
@@ -29,14 +26,11 @@ import { reduceCiToTriState, type CiChecksSummary } from "./ci-state.js";
 import { clearRepoPollSchedule } from "./repo-poll-schedule.js";
 import { enqueueEvaluation, drainOnce } from "./eval-queue.js";
 import { buildIgnoredBotSet } from "./poller.js";
-import { getRawSqlite } from "./db/client.js";
-import {
-  appendUserMessageAndRunAssistant,
-  clearCompanionSession,
-  loadCompanionSession,
-  validateBundleItems,
-} from "./pr-companion.js";
+import { eq } from "drizzle-orm";
+import * as schema from "./db/schema.js";
+import { openStateDatabase } from "./db/client.js";
 import type { LinkablePR } from "./tickets/linker.js";
+import { parseTeamMemberLinksFromUnknown, type TeamMemberLink } from "./team/member-identity.js";
 import { filterSidebarRecordsByMutedRepos, mutedReposAsSet } from "./muted-repos.js";
 
 async function getUsernameOrNull(): Promise<string | null> {
@@ -45,18 +39,45 @@ async function getUsernameOrNull(): Promise<string | null> {
 }
 
 /** When `repo` query is absent, drop globally muted repos from sidebar lists (explicit repo view still works). */
-function filterPullSidebarResponse(
+export interface BuildPullSidebarListsOptions {
+  /**
+   * Open PRs authored by these logins are included in `authored` in addition to the viewer's
+   * (team overview / org scope). Matched case-sensitively to GitHub's `user.login`.
+   */
+  includeAuthoredByLogins?: Set<string> | readonly string[];
+}
+
+export interface PullSidebarRow {
+  [key: string]: unknown;
+  number: number;
+  title: string;
+  author: string;
+  authorAvatar: string;
+  branch: string;
+  baseBranch: string;
+  url: string;
+  createdAt: string;
+  updatedAt: string;
+  draft: boolean;
+  repo: string;
+  checksStatus: "success" | "failure" | "pending";
+  openComments: number;
+  pendingTriage: number;
+  hasHumanApproval: boolean;
+}
+
+export function filterPullSidebarResponse(
   lists: {
-    authored: Array<Record<string, unknown>>;
-    reviewRequested: Array<Record<string, unknown>>;
+    authored: PullSidebarRow[];
+    reviewRequested: PullSidebarRow[];
   },
   repoFilter: string | null,
 ): void {
   if (repoFilter) return;
   const muted = mutedReposAsSet(loadConfig().mutedRepos);
   if (muted.size === 0) return;
-  lists.authored = filterSidebarRecordsByMutedRepos(lists.authored, muted);
-  lists.reviewRequested = filterSidebarRecordsByMutedRepos(lists.reviewRequested, muted);
+  lists.authored = filterSidebarRecordsByMutedRepos(lists.authored, muted) as PullSidebarRow[];
+  lists.reviewRequested = filterSidebarRecordsByMutedRepos(lists.reviewRequested, muted) as PullSidebarRow[];
 }
 
 interface GhPull {
@@ -154,10 +175,20 @@ function openTopLevelUnresolvedCount(
   return comments.filter((c) => c.in_reply_to_id === null && !resolvedIds.has(c.id)).length;
 }
 
+function resolveExtraAuthoredLogins(options?: BuildPullSidebarListsOptions): Set<string> | undefined {
+  const raw = options?.includeAuthoredByLogins;
+  if (!raw) return undefined;
+  const set = raw instanceof Set ? raw : new Set(raw);
+  return set.size > 0 ? set : undefined;
+}
+
 /** One pass per repo: single list of open PRs, then authored + review-requested rows (halves REST vs two endpoints). */
-export async function buildPullSidebarLists(targetRepos: RepoInfo[]): Promise<{
-  authored: Array<Record<string, unknown>>;
-  reviewRequested: Array<Record<string, unknown>>;
+export async function buildPullSidebarLists(
+  targetRepos: RepoInfo[],
+  options?: BuildPullSidebarListsOptions,
+): Promise<{
+  authored: PullSidebarRow[];
+  reviewRequested: PullSidebarRow[];
   /** True when GET /user failed and we have no cached login (sidebar lists are empty). */
   githubUserUnavailable?: boolean;
 }> {
@@ -165,8 +196,9 @@ export async function buildPullSidebarLists(targetRepos: RepoInfo[]): Promise<{
   if (username == null) {
     return { authored: [], reviewRequested: [], githubUserUnavailable: true };
   }
-  const authored: Array<Record<string, unknown>> = [];
-  const reviewRequested: Array<Record<string, unknown>> = [];
+  const extraAuthoredAuthors = resolveExtraAuthoredLogins(options);
+  const authored: PullSidebarRow[] = [];
+  const reviewRequested: PullSidebarRow[] = [];
   prStatusDedupe = new Map();
   try {
     const repoPaths = targetRepos.map((r) => r.repo);
@@ -187,11 +219,17 @@ export async function buildPullSidebarLists(targetRepos: RepoInfo[]): Promise<{
     const selectedByRepo = new Map<string, { myPulls: OpenPull[]; needsReview: OpenPull[]; prNums: number[] }>();
     for (const repoInfo of targetRepos) {
       const pulls = pullsByRepo.get(repoInfo.repo) ?? [];
-      const myPulls = pulls.filter((pr) => pr.user.login === username);
+      const myPulls = pulls.filter((pr) => {
+        if (pr.user.login === username) return true;
+        return extraAuthoredAuthors?.has(pr.user.login) ?? false;
+      });
       const needsReview = pulls.filter(
         (pr) =>
           pr.user.login !== username &&
-          pr.requested_reviewers.some((r) => r.login === username),
+          (
+            pr.requested_reviewers.some((r) => r.login === username) ||
+            pr.review_decision === "REVIEW_REQUIRED"
+          ),
       );
       const prNums = [...new Set([...myPulls.map((p) => p.number), ...needsReview.map((p) => p.number)])];
       selectedByRepo.set(repoInfo.repo, { myPulls, needsReview, prNums });
@@ -227,9 +265,12 @@ export async function buildPullSidebarLists(targetRepos: RepoInfo[]): Promise<{
       repoPath: string,
       pr: OpenPull,
       poll: PullPollData | undefined,
-    ): Promise<Record<string, unknown>> {
-      const checksStatus = poll?.checksStatus
-        ?? (pr.head.sha ? await getPrStatusDeduped(repoPath, pr.head.sha) : "pending");
+    ): Promise<PullSidebarRow> {
+      // GraphQL poll data can report stale "pending" when old suites linger.
+      // Confirm pending via the run-based reducer before surfacing it in sidebar badges.
+      const checksStatus = poll?.checksStatus && poll.checksStatus !== "pending"
+        ? poll.checksStatus
+        : (pr.head.sha ? await getPrStatusDeduped(repoPath, pr.head.sha) : "pending");
       const openComments = poll
         ? openTopLevelUnresolvedCount(poll.comments, poll.resolvedIds)
         : 0;
@@ -249,7 +290,7 @@ export async function buildPullSidebarLists(targetRepos: RepoInfo[]): Promise<{
         openComments,
         pendingTriage: triageCounts.get(`${repoPath}:${pr.number}`) ?? 0,
         hasHumanApproval: poll?.hasHumanApproval ?? false,
-      };
+      } satisfies PullSidebarRow;
     }
 
     for (const repoInfo of targetRepos) {
@@ -277,14 +318,16 @@ const CLOSED_AUTHORED_CACHE_TTL_MS = 15 * 60 * 1000;
 
 function loadClosedAuthoredCache(repo: string): LinkablePR[] | null {
   try {
-    const sqlite = getRawSqlite();
-    const row = sqlite
-      .prepare(
-        "SELECT data_json, fetched_at_ms FROM repo_closed_authored_cache WHERE repo = ?",
-      )
-      .get(repo) as { data_json: string; fetched_at_ms: number } | undefined;
-    if (!row || Date.now() - row.fetched_at_ms > CLOSED_AUTHORED_CACHE_TTL_MS) return null;
-    return JSON.parse(row.data_json) as LinkablePR[];
+    const row = openStateDatabase()
+      .select({
+        dataJson: schema.repoClosedAuthoredCache.dataJson,
+        fetchedAtMs: schema.repoClosedAuthoredCache.fetchedAtMs,
+      })
+      .from(schema.repoClosedAuthoredCache)
+      .where(eq(schema.repoClosedAuthoredCache.repo, repo))
+      .get();
+    if (!row || Date.now() - row.fetchedAtMs > CLOSED_AUTHORED_CACHE_TTL_MS) return null;
+    return JSON.parse(row.dataJson) as LinkablePR[];
   } catch {
     return null;
   }
@@ -292,13 +335,15 @@ function loadClosedAuthoredCache(repo: string): LinkablePR[] | null {
 
 function saveClosedAuthoredCache(repo: string, items: LinkablePR[]): void {
   try {
-    getRawSqlite()
-      .prepare(
-        `INSERT INTO repo_closed_authored_cache (repo, data_json, fetched_at_ms)
-         VALUES (?, ?, ?)
-         ON CONFLICT(repo) DO UPDATE SET data_json = excluded.data_json, fetched_at_ms = excluded.fetched_at_ms`,
-      )
-      .run(repo, JSON.stringify(items), Date.now());
+    const now = Date.now();
+    openStateDatabase()
+      .insert(schema.repoClosedAuthoredCache)
+      .values({ repo, dataJson: JSON.stringify(items), fetchedAtMs: now })
+      .onConflictDoUpdate({
+        target: schema.repoClosedAuthoredCache.repo,
+        set: { dataJson: JSON.stringify(items), fetchedAtMs: now },
+      })
+      .run();
   } catch {
     /* non-fatal */
   }
@@ -364,6 +409,7 @@ export function serializeConfigForClient(c: Config): Record<string, unknown> {
     interval: c.interval,
     evalConcurrency: c.evalConcurrency ?? 2,
     pollReviewRequested: c.pollReviewRequested ?? false,
+    autoResolveOnEvaluation: c.autoResolveOnEvaluation ?? false,
     commentRetentionDays: c.commentRetentionDays ?? 0,
     ignoredBots: c.ignoredBots ?? [],
     mutedRepos: c.mutedRepos ?? [],
@@ -395,6 +441,12 @@ export function serializeConfigForClient(c: Config): Record<string, unknown> {
     team: {
       enabled: isTeamFeaturesEnabled(c),
       pollIntervalMinutes: c.team?.pollIntervalMinutes ?? 5,
+      memberLinks: c.team?.memberLinks ?? [],
+      claudeMemberLinking: c.team?.claudeMemberLinking !== false,
+      claudeMemberSummaries: c.team?.claudeMemberSummaries !== false,
+      includeGithubOrgMemberPulls: c.team?.includeGithubOrgMemberPulls !== false,
+      includeLinearTeamScopeIssues: c.team?.includeLinearTeamScopeIssues !== false,
+      linearTeamIssueCap: c.team?.linearTeamIssueCap ?? 200,
     },
   };
 }
@@ -419,6 +471,11 @@ export function mergeConfigFromBody(body: Record<string, unknown>, previous: Con
     typeof body.pollReviewRequested === "boolean"
       ? body.pollReviewRequested
       : (previous.pollReviewRequested ?? false);
+
+  const autoResolveOnEvaluation =
+    typeof body.autoResolveOnEvaluation === "boolean"
+      ? body.autoResolveOnEvaluation
+      : (previous.autoResolveOnEvaluation ?? false);
 
   let commentRetentionDays: number;
   if (body.commentRetentionDays !== undefined && body.commentRetentionDays !== null && body.commentRetentionDays !== "") {
@@ -604,7 +661,15 @@ export function mergeConfigFromBody(body: Record<string, unknown>, previous: Con
 
   const teamBody =
     typeof body.team === "object" && body.team !== null ? (body.team as Record<string, unknown>) : undefined;
-  const team = {
+
+  let teamMemberLinks: TeamMemberLink[] | undefined;
+  if (teamBody && Object.prototype.hasOwnProperty.call(teamBody, "memberLinks")) {
+    teamMemberLinks = parseTeamMemberLinksFromUnknown(teamBody.memberLinks);
+  } else {
+    teamMemberLinks = previous.team?.memberLinks;
+  }
+
+  const team: NonNullable<Config["team"]> = {
     enabled:
       typeof teamBody?.enabled === "boolean"
         ? teamBody.enabled
@@ -614,6 +679,40 @@ export function mergeConfigFromBody(body: Record<string, unknown>, previous: Con
       toInt(teamBody?.pollIntervalMinutes, previous.team?.pollIntervalMinutes ?? 5),
     ),
   };
+  if (teamMemberLinks && teamMemberLinks.length > 0) {
+    team.memberLinks = teamMemberLinks;
+  }
+
+  team.claudeMemberLinking =
+    teamBody && typeof teamBody.claudeMemberLinking === "boolean"
+      ? teamBody.claudeMemberLinking
+      : (previous.team?.claudeMemberLinking !== false);
+
+  team.claudeMemberSummaries =
+    teamBody && typeof teamBody.claudeMemberSummaries === "boolean"
+      ? teamBody.claudeMemberSummaries
+      : (previous.team?.claudeMemberSummaries !== false);
+
+  team.includeGithubOrgMemberPulls =
+    teamBody && typeof teamBody.includeGithubOrgMemberPulls === "boolean"
+      ? teamBody.includeGithubOrgMemberPulls
+      : (previous.team?.includeGithubOrgMemberPulls !== false);
+
+  team.includeLinearTeamScopeIssues =
+    teamBody && typeof teamBody.includeLinearTeamScopeIssues === "boolean"
+      ? teamBody.includeLinearTeamScopeIssues
+      : (previous.team?.includeLinearTeamScopeIssues !== false);
+
+  team.linearTeamIssueCap = Math.max(
+    1,
+    Math.min(
+      500,
+      teamBody && teamBody.linearTeamIssueCap !== undefined && teamBody.linearTeamIssueCap !== null
+        && teamBody.linearTeamIssueCap !== ""
+        ? toInt(teamBody.linearTeamIssueCap, previous.team?.linearTeamIssueCap ?? 200)
+        : (previous.team?.linearTeamIssueCap ?? 200),
+    ),
+  );
 
   return {
     root,
@@ -621,6 +720,7 @@ export function mergeConfigFromBody(body: Record<string, unknown>, previous: Con
     interval,
     evalConcurrency,
     pollReviewRequested,
+    autoResolveOnEvaluation,
     commentRetentionDays: commentRetentionDays > 0 ? commentRetentionDays : undefined,
     ignoredBots: ignoredBots?.length ? ignoredBots : undefined,
     mutedRepos: mutedRepos?.length ? mutedRepos : undefined,
@@ -1315,8 +1415,10 @@ export function registerRoutes(): void {
     };
 
     // Clear any existing queue entry and reset state
-    const sqlite = getRawSqlite();
-    sqlite.prepare("DELETE FROM eval_queue WHERE comment_key = ?").run(`${body.repo}:${body.commentId}`);
+    openStateDatabase()
+      .delete(schema.evalQueue)
+      .where(eq(schema.evalQueue.commentKey, `${body.repo}:${body.commentId}`))
+      .run();
 
     // Remove evalFailed flag and reset status so needsEvaluation returns true
     const key = `${body.repo}:${body.commentId}`;
@@ -1932,94 +2034,6 @@ export function registerRoutes(): void {
     }
   });
 
-  // POST /api/reviews/companion/message — PR assistant panel (optional queue-fix directives in model reply)
-  addRoute("POST", "/api/reviews/companion/message", async (req, res) => {
-    const body = getBody<{
-      repo: string;
-      prNumber: number;
-      userMessage: string;
-      threadBundle?: unknown;
-      refreshContext?: boolean;
-    }>(req);
-    if (typeof body.repo !== "string" || !body.repo.includes("/")) {
-      json(res, { error: "Invalid or missing repo (expected owner/name)" }, 400);
-      return;
-    }
-    if (!Number.isFinite(body.prNumber) || body.prNumber < 1) {
-      json(res, { error: "Invalid or missing prNumber" }, 400);
-      return;
-    }
-    try {
-      const out = await appendUserMessageAndRunAssistant({
-        repo: body.repo,
-        prNumber: body.prNumber,
-        userMessage: body.userMessage,
-        threadBundle: body.threadBundle,
-        refreshContext: body.refreshContext === true,
-      });
-      json(res, {
-        assistantMessage: out.assistantMessage,
-        messages: out.messages,
-        contextNote: `${out.bundleThreadCount} thread(s) in bundle`,
-        bundleThreadCount: out.bundleThreadCount,
-        bundleUpdatedAtMs: out.bundleUpdatedAtMs,
-        queueFixes: out.queueFixes,
-        batchFix: out.batchFix,
-      });
-    } catch (err) {
-      const msg = (err as Error).message;
-      const status = msg.includes("too large") ? 413 : msg.includes("required") ? 400 : 500;
-      json(res, { error: msg }, status);
-    }
-  });
-
-  // GET /api/reviews/companion/session — restore transcript + bundle metadata for a PR
-  addRoute("GET", "/api/reviews/companion/session", (req, res, _params, query) => {
-    const repo = query.get("repo") ?? "";
-    const prRaw = query.get("prNumber") ?? "";
-    const prNumber = Number(prRaw);
-    if (!repo.includes("/")) {
-      json(res, { error: "Invalid or missing repo" }, 400);
-      return;
-    }
-    if (!Number.isFinite(prNumber) || prNumber < 1) {
-      json(res, { error: "Invalid or missing prNumber" }, 400);
-      return;
-    }
-    const row = loadCompanionSession(repo, prNumber);
-    if (!row) {
-      json(res, { messages: [], bundleThreadCount: 0, bundleUpdatedAtMs: null });
-      return;
-    }
-    let bundleThreadCount = 0;
-    if (row.bundleJson) {
-      try {
-        bundleThreadCount = validateBundleItems(JSON.parse(row.bundleJson)).length;
-      } catch {
-        bundleThreadCount = 0;
-      }
-    }
-    json(res, {
-      messages: row.messages,
-      bundleThreadCount,
-      bundleUpdatedAtMs: row.bundleUpdatedAtMs,
-    });
-  });
-
-  // POST /api/reviews/companion/reset — clear stored PR assistant session
-  addRoute("POST", "/api/reviews/companion/reset", (req, res) => {
-    const body = getBody<{ repo: string; prNumber: number }>(req);
-    if (typeof body.repo !== "string" || !body.repo.includes("/")) {
-      json(res, { error: "Invalid or missing repo" }, 400);
-      return;
-    }
-    if (!Number.isFinite(body.prNumber) || body.prNumber < 1) {
-      json(res, { error: "Invalid or missing prNumber" }, 400);
-      return;
-    }
-    clearCompanionSession(body.repo, body.prNumber);
-    json(res, { ok: true });
-  });
 
   // GET /api/fix-jobs/recover — check for stale fix jobs from a previous session
   addRoute("GET", "/api/fix-jobs/recover", (_req, res) => {
@@ -2109,69 +2123,6 @@ export function registerRoutes(): void {
     } catch (err) {
       json(res, { error: `Comment failed: ${(err as Error).message}` }, 500);
     }
-  });
-
-  // ── Push notification endpoints ──
-
-  addRoute("GET", "/api/push/vapid-public-key", (_req, res) => {
-    const keys = getVapidKeys();
-    json(res, { publicKey: keys.publicKey });
-  });
-
-  addRoute("POST", "/api/push/subscribe", async (req, res) => {
-    const body = await getBody(req) as { endpoint?: string; keys?: { p256dh?: string; auth?: string } };
-    if (!body.endpoint || !body.keys?.p256dh || !body.keys?.auth) {
-      res.writeHead(400);
-      json(res, { error: "Missing endpoint or keys" });
-      return;
-    }
-    savePushSubscription({
-      endpoint: body.endpoint,
-      keys: { p256dh: body.keys.p256dh, auth: body.keys.auth },
-    });
-    json(res, { ok: true });
-  });
-
-  addRoute("DELETE", "/api/push/unsubscribe", async (req, res) => {
-    const body = await getBody(req) as { endpoint?: string };
-    if (!body.endpoint) {
-      res.writeHead(400);
-      json(res, { error: "Missing endpoint" });
-      return;
-    }
-    deletePushSubscription(body.endpoint);
-    json(res, { ok: true });
-  });
-
-  addRoute("POST", "/api/push/mute", async (req, res) => {
-    const body = await getBody(req) as { repo?: string; number?: number };
-    if (!body.repo || typeof body.number !== "number") {
-      res.writeHead(400);
-      json(res, { error: "Missing repo or number" });
-      return;
-    }
-    dbMutePR(body.repo, body.number);
-    json(res, { ok: true });
-  });
-
-  addRoute("DELETE", "/api/push/mute", async (req, res) => {
-    const body = await getBody(req) as { repo?: string; number?: number };
-    if (!body.repo || typeof body.number !== "number") {
-      res.writeHead(400);
-      json(res, { error: "Missing repo or number" });
-      return;
-    }
-    dbUnmutePR(body.repo, body.number);
-    json(res, { ok: true });
-  });
-
-  addRoute("GET", "/api/push/muted", (_req, res) => {
-    json(res, { muted: dbGetMutedPRs() });
-  });
-
-  addRoute("POST", "/api/push/test", (_req, res) => {
-    sendTestPush();
-    json(res, { ok: true });
   });
 
   // ── Tickets ──

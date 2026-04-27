@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import { useAppStore } from "../store";
 import { CollapsibleSection } from "./ui/collapsible-section";
 import { Checkbox } from "./ui/checkbox";
@@ -6,9 +6,23 @@ import { buildThreads, isSnoozed, type Thread } from "./thread-utils";
 import { ThreadFilters } from "./thread-filters";
 import { ThreadItem, type ThreadKeyActions } from "./thread-item";
 
+type BotReviewState = "idle" | "re_reviewing" | "manual_restart_required";
+type BotReviewStatus = { botLabel: string; state: Exclude<BotReviewState, "idle"> };
+
+function normalizeBotKey(input: string): string {
+  return input
+    .toLowerCase()
+    .replace(/\[bot\]/g, "")
+    .replace(/[^a-z0-9]+/g, "")
+    .trim();
+}
+
 export default function CommentThreads() {
   const comments = useAppStore((s) => s.comments);
   const jobs = useAppStore((s) => s.jobs);
+  const detail = useAppStore((s) => s.detail);
+  const checkSuites = useAppStore((s) => s.checkSuites);
+  const fetchChecks = useAppStore((s) => s.fetchChecks);
   const shortcutsOpen = useAppStore((s) => s.shortcutsOpen);
   const filterText = useAppStore((s) => s.threadFilterText);
   const filterAction = useAppStore((s) => s.threadFilterAction);
@@ -135,6 +149,76 @@ export default function CommentThreads() {
   }, [shortcutsOpen, setFocusedIdx]);
 
   const queue = useAppStore((s) => s.queue);
+  const botCheckStateByKey = useMemo<Map<string, BotReviewState>>(() => {
+    const byKey = new Map<string, BotReviewState>();
+    const suites = checkSuites ?? [];
+    if (suites.length === 0) return byKey;
+
+    const botKeys = new Set<string>();
+    for (const thread of threads) {
+      for (const c of [thread.root, ...thread.replies]) {
+        if (c.isBot || c.author.includes("[bot]")) {
+          const key = normalizeBotKey(c.author);
+          if (key) botKeys.add(key);
+        }
+      }
+    }
+    if (botKeys.size === 0) return byKey;
+
+    for (const key of botKeys) {
+      const matchesBot = (text: string): boolean => {
+        const normalized = normalizeBotKey(text);
+        if (!normalized) return false;
+        return normalized.includes(key) || key.includes(normalized);
+      };
+
+      const matchingSuites = suites.filter((suite) => matchesBot(suite.name));
+      const matchingRuns = suites.flatMap((suite) =>
+        suite.runs.filter((run) => matchesBot(run.name) || matchesBot(run.htmlUrl) || matchesBot(suite.name)),
+      );
+
+      if (matchingSuites.length === 0 && matchingRuns.length === 0) {
+        byKey.set(key, "idle");
+        continue;
+      }
+      if (matchingRuns.some((run) => run.conclusion === "action_required")) {
+        byKey.set(key, "manual_restart_required");
+        continue;
+      }
+      if (matchingRuns.some((run) => run.status === "queued" || run.status === "in_progress" || run.conclusion === null)) {
+        byKey.set(key, "re_reviewing");
+        continue;
+      }
+      if (matchingSuites.some((suite) => suite.conclusion === null)) {
+        byKey.set(key, "re_reviewing");
+        continue;
+      }
+      byKey.set(key, "idle");
+    }
+    return byKey;
+  }, [checkSuites, threads]);
+
+  const threadBotReviewStateById = useMemo(() => {
+    const byId = new Map<number, BotReviewStatus>();
+    for (const thread of threads) {
+      const botsInThread = [thread.root, ...thread.replies].filter(
+        (c) => c.isBot || c.author.includes("[bot]"),
+      );
+      for (const bot of botsInThread) {
+        const key = normalizeBotKey(bot.author);
+        const state = key ? (botCheckStateByKey.get(key) ?? "idle") : "idle";
+        if (state !== "idle") {
+          byId.set(thread.root.id, { botLabel: bot.author, state });
+          break;
+        }
+      }
+    }
+    return byId;
+  }, [botCheckStateByKey, threads]);
+
+  useEffect(() => {
+    void fetchChecks(detail?.headSha);
+  }, [detail?.headSha, fetchChecks]);
 
   if (threads.length === 0) return null;
 
@@ -142,7 +226,13 @@ export default function CommentThreads() {
   const resolvedCount = threads.filter((t) => t.isResolved).length;
   const hasActiveFix = jobs.some((j) => j.status === "running" || j.status === "completed");
 
-  const actionableThreads = threads.filter((t) => !t.isResolved && !(t.root.crStatus === "replied" || t.root.crStatus === "dismissed" || t.root.crStatus === "fixed"));
+  const actionableThreads = threads.filter((t) => {
+    if (t.isResolved) return false;
+    if (t.root.crStatus === "replied" || t.root.crStatus === "dismissed") return false;
+    // When a bot is still processing/requires restart, don't count those threads as user-actionable.
+    if (threadBotReviewStateById.has(t.root.id)) return false;
+    return true;
+  });
   const allSelected = actionableThreads.length > 0 && actionableThreads.every((t) => selected.has(t.root.id));
 
   function toggleSelectAll() {
@@ -201,6 +291,7 @@ export default function CommentThreads() {
                     <ThreadItem
                       rootId={thread.root.id}
                       thread={thread}
+                      botReviewStatus={threadBotReviewStateById.get(thread.root.id)}
                       fixBlocked={hasActiveFix}
                       fixQueueSlot={fixQueueSlot}
                       isFocused={focusedIdx === idx}

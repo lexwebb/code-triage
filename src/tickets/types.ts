@@ -8,7 +8,7 @@ export interface TicketIssue {
   /** GitHub PRs linked in the ticket provider (e.g. Linear attachments). */
   providerLinkedPulls?: Array<{ number: number; repo: string; title: string }>;
   priority: number;
-  assignee?: { name: string; avatarUrl?: string };
+  assignee?: { id?: string; name: string; avatarUrl?: string };
   labels: Array<{ name: string; color: string }>;
   updatedAt: string;
   providerUrl: string;
@@ -44,4 +44,11 @@ export interface TicketProvider {
   getIssueDetail(id: string): Promise<TicketIssueDetail>;
   getCurrentUser(): Promise<TicketUser>;
   getTeams(): Promise<TicketTeam[]>;
+  /** Linear workspace directory for team identity rollups; optional on providers that do not support it. */
+  listWorkspaceUsers?(): Promise<Array<{ id: string; name: string }>>;
+  /**
+   * Active issues for the configured team filter (e.g. `linearTeamKeys`), not restricted to the viewer.
+   * Implementations should enforce `maxIssues`.
+   */
+  fetchTeamScopeIssues?(maxIssues: number): Promise<TicketIssue[]>;
 }

@@ -1,10 +1,13 @@
 import { QueryClient } from "@tanstack/react-query";
 
-let queryClientSingleton: QueryClient | null = null;
+const GLOBAL_QUERY_CLIENT_KEY = "__CR_WATCH_QUERY_CLIENT__";
+const globalQueryClientHost = globalThis as typeof globalThis & {
+  [GLOBAL_QUERY_CLIENT_KEY]?: QueryClient;
+};
 
 export function getQueryClient(): QueryClient {
-  if (!queryClientSingleton) {
-    queryClientSingleton = new QueryClient({
+  if (!globalQueryClientHost[GLOBAL_QUERY_CLIENT_KEY]) {
+    globalQueryClientHost[GLOBAL_QUERY_CLIENT_KEY] = new QueryClient({
       defaultOptions: {
         queries: {
           staleTime: 15_000,
@@ -15,10 +18,10 @@ export function getQueryClient(): QueryClient {
       },
     });
   }
-  return queryClientSingleton;
+  return globalQueryClientHost[GLOBAL_QUERY_CLIENT_KEY]!;
 }
 
 /** Vitest / isolated runs */
 export function resetQueryClientForTests(): void {
-  queryClientSingleton = null;
+  delete globalQueryClientHost[GLOBAL_QUERY_CLIENT_KEY];
 }

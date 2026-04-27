@@ -1,4 +1,4 @@
-import { api } from "../api";
+import { trpcClient } from "../lib/trpc";
 import type { SliceCreator, NotificationsSlice } from "./types";
 
 function urlBase64ToUint8Array(base64String: string): Uint8Array<ArrayBuffer> {
@@ -27,7 +27,7 @@ export const createNotificationsSlice: SliceCreator<NotificationsSlice> = (set, 
       const registration = await navigator.serviceWorker.register("/sw.js");
       await navigator.serviceWorker.ready;
 
-      const { publicKey } = await api.getVapidPublicKey();
+      const { publicKey } = await trpcClient.pushVapidPublicKey.query();
 
       const subscription = await registration.pushManager.subscribe({
         userVisibleOnly: true,
@@ -35,7 +35,7 @@ export const createNotificationsSlice: SliceCreator<NotificationsSlice> = (set, 
       });
 
       const raw = subscription.toJSON();
-      await api.subscribePush({
+      await trpcClient.pushSubscribe.mutate({
         endpoint: raw.endpoint!,
         keys: { p256dh: raw.keys!.p256dh!, auth: raw.keys!.auth! },
       });
@@ -52,7 +52,7 @@ export const createNotificationsSlice: SliceCreator<NotificationsSlice> = (set, 
       if (registration) {
         const subscription = await registration.pushManager.getSubscription();
         if (subscription) {
-          await api.unsubscribePush(subscription.endpoint);
+          await trpcClient.pushUnsubscribe.mutate({ endpoint: subscription.endpoint });
           await subscription.unsubscribe();
         }
       }
@@ -68,7 +68,7 @@ export const createNotificationsSlice: SliceCreator<NotificationsSlice> = (set, 
       next.add(`${repo}:${number}`);
       return { mutedPRs: next };
     });
-    void api.mutePR(repo, number).catch(() => {});
+    void trpcClient.pushMute.mutate({ repo, number }).catch(() => {});
   },
 
   unmutePR: (repo, number) => {
@@ -77,7 +77,7 @@ export const createNotificationsSlice: SliceCreator<NotificationsSlice> = (set, 
       next.delete(`${repo}:${number}`);
       return { mutedPRs: next };
     });
-    void api.unmutePR(repo, number).catch(() => {});
+    void trpcClient.pushUnmute.mutate({ repo, number }).catch(() => {});
   },
 
   isPRMuted: (repo, number) => get().mutedPRs.has(`${repo}:${number}`),
@@ -91,7 +91,7 @@ export const createNotificationsSlice: SliceCreator<NotificationsSlice> = (set, 
 
   loadMutedPRs: async () => {
     try {
-      const { muted } = await api.getMutedPRs();
+      const { muted } = await trpcClient.pushMuted.query();
       set({ mutedPRs: new Set(muted) });
     } catch { /* ignore */ }
   },
