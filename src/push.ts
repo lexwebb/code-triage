@@ -1,4 +1,4 @@
-import webpush from "web-push";
+import * as webpush from "web-push";
 import { sendNotification } from "./notifier.js";
 import { getVapidKeys } from "./vapid.js";
 import { getAllPushSubscriptions, deletePushSubscription, getMutedPRs } from "./push-db.js";
@@ -209,6 +209,14 @@ export function notifyFixJobComplete(data: FixJobCompleteData): void {
 
 export function sendTestPush(): void {
   void sendPush("Code Triage — Test Notification", "Push notifications are working!");
+}
+
+export function notifyAttentionHighPriority(items: Array<{ title: string }>): void {
+  if (items.length === 0) return;
+  const message = items.length === 1
+    ? items[0]!.title
+    : `${items.length} high-priority items need your attention`;
+  void sendPush("Code Triage - Needs Attention", message, { url: "/team" });
 }
 
 // ── Review reminder ──

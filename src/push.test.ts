@@ -16,6 +16,9 @@ vi.mock("web-push", () => ({
     setVapidDetails: vi.fn(),
     sendNotification: mockWebPushSendNotification,
   },
+  generateVAPIDKeys: () => ({ publicKey: "fake-pub", privateKey: "fake-priv" }),
+  setVapidDetails: vi.fn(),
+  sendNotification: mockWebPushSendNotification,
 }));
 
 // Mock notifier module
@@ -26,7 +29,15 @@ vi.mock("./notifier.js", () => ({
   sendNotification: mockSendNotification,
 }));
 
-import { processPolledData, initPush, resetPushState, notifyEvalComplete, notifyFixJobComplete, sendTestPush } from "./push.js";
+import {
+  processPolledData,
+  initPush,
+  resetPushState,
+  notifyEvalComplete,
+  notifyFixJobComplete,
+  notifyAttentionHighPriority,
+  sendTestPush,
+} from "./push.js";
 describe("push notification module", () => {
   let testDir: string;
 
@@ -168,5 +179,18 @@ describe("push notification module", () => {
     savePushSubscription({ endpoint: "https://push.example.com/abc", keys: { p256dh: "a", auth: "b" } });
     sendTestPush();
     expect(mockWebPushSendNotification).toHaveBeenCalledTimes(1);
+  });
+
+  it("notifyAttentionHighPriority prefers web push when subscribed", () => {
+    savePushSubscription({ endpoint: "https://push.example.com/abc", keys: { p256dh: "a", auth: "b" } });
+
+    notifyAttentionHighPriority([{ title: "Needs help on PR #12" }]);
+
+    expect(mockWebPushSendNotification).toHaveBeenCalledTimes(1);
+    expect(mockSendNotification).not.toHaveBeenCalled();
+    const payload = JSON.parse((mockWebPushSendNotification as ReturnType<typeof vi.fn>).mock.calls[0][1]);
+    expect(payload.title).toContain("Needs Attention");
+    expect(payload.body).toContain("Needs help on PR #12");
+    expect(payload.data?.url).toBe("/team");
   });
 });

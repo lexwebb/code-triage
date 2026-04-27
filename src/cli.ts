@@ -43,7 +43,7 @@ import {
   mergeProviderPullLinksIntoLinkMap,
   type LinkablePR,
 } from "./tickets/linker.js";
-import { initPush, processPolledData, startReviewReminder, sendTestPush } from "./push.js";
+import { initPush, processPolledData, startReviewReminder, sendTestPush, notifyAttentionHighPriority } from "./push.js";
 import { buildPullSidebarLists, fetchMergedAuthoredLinkablePRs } from "./api.js";
 import { evaluateCoherence, type CoherenceInput, type CoherencePR } from "./coherence.js";
 import { refreshAttentionFeed, shouldLogAttentionPipeline } from "./attention.js";
@@ -701,15 +701,7 @@ async function poll(): Promise<void> {
           const { getAttentionItems } = await import("./attention.js");
           const items = getAttentionItems();
           const highPriority = items.filter((i) => i.priority === "high");
-          if (highPriority.length > 0) {
-            const notifier = await import("node-notifier");
-            notifier.default.notify({
-              title: "Code Triage - Needs Attention",
-              message: highPriority.length === 1
-                ? highPriority[0]!.title
-                : `${highPriority.length} high-priority items need your attention`,
-            });
-          }
+          notifyAttentionHighPriority(highPriority);
         } catch {
           // Notification failures are non-fatal.
         }
@@ -746,6 +738,7 @@ async function poll(): Promise<void> {
                 recentlyMerged: [],
                 unlinkedPrs: [],
                 unlinkedTickets: [],
+                memberSummaries: [],
               },
               msg,
             );
